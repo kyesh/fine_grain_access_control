@@ -1,12 +1,11 @@
-import { getDefaultClient } from '@/db/index'; // A safe initializer for edge or node environments
 import { accessRules } from '@/db/schema';
 import { eq } from 'drizzle-orm';
-import { getUser } from '@workos-inc/authkit-nextjs';
+import { currentUser } from '@clerk/nextjs/server';
 import { redirect } from 'next/navigation';
 import { db } from '@/db';
 
 export default async function DashboardPage() {
-  const { user } = await getUser();
+  const user = await currentUser();
 
   if (!user) {
     redirect('/');
@@ -38,14 +37,6 @@ export default async function DashboardPage() {
       <header>
         <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 flex justify-between items-center">
           <h1 className="text-3xl font-bold tracking-tight text-gray-900">Access Control Dashboard</h1>
-          <form
-            action={async () => {
-              "use server";
-              // We will implement WorkOS sign out here.
-            }}
-          >
-            <button className="text-sm font-medium text-gray-500 hover:text-gray-900">Sign Out</button>
-          </form>
         </div>
       </header>
 

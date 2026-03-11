@@ -9,21 +9,27 @@ We will build this platform as a high-performance, edge-deployable application.
 *   **Neon Postgres**: A scalable, serverless Postgres database. It pairs perfectly with Vercel's edge architecture natively via HTTP connection pooling, preventing connection exhaustion when handling spikes of agent traffic.
 
 ## Authentication & Credential Management
-**WorkOS**
-We will utilize WorkOS as our central B2B Identity and OAuth Token Vault. 
+**Clerk**
+After re-evaluating the specific requirements of our API proxy—specifically the need to securely store and retrieve Google OAuth Refresh Tokens for long-running, offline background agents—we are pivoting to Clerk as our primary Identity Provider.
 
-### Why WorkOS over Alternatives (like Clerk)?
-While platforms like Clerk excel at B2C user authentication and UI components, our core architectural challenge revolves around the **secure ingestion, storage, and lifecycle management (refreshing) of third-party Google OAuth credentials.**
+### Clerk vs. WorkOS: The Google OAuth Overhead
+The core architectural challenge of this platform is the **secure ingestion, storage, and lifecycle management of third-party Google OAuth credentials.**
 
-*   **First-Class B2B Token Management**: WorkOS is designed fundamentally as an enterprise token and directory management platform. When a user connects their Google account to our proxy, WorkOS securely handles the OAuth handshake.
-*   **Refresh Token Lifecycle (Pipes)**: The most dangerous and failure-prone aspect of building an API proxy is managing the Google Refresh Token lifecycle. If a refresh token expires, the background agent crashes. WorkOS natively handles the automatic refreshing of tokens. Our edge API simply requests a valid token from WorkOS, and WorkOS guarantees it is fresh.
-*   **SOC2 & Enterprise Readiness**: Because Prong 3 of our strategy targets Enterprise CISOs (HTTPS MITM Proxy), we must ensure that the centralized vault holding corporate Google credentials is unassailable. WorkOS provides the SOC2 compliance and enterprise trust required for B2B sales natively out-of-the-box.
+*   **The Token Storage Vault:** When a user connects their Google account, we must store the Refresh Token so our proxy can fetch fresh Access Tokens days or weeks later when an agent makes a request. 
+    *   **WorkOS** authenticates the user and hands *us* the Refresh Token upon login. It does **not** store it for us. This forces us to build a highly secure, encrypted-at-rest database vault to store every user's master Google token. 
+    *   **Clerk** natively stores the external OAuth Provider tokens within its own secure infrastructure. We can query Clerk on the backend (`clerkClient.users.getUserOauthAccessToken(userId, 'oauth_google')`) at any time, and Clerk handles the storage.
+*   **The Refresh Lifecycle:**
+    *   **WorkOS** requires us to write the logic that takes our vaulted Refresh Token, detects expiration, hits the Google API to refresh it, updates our vault, and then passes it to the agent.
+    *   **Clerk** handles this automatically under the hood when we query their SDK.
+*   **Google App Security Review:** To take our application out of "Testing" mode and get it verified by Google (especially for restricted scopes like Gmail/Drive), we must undergo a stringent Cloud Application Security Assessment (CASA). 
+    *   Using **WorkOS**, we have to prove to auditors that our custom Neon Postgres database and encryption key management system are unassailable, greatly increasing the audit scope, risk, and cost.
+    *   Using **Clerk**, we offload the liability of storing the raw Google Refresh Tokens entirely to their highly compliant, SOC2-audited infrastructure. Our database only stores the proxy rules. This drastically shrinks our audit surface area and makes passing Google Security Review significantly easier.
 
 ## Data Flow (The Token Vault Pattern)
-1. **User Setup**: User authenticates with our application via WorkOS AuthKit. They grant our application access to their Google Account (`https://www.googleapis.com/auth/drive`). WorkOS stores the Google Refresh Token.
-2. **Credential Issuance**: We issue the user a "Fake" Google Service Account JSON file (or a Custom API Key) linked to their internal `user_id`.
+1. **User Setup**: User authenticates with our application via **Clerk**. They grant our application access to their Google Account (`https://www.googleapis.com/auth/drive`). **Clerk** stores the Google Refresh Token natively.
+2. **Credential Issuance**: We issue the user a "Fake" Google Service Account JSON file (or a Custom API Key from Clerk) linked to their internal `user_id`.
 3. **Agent Request**: The user's AI Agent makes a request to `https://proxy.ourdomain.com`, using our fake credential.
-4. **Proxy Intercept**: Our Vercel Edge function receives the request. It validates the fake credential, mapping it back to the `user_id`.
+4. **Proxy Intercept**: Our Vercel Edge function receives the request. It validates the fake credential via **Clerk**, mapping it back to the `user_id`.
 5. **Rule Evaluation**: We query Neon Postgres for the fine-grained rules associated with this `user_id` (e.g., "Is DELETE allowed on this folder ID?").
-6. **Token Retrieval**: If the request is valid, our Vercel Edge function asks WorkOS for the user's *real*, fresh Google Access Token.
+6. **Token Retrieval**: If the request is valid, our Vercel Edge function calls the **Clerk backend SDK** (`getUserOauthAccessToken()`) to instantly retrieve the user's *real*, fresh Google Access Token.
 7. **Forwarding**: We append the real Google Access token to the request and forward it to `https://www.googleapis.com`.

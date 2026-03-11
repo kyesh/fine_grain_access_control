@@ -24,7 +24,7 @@ async function handleProxyRequest(request: NextRequest, params: { path: string[]
     const proxyKey = authHeader.split(' ')[1];
     const fullPath = params.path.join('/');
     
-    // Phase 2/3: Here we will use the WorkOS SDK to validate `proxyKey`.
+    // Phase 2/3: Here we will use the Clerk SDK to validate `proxyKey`.
     // For Phase 1 (Building the structure before keys), we mock the identity.
     const mockUserId = "user-123";
 
@@ -68,8 +68,9 @@ async function handleProxyRequest(request: NextRequest, params: { path: string[]
       }
     }
 
-    // Phase 3: If all rules pass, we fetch the REAL Google Access token from WorkOS
-    // const realGoogleToken = await workos.getAccessToken(mockUserId);
+    // Phase 3: If all rules pass, we fetch the REAL Google Access token from Clerk
+    // const realGoogleTokenResponse = await clerkClient.users.getUserOauthAccessToken(mockUserId, 'oauth_google');
+    // const realGoogleToken = realGoogleTokenResponse.data[0].token;
     
     // And proxy the fetch request to googleapis.com...
     
