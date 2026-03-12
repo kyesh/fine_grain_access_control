@@ -3,6 +3,8 @@ import { eq } from 'drizzle-orm';
 import { currentUser } from '@clerk/nextjs/server';
 import { redirect } from 'next/navigation';
 import { db } from '@/db';
+import { RuleControls } from './RuleControls';
+import { DeleteRuleButton } from './DeleteRuleButton';
 
 export default async function DashboardPage() {
   const user = await currentUser();
@@ -57,14 +59,7 @@ export default async function DashboardPage() {
 
           <div className="mt-8 flex justify-between items-center">
             <h2 className="text-xl font-semibold text-gray-900">Active Rules</h2>
-            <div className="flex gap-2">
-              <button className="bg-indigo-50 text-indigo-700 hover:bg-indigo-100 px-4 py-2 text-sm font-medium rounded-md">
-                + Quick Add 2FA Block
-              </button>
-              <button className="bg-blue-600 text-white hover:bg-blue-500 px-4 py-2 text-sm font-medium rounded-md">
-                Create Custom Rule
-              </button>
-            </div>
+            <RuleControls />
           </div>
 
           <div className="mt-4 flex flex-col">
@@ -105,7 +100,7 @@ export default async function DashboardPage() {
                             {rule.regexPattern}
                           </td>
                           <td className="relative whitespace-nowrap py-4 pl-3 pr-4 text-right text-sm font-medium sm:pr-6">
-                            <button className="text-red-600 hover:text-red-900">Delete</button>
+                            <DeleteRuleButton id={rule.id} />
                           </td>
                         </tr>
                       ))}
