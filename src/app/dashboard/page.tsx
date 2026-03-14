@@ -44,14 +44,14 @@ export default async function DashboardPage() {
               <h2 className="text-lg font-medium leading-6 text-gray-900 mb-4">Your Proxy Credentials</h2>
               <div className="bg-slate-50 border border-slate-200 rounded-md p-4 flex justify-between items-center">
                 <div>
-                  <p className="text-sm text-slate-500">API Key</p>
+                  <p className="text-sm text-slate-800">API Key</p>
                   <code className="text-slate-900 font-mono">{dbUser.proxyKey}</code>
                 </div>
                 <button className="bg-white border inset-ring inset-ring-gray-300 text-sm font-medium px-3 py-1.5 rounded-md hover:bg-gray-50 text-gray-700">
                   Roll Key (Coming Soon)
                 </button>
               </div>
-              <p className="mt-3 text-sm text-gray-500">
+              <p className="mt-3 text-sm text-gray-800">
                 Use this key as a Bearer token when communicating with the proxy endpoint.
               </p>
             </div>
@@ -84,19 +84,19 @@ export default async function DashboardPage() {
                           <td className="whitespace-nowrap py-4 pl-4 pr-3 text-sm font-medium text-gray-900 sm:pl-6">
                             {rule.ruleName}
                           </td>
-                          <td className="whitespace-nowrap px-3 py-4 text-sm text-gray-500">
+                          <td className="whitespace-nowrap px-3 py-4 text-sm text-gray-800">
                             <span className="inline-flex items-center rounded-full bg-blue-50 px-2 py-1 text-xs font-medium text-blue-700 ring-1 ring-inset ring-blue-700/10">
                               {rule.service}
                             </span>
                           </td>
-                          <td className="whitespace-nowrap px-3 py-4 text-sm text-gray-500">
+                          <td className="whitespace-nowrap px-3 py-4 text-sm text-gray-800">
                             {rule.actionType === 'read_blacklist' ? (
                                <span className="text-red-600 font-medium">Read Blacklist</span>
                             ) : rule.actionType === 'send_whitelist' ? (
                                <span className="text-green-600 font-medium">Send Whitelist</span>
                             ) : rule.actionType}
                           </td>
-                          <td className="whitespace-nowrap px-3 py-4 text-sm text-gray-500 font-mono bg-slate-50 border rounded-sm ml-2 px-2">
+                          <td className="whitespace-nowrap px-3 py-4 text-sm text-gray-800 font-mono bg-slate-50 border rounded-sm ml-2 px-2">
                             {rule.regexPattern}
                           </td>
                           <td className="relative whitespace-nowrap py-4 pl-3 pr-4 text-right text-sm font-medium sm:pr-6">
@@ -106,7 +106,7 @@ export default async function DashboardPage() {
                       ))}
                       {userRules.length === 0 && (
                         <tr>
-                          <td colSpan={5} className="py-8 text-center text-sm text-gray-500">
+                          <td colSpan={5} className="py-8 text-center text-sm text-gray-800">
                             You have no active proxy rules. Default access to all Google Scopes is DENIED.
                           </td>
                         </tr>

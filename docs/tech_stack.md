@@ -12,17 +12,14 @@ We will build this platform as a high-performance, edge-deployable application.
 **Clerk**
 After re-evaluating the specific requirements of our API proxy—specifically the need to securely store and retrieve Google OAuth Refresh Tokens for long-running, offline background agents—we are pivoting to Clerk as our primary Identity Provider.
 
-### Clerk vs. WorkOS: The Google OAuth Overhead
+### The Google OAuth Overhead
 The core architectural challenge of this platform is the **secure ingestion, storage, and lifecycle management of third-party Google OAuth credentials.**
 
 *   **The Token Storage Vault:** When a user connects their Google account, we must store the Refresh Token so our proxy can fetch fresh Access Tokens days or weeks later when an agent makes a request. 
-    *   **WorkOS** authenticates the user and hands *us* the Refresh Token upon login. It does **not** store it for us. This forces us to build a highly secure, encrypted-at-rest database vault to store every user's master Google token. 
-    *   **Clerk** natively stores the external OAuth Provider tokens within its own secure infrastructure. We can query Clerk on the backend (`clerkClient.users.getUserOauthAccessToken(userId, 'oauth_google')`) at any time, and Clerk handles the storage.
+    *   **Clerk** natively stores the external OAuth Provider tokens within its own secure infrastructure. We can query Clerk on the backend (`clerkClient.users.getUserOauthAccessToken(userId, 'oauth_google')`) at any time, and Clerk handles the storage securely.
 *   **The Refresh Lifecycle:**
-    *   **WorkOS** requires us to write the logic that takes our vaulted Refresh Token, detects expiration, hits the Google API to refresh it, updates our vault, and then passes it to the agent.
-    *   **Clerk** handles this automatically under the hood when we query their SDK.
+    *   **Clerk** handles refresh token expiration automatically under the hood when we query their SDK.
 *   **Google App Security Review:** To take our application out of "Testing" mode and get it verified by Google (especially for restricted scopes like Gmail/Drive), we must undergo a stringent Cloud Application Security Assessment (CASA). 
-    *   Using **WorkOS**, we have to prove to auditors that our custom Neon Postgres database and encryption key management system are unassailable, greatly increasing the audit scope, risk, and cost.
     *   Using **Clerk**, we offload the liability of storing the raw Google Refresh Tokens entirely to their highly compliant, SOC2-audited infrastructure. Our database only stores the proxy rules. This drastically shrinks our audit surface area and makes passing Google Security Review significantly easier.
 
 ## Data Flow (The Token Vault Pattern)

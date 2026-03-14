@@ -58,5 +58,5 @@ We will verify this implementation strictly against the tests defined in the `do
 - We will write unit tests for the Rule Evaluation Engine (the logic that checks an email address or body content against the user's Regex rules) to ensure the core security logic is flawless before it ever touches a network request.
 
 ### Manual Verification
-1. **Sign-up & Multi-tenant Test**: We will manually execute the steps in `docs/QA_Acceptance_Test/01_signup_and_credential_workflow.md` using two separate Google accounts to verify the WorkOS integration and data isolation.
+1. **Sign-up & Multi-tenant Test**: We will manually execute the steps in `docs/QA_Acceptance_Test/01_signup_and_credential_workflow.md` using two separate Google accounts to verify the Clerk integration and data isolation.
 2. **Agent Simulation**: We will write a simple Python script using `google-api-python-client`. We will configure it with the `api_endpoint` override pointing to our local dev server and manually execute the whitelist/blacklist tests in `docs/QA_Acceptance_Test/02_gmail_fine_grain_control.md` to ensure the proxy correctly intercepts, blocks, and formats the error messages (including the named regex rules and the 2FA structural alert).

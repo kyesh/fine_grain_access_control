@@ -2,7 +2,7 @@
 
 ## Prerequisites
 - A testing environment with the Vercel edge proxy and Neon Postgres database running.
-- WorkOS AuthKit integration configured and active for the testing environment.
+- Clerk integration configured and active for the testing environment.
 - No prior user accounts exist for the test user email.
 
 ## Dependencies
@@ -18,7 +18,7 @@
 **Steps**:
 1. Navigate to the landing page in the testing environment.
 2. Click the "Sign Up" or "Get Started" button.
-3. Complete the WorkOS AuthKit sign-up flow using a test Google Account (e.g., `test-user-1@gmail.com`).
+3. Complete the Clerk sign-up flow using a test Google Account (e.g., `test-user-1@gmail.com`).
 4. During the Google OAuth consent screen, approve all requested scopes (e.g., Drive, Gmail, Calendar).
 5. Upon redirect back to the application dashboard, verify that a clear "Welcome" or onboarding state is shown.
 6. Locate the "Generate API Credentials" or "Proxy Setup" section.

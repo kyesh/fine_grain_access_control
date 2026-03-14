@@ -8,7 +8,7 @@ export default async function LandingPage() {
         <h1 className="text-5xl font-extrabold tracking-tight sm:text-7xl bg-clip-text text-transparent bg-gradient-to-r from-blue-600 to-indigo-600">
           Agent Security, Solved.
         </h1>
-        <p className="text-xl text-gray-600 max-w-2xl mx-auto">
+        <p className="text-xl text-gray-800 max-w-2xl mx-auto">
           Give your AI agents access to Google APIs safely. 
           Use standard Google SDKs while strictly controlling their read, write, and delete permissions.
         </p>
@@ -39,15 +39,15 @@ export default async function LandingPage() {
         <div className="mt-16 grid grid-cols-1 gap-8 sm:grid-cols-3 text-left">
           <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
             <h3 className="font-semibold text-gray-900 mb-2">Off-The-Shelf Libraries</h3>
-            <p className="text-sm text-gray-600">Agents can use the official Python and Node.js Google SDKs with zero code changes required.</p>
+            <p className="text-sm text-gray-800">Agents can use the official Python and Node.js Google SDKs with zero code changes required.</p>
           </div>
           <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
             <h3 className="font-semibold text-gray-900 mb-2">Content Filtering</h3>
-            <p className="text-sm text-gray-600">Use regular expressions to block agents from reading sensitive emails like 2FA or Password Resets.</p>
+            <p className="text-sm text-gray-800">Use regular expressions to block agents from reading sensitive emails like 2FA or Password Resets.</p>
           </div>
           <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
             <h3 className="font-semibold text-gray-900 mb-2">Deletion Safeguards</h3>
-            <p className="text-sm text-gray-600">Whitelist specific domains for deletion and globally block &quot;Empty Trash&quot; commands.</p>
+            <p className="text-sm text-gray-800">Whitelist specific domains for deletion and globally block &quot;Empty Trash&quot; commands.</p>
           </div>
         </div>
       </div>
