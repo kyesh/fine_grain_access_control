@@ -31,9 +31,16 @@ export async function syncConnectedEmails() {
   // Fetch all Google external accounts from Clerk
   const client = await clerkClient();
   const clerkUser = await client.users.getUser(user.id);
+
+  console.log('[syncConnectedEmails] Clerk user:', clerkUser.id, clerkUser.emailAddresses.map(e => e.emailAddress));
+  console.log('[syncConnectedEmails] All external accounts:', clerkUser.externalAccounts.map(ea => ({
+    id: ea.id, provider: ea.provider, email: ea.emailAddress, status: ea.verification?.status,
+  })));
+
   const googleAccounts = clerkUser.externalAccounts.filter(
     ea => ea.provider === 'oauth_google' || ea.provider === 'google'
   );
+  console.log('[syncConnectedEmails] Google accounts found:', googleAccounts.length);
 
   // Get existing connected emails
   const existing = await db.select().from(connectedEmails).where(eq(connectedEmails.userId, dbUser.id));
