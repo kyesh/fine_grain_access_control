@@ -3,10 +3,11 @@ import { eq } from 'drizzle-orm';
 import { currentUser } from '@clerk/nextjs/server';
 import { redirect } from 'next/navigation';
 import { db } from '@/db';
+import { syncConnectedEmails } from './actions';
 import { RuleControls } from './RuleControls';
 import { DeleteRuleButton } from './DeleteRuleButton';
 import { KeyControls } from './KeyControls';
-import { SyncEmailsButton } from './SyncEmailsButton';
+import { ConnectGoogleButton } from './ConnectGoogleButton';
 
 export default async function DashboardPage() {
   const user = await currentUser();
@@ -24,6 +25,14 @@ export default async function DashboardPage() {
       email: user.emailAddresses[0]?.emailAddress ?? 'unknown',
     }).returning();
     dbUser = rawKeys[0];
+  }
+
+  // Auto-sync connected emails from Clerk on every page load
+  // This ensures the dashboard is up-to-date after OAuth redirects
+  try {
+    await syncConnectedEmails();
+  } catch (e) {
+    console.error('[Dashboard] Failed to auto-sync connected emails:', e);
   }
 
   // Fetch connected emails
@@ -66,13 +75,23 @@ export default async function DashboardPage() {
           <div className="bg-white overflow-hidden shadow rounded-lg border border-gray-200">
             <div className="px-4 py-5 sm:p-6">
               <div className="flex justify-between items-center mb-4">
-                <h2 className="text-lg font-medium leading-6 text-gray-900">Connected Google Accounts</h2>
-                <SyncEmailsButton />
+                <div>
+                  <h2 className="text-lg font-medium leading-6 text-gray-900">Connected Google Accounts</h2>
+                  <p className="mt-1 text-sm text-gray-500">Connect your Gmail accounts to allow agents to access them through API keys.</p>
+                </div>
+                <ConnectGoogleButton />
               </div>
               {userConnectedEmails.length === 0 ? (
-                <p className="text-sm text-gray-800 bg-amber-50 border border-amber-200 rounded-md p-4">
-                  No Google accounts connected yet. Click &quot;Sync from Clerk&quot; after connecting Google accounts in your profile settings.
-                </p>
+                <div className="bg-indigo-50 border border-indigo-200 rounded-lg p-5 text-center">
+                  <svg className="mx-auto h-10 w-10 text-indigo-400 mb-3" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M21.75 6.75v10.5a2.25 2.25 0 0 1-2.25 2.25h-15a2.25 2.25 0 0 1-2.25-2.25V6.75m19.5 0A2.25 2.25 0 0 0 19.5 4.5h-15a2.25 2.25 0 0 0-2.25 2.25m19.5 0v.243a2.25 2.25 0 0 1-1.07 1.916l-7.5 4.615a2.25 2.25 0 0 1-2.36 0L3.32 8.91a2.25 2.25 0 0 1-1.07-1.916V6.75" />
+                  </svg>
+                  <h3 className="text-sm font-semibold text-indigo-900">No Gmail accounts connected</h3>
+                  <p className="mt-1 text-sm text-indigo-700">
+                    Click <strong>&quot;Connect Google Account&quot;</strong> above to link a Gmail account.
+                    You can connect multiple accounts (personal, work, school).
+                  </p>
+                </div>
               ) : (
                 <div className="flex flex-wrap gap-3">
                   {userConnectedEmails.map((ce) => (
