@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import { Eye, EyeOff, Copy, Check } from "lucide-react";
 import { createProxyKey, revokeProxyKey, rollProxyKey } from "./actions";
 
 interface AccessibleEmail {
@@ -17,6 +18,47 @@ interface ProxyKey {
   expiresAt: Date | null;
   createdAt: Date;
   emailAccess: string[]; // email addresses this key can access
+}
+
+function SecretKeyDisplay({
+  apiKey,
+  className = "text-sm text-slate-700",
+  iconSize = 14,
+}: {
+  apiKey: string;
+  className?: string;
+  iconSize?: number;
+}) {
+  const [isVisible, setIsVisible] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(apiKey);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  const maskedKey = "sk_proxy_" + "•".repeat(24);
+
+  return (
+    <div className={`inline-flex items-center gap-2 font-mono bg-slate-50 px-2 py-1 rounded mt-1.5 ${className}`}>
+      <span>{isVisible ? apiKey : maskedKey}</span>
+      <button
+        onClick={() => setIsVisible(!isVisible)}
+        className="text-slate-400 hover:text-slate-600 focus:outline-none transition-colors"
+        title={isVisible ? "Hide Key" : "Reveal Key"}
+      >
+        {isVisible ? <EyeOff size={iconSize} /> : <Eye size={iconSize} />}
+      </button>
+      <button
+        onClick={handleCopy}
+        className="text-slate-400 hover:text-slate-600 focus:outline-none transition-colors"
+        title="Copy to clipboard"
+      >
+        {copied ? <Check size={iconSize} className="text-green-500" /> : <Copy size={iconSize} />}
+      </button>
+    </div>
+  );
 }
 
 export function KeyControls({
@@ -66,9 +108,7 @@ export function KeyControls({
             <div className="flex justify-between items-start">
               <div>
                 <p className="font-semibold text-gray-900">{k.label}</p>
-                <code className="text-sm font-mono text-slate-700 bg-slate-50 px-2 py-0.5 rounded">
-                  {k.key}
-                </code>
+                <SecretKeyDisplay apiKey={k.key} />
                 <div className="mt-2 flex flex-wrap gap-1">
                   {k.emailAccess.length > 0 ? (
                     k.emailAccess.map((email) => {
@@ -130,7 +170,7 @@ export function KeyControls({
                 className="bg-gray-50 border border-gray-200 rounded-lg p-3 opacity-60"
               >
                 <p className="font-medium text-gray-700 line-through">{k.label}</p>
-                <code className="text-xs font-mono text-gray-500">{k.key}</code>
+                <SecretKeyDisplay apiKey={k.key} className="text-xs text-gray-500 bg-transparent !px-0 !py-0" iconSize={12} />
                 <p className="text-xs text-red-600 mt-1">
                   Revoked {k.revokedAt ? new Date(k.revokedAt).toLocaleDateString() : ""}
                 </p>

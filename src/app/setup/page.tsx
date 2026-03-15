@@ -84,7 +84,7 @@ export default function SetupPage() {
                 accounts).
               </p>
               <div className="p-3 bg-black/50 border border-white/5 rounded-xl flex items-center justify-between font-mono text-xs text-emerald-400/70">
-                <span className="truncate">sk_proxy_b02a5bf42e...</span>
+                <span className="truncate">sk_proxy_****************</span>
                 <Copy className="w-4 h-4 opacity-50" />
               </div>
             </div>
