@@ -83,7 +83,8 @@ async function main() {
       const stmt = statements[i];
       try {
         await sql.query(stmt);
-      } catch (err: any) {
+      } catch (error: unknown) {
+        const err = error as { message?: string; code?: string };
         // Ignore idempotent errors — these occur when re-running migrations
         const ignorable = [
           'already exists',

@@ -1,0 +1,13 @@
+{
+  "name": "fgac.ai Integration",
+  "version": "1.0.0",
+  "description": "Routes Gmail requests through the fgac.ai security proxy.",
+  "author": "fgac.ai",
+  "credentials": [
+    {
+      "key": "FGAC_PROXY_KEY",
+      "description": "Your proxy key from fgac.ai dashboard (starts with sk_proxy_)",
+      "required": true
+    }
+  ]
+}

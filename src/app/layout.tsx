@@ -35,6 +35,14 @@ export default function RootLayout({
                         SecureAgent
                       </Link>
                     </div>
+                    <div className="hidden sm:-my-px sm:ml-6 sm:flex sm:space-x-8">
+                      <Link
+                        href="/setup"
+                        className="inline-flex items-center border-b-2 border-transparent px-1 pt-1 text-sm font-medium text-gray-800 hover:border-gray-400 hover:text-gray-900"
+                      >
+                        Setup Guide
+                      </Link>
+                    </div>
                     <Show when="signed-in">
                       <div className="hidden sm:-my-px sm:ml-6 sm:flex sm:space-x-8">
                         <Link
