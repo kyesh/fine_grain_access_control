@@ -24,7 +24,9 @@
 6. Locate the "Generate API Credentials" or "Proxy Setup" section.
 7. Click "Generate Credential".
 8. Verify that a `.json` credential file (or API Key string, depending on implementation) is provided for download/copying.
-9. Verify that clear, copy-pasteable instructions are displayed detailing how to use this credential with a standard Google SDK (e.g., Python or Node.js snippets showing the `api_endpoint: 'https://fgac.ai/api/proxy'` override).
+9. Verify that the API Key string is hidden/obfuscated by default (e.g., `sk_proxy_****************`) in the UI to prevent accidental exposure during screen recordings.
+10. Verify there is a clear option/button to temporarily reveal the key or copy it directly to the clipboard without revealing it.
+11. Verify that clear, copy-pasteable instructions are displayed detailing how to use this credential with a standard Google SDK (e.g., Python or Node.js snippets showing the `api_endpoint: 'https://fgac.ai/api/proxy'` override).
 
 **Expected Outcome**: The user successfully receives functional proxy credentials and clear instructions on how to point their agent traffic to the proxy.
 

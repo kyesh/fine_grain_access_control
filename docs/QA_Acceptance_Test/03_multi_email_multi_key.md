@@ -38,13 +38,14 @@
 2. Click "Create New Key".
 3. Enter label: `Personal Assistant Agent`.
 4. Under "Email Access", select only `personal@gmail.com`.
-5. Save. Verify a new key (`sk_proxy_xxx`) is displayed.
-6. Create a second key with label: `Work Automation Bot`.
-7. Under "Email Access", select only `work@company.com`.
-8. Save. Verify a second, different key is displayed.
-9. Create a third key with label: `Power Agent`.
-10. Under "Email Access", select **both** `personal@gmail.com` and `work@company.com`.
-11. Save. Verify a third key is displayed.
+5. Save. Verify a new key value is generated.
+6. Verify that the key is hidden/obfuscated by default (e.g., `sk_proxy_****************`) to prevent accidental screen recording leaks, but can be revealed or copied to clipboard securely.
+7. Create a second key with label: `Work Automation Bot`.
+8. Under "Email Access", select only `work@company.com`.
+9. Save. Verify a second, different key is displayed and behaves with the same secure masking parameters.
+10. Create a third key with label: `Power Agent`.
+11. Under "Email Access", select **both** `personal@gmail.com` and `work@company.com`.
+12. Save. Verify a third key is displayed.
 
 **Expected Outcome**: Three distinct proxy keys exist, each with different email access grants. The dashboard clearly indicates which emails each key can access.
 
