@@ -63,7 +63,7 @@ export const accessRules = pgTable('access_rules', {
   userId: uuid('user_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
   targetEmail: text('target_email'), // NULL = applies to all emails, or specific email address
   ruleName: text('rule_name').notNull(), // e.g., "Block Project X"
-  service: text('service').notNull(), // 'gmail', 'drive', 'calendar'
+  service: text('service').notNull(), // 'gmail'
   actionType: text('action_type').notNull(), // 'read_blacklist', 'send_whitelist', 'delete_whitelist', 'label_whitelist', 'label_blacklist'
   regexPattern: text('regex_pattern').notNull(), // e.g., "*@competitor.com" or "CONFIDENTIAL_PROJECT_X"
   createdAt: timestamp('created_at').defaultNow().notNull(),
