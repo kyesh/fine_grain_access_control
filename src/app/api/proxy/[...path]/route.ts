@@ -4,6 +4,8 @@ import { users, proxyKeys, emailDelegations, keyEmailAccess, accessRules, keyRul
 import { eq, and } from 'drizzle-orm';
 import { clerkClient } from '@clerk/nextjs/server';
 
+export const dynamic = 'force-dynamic';
+
 export async function GET(request: NextRequest, { params }: { params: Promise<{ path: string[] }> }) {
   return handleProxyRequest(request, await params);
 }
