@@ -19,14 +19,24 @@ const connectionString = process.env.neon__POSTGRES_URL || process.env.POSTGRES_
 
 if (!isMainBranch && connectionString.includes('.neon.tech')) {
   if (!process.env.neon__POSTGRES_URL) {
-    console.error(`\n🚨 MIGRATE SAFETY ABORT: You are on branch '${gitBranch}' but 'neon__POSTGRES_URL' is missing.`);
-    console.error(`Continuing would cause the migration script to apply changes to the PRODUCTION database.`);
-    console.error(`Please run 'npm run db:branch' first to provision an isolated branch and update .env.local.\n`);
-    process.exit(1);
+    console.log(`\n🌿 Branch '${gitBranch}' isolated connection missing. Auto-provisioning via neonctl...`);
+    try {
+      execSync('npm run db:branch', { stdio: 'inherit' });
+      // Refresh process.env
+      require('dotenv').config({ path: '.env.local', override: true });
+      if (!process.env.neon__POSTGRES_URL) {
+        throw new Error('neon__POSTGRES_URL remaining missing');
+      }
+    } catch (e: any) {
+      console.error(`\n🚨 MIGRATE SAFETY ABORT: Auto-provisioning failed.`);
+      process.exit(1);
+    }
   }
 }
 
-if (!connectionString) {
+const finalConnectionString = process.env.neon__POSTGRES_URL || process.env.POSTGRES_URL || process.env.DATABASE_URL_UNPOOLED || process.env.DATABASE_URL || '';
+
+if (!finalConnectionString) {
   console.log('⚠️  No database connection string found. Skipping migration.');
   process.exit(0);
 }
@@ -87,7 +97,7 @@ function splitStatements(sql: string): string[] {
 async function main() {
   console.log('🚀 Running database migrations...');
 
-  const sql = neon(connectionString);
+  const sql = neon(finalConnectionString);
   const migrationsDir = join(process.cwd(), 'src', 'db', 'migrations');
 
   for (const file of MIGRATIONS) {
