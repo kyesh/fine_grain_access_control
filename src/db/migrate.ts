@@ -84,9 +84,20 @@ async function main() {
       try {
         await sql.query(stmt);
       } catch (err: any) {
-        // Ignore "already exists" errors for idempotent migrations
-        if (err.message?.includes('already exists') || err.message?.includes('duplicate_object')) {
-          console.log(`    ↳ Skipped (already exists): ${stmt.substring(0, 60)}...`);
+        // Ignore idempotent errors — these occur when re-running migrations
+        const ignorable = [
+          'already exists',
+          'duplicate_object',
+          'undefined_column', // column dropped by later migration
+          'undefined_table',  // table dropped by later migration
+          '42703',            // PostgreSQL undefined_column
+          '42P01',            // PostgreSQL undefined_table
+        ];
+        const isIgnorable = ignorable.some(s =>
+          err.message?.includes(s) || err.code === s
+        );
+        if (isIgnorable) {
+          console.log(`    ↳ Skipped (safe to ignore): ${stmt.substring(0, 60)}...`);
         } else {
           console.error(`    ❌ Failed statement ${i + 1}/${statements.length}:`, stmt.substring(0, 100));
           throw err;

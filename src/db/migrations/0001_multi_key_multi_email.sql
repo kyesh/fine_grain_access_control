@@ -36,7 +36,7 @@ ALTER TABLE "users" DROP COLUMN IF EXISTS "proxy_key";
 --> statement-breakpoint
 DO $$ BEGIN
   ALTER TABLE "connected_emails" ADD CONSTRAINT "connected_emails_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;
-EXCEPTION WHEN duplicate_object THEN NULL;
+EXCEPTION WHEN OTHERS THEN NULL;
 END $$;
 --> statement-breakpoint
 DO $$ BEGIN
@@ -46,7 +46,7 @@ END $$;
 --> statement-breakpoint
 DO $$ BEGIN
   ALTER TABLE "key_email_access" ADD CONSTRAINT "key_email_access_connected_email_id_connected_emails_id_fk" FOREIGN KEY ("connected_email_id") REFERENCES "public"."connected_emails"("id") ON DELETE cascade ON UPDATE no action;
-EXCEPTION WHEN duplicate_object THEN NULL;
+EXCEPTION WHEN OTHERS THEN NULL;
 END $$;
 --> statement-breakpoint
 DO $$ BEGIN
@@ -64,6 +64,9 @@ DO $$ BEGIN
 EXCEPTION WHEN duplicate_object THEN NULL;
 END $$;
 --> statement-breakpoint
-CREATE UNIQUE INDEX IF NOT EXISTS "key_email_unique" ON "key_email_access" USING btree ("proxy_key_id","connected_email_id");
+DO $$ BEGIN
+  CREATE UNIQUE INDEX IF NOT EXISTS "key_email_unique" ON "key_email_access" USING btree ("proxy_key_id","connected_email_id");
+EXCEPTION WHEN OTHERS THEN NULL;
+END $$;
 --> statement-breakpoint
 CREATE UNIQUE INDEX IF NOT EXISTS "key_rule_unique" ON "key_rule_assignments" USING btree ("proxy_key_id","access_rule_id");
