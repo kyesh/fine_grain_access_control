@@ -6,6 +6,9 @@ import * as dotenv from 'dotenv';
 import { execSync } from 'child_process';
 
 const getGitBranch = () => {
+  if (process.env.VERCEL_GIT_COMMIT_REF) {
+    return process.env.VERCEL_GIT_COMMIT_REF;
+  }
   try {
     return execSync('git rev-parse --abbrev-ref HEAD').toString().trim();
   } catch {

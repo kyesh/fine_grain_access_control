@@ -17,6 +17,9 @@ function runNeonCmd(cmd: string) {
 }
 
 async function getGitBranch() {
+  if (process.env.VERCEL_GIT_COMMIT_REF) {
+    return process.env.VERCEL_GIT_COMMIT_REF;
+  }
   try {
     return execSync('git rev-parse --abbrev-ref HEAD').toString().trim()
   } catch {
