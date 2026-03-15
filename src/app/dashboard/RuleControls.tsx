@@ -29,18 +29,25 @@ export function RuleControls({
 
   // Fetch labels when the modal opens if not already fetched
   useEffect(() => {
+    let ignore = false;
     if (isModalOpen && gmailLabels.length === 0) {
-      setIsLoadingLabels(true);
-      fetch('/api/gmail/labels')
-        .then(res => res.json())
-        .then(data => {
-          if (data && data.labels) {
+      const fetchLabels = async () => {
+        setIsLoadingLabels(true);
+        try {
+          const res = await fetch('/api/gmail/labels');
+          const data = await res.json();
+          if (!ignore && data && data.labels) {
             setGmailLabels(data.labels.filter((l: GmailLabel) => l.type === 'user' || l.type === 'system'));
           }
-        })
-        .catch(err => console.error("Failed to load labels:", err))
-        .finally(() => setIsLoadingLabels(false));
+        } catch (err) {
+          if (!ignore) console.error("Failed to load labels:", err);
+        } finally {
+           if (!ignore) setIsLoadingLabels(false);
+        }
+      };
+      fetchLabels();
     }
+    return () => { ignore = true; };
   }, [isModalOpen, gmailLabels.length]);
 
   async function onSubmit(formData: FormData) {
