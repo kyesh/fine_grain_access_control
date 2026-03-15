@@ -28,7 +28,7 @@ if (!isMainBranch && dbUrl.includes('.neon.tech')) {
       if (!process.env.neon__POSTGRES_URL) {
         throw new Error("neon__POSTGRES_URL still missing after db:branch execution");
       }
-    } catch (e: any) {
+    } catch (e: unknown) {
       console.error(`\n🚨 DRIZZLE SAFETY ABORT: Auto-provisioning failed. Could not secure isolated Neon branch.`);
       process.exit(1);
     }

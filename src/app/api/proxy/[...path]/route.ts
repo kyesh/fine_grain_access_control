@@ -286,8 +286,8 @@ async function handleProxyRequest(request: NextRequest, params: { path: string[]
       const labelBlacklistRules = applicableRules.filter(r => r.service === 'gmail' && r.actionType === 'label_blacklist');
       const labelWhitelistRules = applicableRules.filter(r => r.service === 'gmail' && r.actionType === 'label_whitelist');
 
-      let parsedBody: any = null;
-      try { parsedBody = JSON.parse(returnBody); } catch (e) { }
+      let parsedBody: Record<string, unknown> | null = null;
+      try { parsedBody = JSON.parse(returnBody); } catch (e: unknown) { }
 
       if (parsedBody && parsedBody.labelIds && Array.isArray(parsedBody.labelIds)) {
         // 1. Check Label Blacklists First (Precedence)

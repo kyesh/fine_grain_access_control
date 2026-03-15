@@ -1,6 +1,7 @@
 import { neon } from '@neondatabase/serverless';
 import { readFileSync, existsSync } from 'fs';
 import { join } from 'path';
+import * as dotenv from 'dotenv';
 
 import { execSync } from 'child_process';
 
@@ -23,11 +24,11 @@ if (!isMainBranch && connectionString.includes('.neon.tech')) {
     try {
       execSync('npm run db:branch', { stdio: 'inherit' });
       // Refresh process.env
-      require('dotenv').config({ path: '.env.local', override: true });
+      dotenv.config({ path: '.env.local', override: true });
       if (!process.env.neon__POSTGRES_URL) {
         throw new Error('neon__POSTGRES_URL remaining missing');
       }
-    } catch (e: any) {
+    } catch (e: unknown) {
       console.error(`\n🚨 MIGRATE SAFETY ABORT: Auto-provisioning failed.`);
       process.exit(1);
     }
