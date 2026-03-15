@@ -2,16 +2,22 @@
 
 echo "Checking for accidentally staged secrets or test emails..."
 
-# We use git diff --cached to only check what is about to be committed.
-# -E enables extended regex.
-# -i makes it case insensitive.
-# This checks for sk_proxy_ followed by at least 15 hex characters, or the private test emails.
+# Base pattern for API keys
+FORBIDDEN_PATTERN="(sk_proxy_[a-fA-F0-9]{15,})"
 
-FORBIDDEN_PATTERN="(sk_proxy_[a-fA-F0-9]{15,}|kenyesh2@gmail\.com|kyesh@umich\.edu)"
+# If the private test config exists, read from it to construct the forbidden regex pattern
+CONFIG_FILE=".qa_test_emails.json"
+if [ -f "$CONFIG_FILE" ]; then
+  # Extract all email values from the JSON and join them with |
+  PRIVATE_EMAILS=$(grep -oE '[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}' "$CONFIG_FILE" | tr '\n' '|' | sed 's/|$//' | sed 's/\./\\./g')
+  if [ ! -z "$PRIVATE_EMAILS" ]; then
+     FORBIDDEN_PATTERN="(sk_proxy_[a-fA-F0-9]{15,}|$PRIVATE_EMAILS)"
+  fi
+fi
 
 if git diff --cached --name-only -z | xargs -0 grep -lE "$FORBIDDEN_PATTERN"; then
   echo "🚨 ERROR: Commit rejected."
-  echo "It looks like you are trying to commit a file containing a sensitive proxy API key (sk_proxy_...) or one of the private test emails."
+  echo "It looks like you are trying to commit a file containing a sensitive proxy API key (sk_proxy_...) or one of your private test emails."
   echo "Please remove the secrets from the files listed above and stage the changes again."
   echo "If this is a false positive, you can bypass this check using git commit --no-verify."
   exit 1
