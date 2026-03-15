@@ -235,7 +235,31 @@ async function handleProxyRequest(request: NextRequest, params: { path: string[]
     }
 
     // ─── 8. Forward to Google ───────────────────────────────────────────────
-    const googleUrl = `https://www.googleapis.com/${fullPath}${request.nextUrl.search}`;
+    // For list queries, inject label filtering if rules exist
+    let finalQueryString = request.nextUrl.search;
+    if (request.method === 'GET' && fullPath.includes('messages') && !fullPath.match(/messages\/[^/]+$/)) {
+      const urlParams = new URLSearchParams(request.nextUrl.searchParams);
+      let existingQ = urlParams.get('q') || '';
+      
+      const labelBlacklists = applicableRules.filter(r => r.service === 'gmail' && r.actionType === 'label_blacklist');
+      const labelWhitelists = applicableRules.filter(r => r.service === 'gmail' && r.actionType === 'label_whitelist');
+      
+      for (const rule of labelBlacklists) {
+        existingQ += ` -label:${rule.regexPattern}`;
+      }
+      
+      if (labelWhitelists.length > 0) {
+        const whitelistQuery = labelWhitelists.map(r => `label:${r.regexPattern}`).join(' OR ');
+        existingQ += ` {${whitelistQuery}}`;
+      }
+      
+      if (existingQ.trim() !== '') {
+        urlParams.set('q', existingQ.trim());
+      }
+      finalQueryString = urlParams.toString() ? `?${urlParams.toString()}` : '';
+    }
+
+    const googleUrl = `https://www.googleapis.com/${fullPath}${finalQueryString}`;
     const headers = new Headers(request.headers);
     headers.set('Authorization', `Bearer ${realGoogleToken}`);
     headers.delete('host');
@@ -257,6 +281,38 @@ async function handleProxyRequest(request: NextRequest, params: { path: string[]
     // ─── 9. Evaluate Read / Inbound Rules ───────────────────────────────────
     if (request.method === 'GET' && fullPath.includes('messages') && isJson) {
       const readBlacklistRules = applicableRules.filter(r => r.service === 'gmail' && r.actionType === 'read_blacklist');
+      const labelBlacklistRules = applicableRules.filter(r => r.service === 'gmail' && r.actionType === 'label_blacklist');
+      const labelWhitelistRules = applicableRules.filter(r => r.service === 'gmail' && r.actionType === 'label_whitelist');
+
+      let parsedBody: any = null;
+      try { parsedBody = JSON.parse(returnBody); } catch (e) { }
+
+      if (parsedBody && parsedBody.labelIds && Array.isArray(parsedBody.labelIds)) {
+        // 1. Check Label Blacklists First (Precedence)
+        for (const rule of labelBlacklistRules) {
+          if (parsedBody.labelIds.includes(rule.regexPattern)) {
+             return NextResponse.json({
+               error: `Access restricted: Email contains blacklisted label '${rule.regexPattern}'.`
+             }, { status: 403 });
+          }
+        }
+
+        // 2. Check Label Whitelists
+        if (labelWhitelistRules.length > 0) {
+           let hasWhitelistedLabel = false;
+           for (const rule of labelWhitelistRules) {
+             if (parsedBody.labelIds.includes(rule.regexPattern)) {
+               hasWhitelistedLabel = true;
+               break;
+             }
+           }
+           if (!hasWhitelistedLabel) {
+             return NextResponse.json({
+               error: `Access restricted: Email lacks a required whitelisted label.`
+             }, { status: 403 });
+           }
+        }
+      }
 
       if (readBlacklistRules.length > 0) {
         for (const rule of readBlacklistRules) {

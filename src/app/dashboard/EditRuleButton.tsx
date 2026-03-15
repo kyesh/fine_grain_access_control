@@ -1,7 +1,13 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useState, useEffect, useTransition } from "react";
 import { updateRule } from "./actions";
+
+interface GmailLabel {
+  id: string;
+  name: string;
+  type: string;
+}
 
 interface EditableRule {
   id: string;
@@ -29,6 +35,24 @@ export function EditRuleButton({
 }) {
   const [isPending, startTransition] = useTransition();
   const [isOpen, setIsOpen] = useState(false);
+  const [selectedActionType, setSelectedActionType] = useState(rule.actionType);
+  const [gmailLabels, setGmailLabels] = useState<GmailLabel[]>([]);
+  const [isLoadingLabels, setIsLoadingLabels] = useState(false);
+
+  useEffect(() => {
+    if (isOpen && gmailLabels.length === 0) {
+      setIsLoadingLabels(true);
+      fetch('/api/gmail/labels')
+        .then(res => res.json())
+        .then(data => {
+          if (data && data.labels) {
+            setGmailLabels(data.labels.filter((l: GmailLabel) => l.type === 'user' || l.type === 'system'));
+          }
+        })
+        .catch(err => console.error("Failed to load labels:", err))
+        .finally(() => setIsLoadingLabels(false));
+    }
+  }, [isOpen, gmailLabels.length]);
 
   async function onSubmit(formData: FormData) {
     startTransition(async () => {
@@ -93,7 +117,8 @@ export function EditRuleButton({
                 </label>
                 <select
                   name="actionType"
-                  defaultValue={rule.actionType}
+                  value={selectedActionType}
+                  onChange={(e) => setSelectedActionType(e.target.value)}
                   className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 shadow-sm"
                 >
                   <option value="read_blacklist">
@@ -105,20 +130,40 @@ export function EditRuleButton({
                   <option value="delete_whitelist">
                     Delete Whitelist (From:)
                   </option>
+                  <option value="label_blacklist">
+                    Label Blacklist (Block Email via Label)
+                  </option>
+                  <option value="label_whitelist">
+                    Label Whitelist (Allow Only via Required Label)
+                  </option>
                 </select>
               </div>
 
               <div>
                 <label className="block text-sm font-semibold text-slate-700 mb-1.5">
-                  Regex Pattern
+                  {selectedActionType.startsWith('label_') ? 'Select Label' : 'Regex Pattern'}
                 </label>
-                <input
-                  type="text"
-                  name="regexPattern"
-                  required
-                  defaultValue={rule.regexPattern}
-                  className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm font-mono text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 shadow-sm"
-                />
+                {selectedActionType.startsWith('label_') ? (
+                  <select
+                    name="regexPattern"
+                    required
+                    defaultValue={rule.regexPattern}
+                    className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 shadow-sm"
+                  >
+                    <option value="">{isLoadingLabels ? "Loading labels..." : "Choose a Gmail Label..."}</option>
+                    {gmailLabels.map(label => (
+                       <option key={label.id} value={label.id}>{label.name} ({label.type})</option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    type="text"
+                    name="regexPattern"
+                    required
+                    defaultValue={rule.regexPattern}
+                    className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm font-mono text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 shadow-sm"
+                  />
+                )}
               </div>
 
               <div>
