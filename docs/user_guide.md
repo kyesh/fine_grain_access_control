@@ -24,7 +24,7 @@ Your agent never sees or touches your real Google credentials.
 
 ### Step 1: Create Your Account
 
-1. Go to **[your-deployment-url]** (e.g., `https://your-app.vercel.app`).
+1. Go to **[fgac.ai]** (e.g., `https://fgac.ai`).
 2. Click **"Get Started"**.
 3. Sign in with the **Google account** whose Gmail you want agents to access.
    - This grants SecureAgent permission to read/manage Gmail on your behalf via Clerk's OAuth integration.
@@ -55,7 +55,7 @@ from google.oauth2.credentials import Credentials
 
 # Your SecureAgent proxy key (NOT a Google token)
 PROXY_KEY = "sk_proxy_b02a5bf42ec449a18c71f72a9a8fb37a"
-PROXY_URL = "https://your-app.vercel.app/api/proxy"
+PROXY_URL = "https://fgac.ai/api/proxy"
 
 # Create a credential object with your proxy key
 creds = Credentials(token=PROXY_KEY)
@@ -81,7 +81,7 @@ for msg in messages:
 const { google } = require("googleapis");
 
 const PROXY_KEY = "sk_proxy_b02a5bf42ec449a18c71f72a9a8fb37a";
-const PROXY_URL = "https://your-app.vercel.app/api/proxy";
+const PROXY_URL = "https://fgac.ai/api/proxy";
 
 const auth = new google.auth.OAuth2();
 auth.setCredentials({ access_token: PROXY_KEY });
@@ -100,15 +100,21 @@ console.log(res.data.messages);
 
 ```bash
 curl -H "Authorization: Bearer sk_proxy_b02a5bf42ec449a18c71f72a9a8fb37a" \
-  "https://your-app.vercel.app/api/proxy/gmail/v1/users/me/messages?maxResults=5"
+  "https://fgac.ai/api/proxy/gmail/v1/users/me/messages?maxResults=5"
 ```
 
 #### Claude / LLM Tool Use
 
 If your LLM supports tool use or function calling, configure the Gmail tool to use:
-- **Base URL**: `https://your-app.vercel.app/api/proxy`
+- **Base URL**: `https://fgac.ai/api/proxy`
 - **Auth Header**: `Authorization: Bearer sk_proxy_...`
 - **Gmail user**: `me` (resolves to your email) or a specific email address
+
+#### Ready-Made Agent Skills
+We provide specific skill definitions for popular AI agents to handle configuration automatically. Download these from `https://fgac.ai/setup`.
+- **Claude Code**: Workspace tool instructions. Place in `.claude/skills/fgac/SKILL.md`.
+- **Claude Cowork**: Load directly into Claude Desktop.
+- **Open Claw**: Add to your `skills/fgac/` folder with the `openclaw.json` configuration.
 
 ---
 
@@ -199,7 +205,7 @@ Owner (kyesh@umich.edu)              Delegate (kenyesh2@gmail.com)
 
 ### Targeting a Specific Email in API Calls
 
-When your key has access to multiple emails, specify which inbox to access in the Gmail API path:
+When your key has access to multiple emails, specify which inbox to access in the Gmail API path. **You do not need separate API keys for separate emails.** A single proxy key will handle multiple delegated accounts as long as you specify the target email instead of `"me"`.
 
 ```bash
 # Access your own email
