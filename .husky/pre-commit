@@ -1,0 +1,21 @@
+#!/usr/bin/env sh
+. "$(dirname -- "$0")/_/husky.sh"
+
+echo "Checking for accidentally staged secrets or test emails..."
+
+# We use git diff --cached to only check what is about to be committed.
+# -E enables extended regex.
+# -i makes it case insensitive.
+# This checks for sk_proxy_ followed by at least 15 hex characters, or the private test emails.
+
+FORBIDDEN_PATTERN="(sk_proxy_[a-fA-F0-9]{15,}|kenyesh2@gmail\.com|kyesh@umich\.edu)"
+
+if git diff --cached --name-only -z | xargs -0 grep -lE "$FORBIDDEN_PATTERN"; then
+  echo "🚨 ERROR: Commit rejected."
+  echo "It looks like you are trying to commit a file containing a sensitive proxy API key (sk_proxy_...) or one of the private test emails."
+  echo "Please remove the secrets from the files listed above and stage the changes again."
+  echo "If this is a false positive, you can bypass this check using git commit --no-verify."
+  exit 1
+fi
+
+echo "✅ Secret scan passed."
