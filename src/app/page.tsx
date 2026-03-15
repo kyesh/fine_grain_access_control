@@ -56,6 +56,22 @@ export default async function LandingPage() {
             <p className="text-sm text-gray-800">Whitelist specific domains for deletion and globally block &quot;Empty Trash&quot; commands.</p>
           </div>
         </div>
+
+        {/* Google Data Usage Section */}
+        <div className="mt-16 bg-blue-50 border border-blue-100 p-8 rounded-3xl text-left shadow-sm">
+          <h2 className="text-2xl font-bold text-gray-900 mb-4">How We Use Google Data</h2>
+          <div className="space-y-4 text-gray-800">
+            <p>
+              SecureAgent requires access to your Gmail account (via scopes like <code className="bg-blue-100 px-1.5 py-0.5 rounded text-blue-900 text-sm">gmail.readonly</code>, <code className="bg-blue-100 px-1.5 py-0.5 rounded text-blue-900 text-sm">gmail.send</code>, and <code className="bg-blue-100 px-1.5 py-0.5 rounded text-blue-900 text-sm">gmail.modify</code>) to act as a secure proxy between your inbox and your AI agents.
+            </p>
+            <p>
+              When your AI agent makes an API request, we strictly enforce your custom allowlists and blocklists before forwarding the exact request to the Google API. We never permanently store your email content, and your data is never used to train our AI models. No humans read your emails.
+            </p>
+            <p className="text-sm">
+              Our use of information received from Google APIs will adhere to the <Link href="/privacy" className="underline text-blue-600 hover:text-blue-800">Google API Services User Data Policy</Link>, including the <strong>Limited Use</strong> requirements.
+            </p>
+          </div>
+        </div>
       </div>
     </div>
   );
