@@ -15,6 +15,13 @@
       "when": 1773523200000,
       "tag": "0001_multi_key_multi_email",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1773559200000,
+      "tag": "0002_email_delegations",
+      "breakpoints": true
     }
   ]
 }

@@ -1,10 +1,9 @@
 "use server";
 
 import { db } from "@/db";
-import { users, proxyKeys, connectedEmails, keyEmailAccess, accessRules, keyRuleAssignments } from "@/db/schema";
-import { eq, and } from "drizzle-orm";
+import { users, proxyKeys, emailDelegations, keyEmailAccess, accessRules, keyRuleAssignments } from "@/db/schema";
+import { eq, and, or } from "drizzle-orm";
 import { currentUser } from "@clerk/nextjs/server";
-import { clerkClient } from "@clerk/nextjs/server";
 import { revalidatePath } from "next/cache";
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -19,51 +18,90 @@ async function getDbUser() {
   return dbUser;
 }
 
-// ─── Connected Emails ───────────────────────────────────────────────────────
+// ─── Email Delegations ──────────────────────────────────────────────────────
 
-export async function syncConnectedEmails() {
-  const user = await currentUser();
-  if (!user) throw new Error("Unauthorized");
+/**
+ * Create a delegation: the current user (owner) grants another user (delegate)
+ * permission to create API keys that access the owner's Gmail.
+ */
+export async function createDelegation(formData: FormData) {
+  const dbUser = await getDbUser();
+  const delegateEmail = (formData.get("delegateEmail") as string)?.trim().toLowerCase();
 
-  const dbUser = await db.select().from(users).where(eq(users.clerkUserId, user.id)).limit(1).then(res => res[0]);
-  if (!dbUser) throw new Error("User not found in DB");
-
-  // Fetch all Google external accounts from Clerk
-  const client = await clerkClient();
-  const clerkUser = await client.users.getUser(user.id);
-
-  console.log('[syncConnectedEmails] Clerk user:', clerkUser.id, clerkUser.emailAddresses.map(e => e.emailAddress));
-  console.log('[syncConnectedEmails] All external accounts:', clerkUser.externalAccounts.map(ea => ({
-    id: ea.id, provider: ea.provider, email: ea.emailAddress, status: ea.verification?.status,
-  })));
-
-  const googleAccounts = clerkUser.externalAccounts.filter(
-    ea => ea.provider === 'oauth_google' || ea.provider === 'google'
-  );
-  console.log('[syncConnectedEmails] Google accounts found:', googleAccounts.length);
-
-  // Get existing connected emails
-  const existing = await db.select().from(connectedEmails).where(eq(connectedEmails.userId, dbUser.id));
-  const existingExternalIds = new Set(existing.map(e => e.clerkExternalAccountId));
-
-  // Add any new accounts not yet synced
-  for (const ga of googleAccounts) {
-    if (!existingExternalIds.has(ga.id)) {
-      await db.insert(connectedEmails).values({
-        userId: dbUser.id,
-        googleEmail: ga.emailAddress,
-        clerkExternalAccountId: ga.id,
-      });
-    }
+  if (!delegateEmail) {
+    console.error("[createDelegation] Missing delegate email");
+    revalidatePath("/dashboard");
+    return;
   }
 
-  // Remove any that no longer exist in Clerk
-  const clerkExternalIds = new Set(googleAccounts.map(ga => ga.id));
-  for (const e of existing) {
-    if (!clerkExternalIds.has(e.clerkExternalAccountId)) {
-      await db.delete(connectedEmails).where(eq(connectedEmails.id, e.id));
-    }
+  // Can't delegate to yourself
+  if (delegateEmail === dbUser.email.toLowerCase()) {
+    console.error("[createDelegation] Cannot delegate to yourself");
+    revalidatePath("/dashboard");
+    return;
   }
+
+  // Find the delegate user in our DB
+  const delegateUser = await db.select().from(users)
+    .where(eq(users.email, delegateEmail))
+    .limit(1).then(res => res[0]);
+
+  if (!delegateUser) {
+    console.error("[createDelegation] Delegate user not found:", delegateEmail);
+    revalidatePath("/dashboard");
+    return;
+  }
+
+  // Check for existing active delegation
+  const existing = await db.select().from(emailDelegations)
+    .where(and(
+      eq(emailDelegations.ownerUserId, dbUser.id),
+      eq(emailDelegations.delegateUserId, delegateUser.id),
+    ))
+    .limit(1).then(res => res[0]);
+
+  if (existing && existing.status === 'active') {
+    console.log("[createDelegation] Delegation already active");
+    revalidatePath("/dashboard");
+    return;
+  }
+
+  if (existing && existing.status === 'revoked') {
+    // Re-activate the existing delegation
+    await db.update(emailDelegations).set({
+      status: 'active',
+      revokedAt: null,
+    }).where(eq(emailDelegations.id, existing.id));
+  } else {
+    // Create new delegation
+    await db.insert(emailDelegations).values({
+      ownerUserId: dbUser.id,
+      delegateUserId: delegateUser.id,
+      status: 'active',
+    });
+  }
+
+  revalidatePath("/dashboard");
+}
+
+/**
+ * Revoke a delegation. Only the owner can revoke.
+ */
+export async function revokeDelegation(delegationId: string) {
+  const dbUser = await getDbUser();
+
+  const delegation = await db.select().from(emailDelegations)
+    .where(eq(emailDelegations.id, delegationId))
+    .limit(1).then(res => res[0]);
+
+  if (!delegation || delegation.ownerUserId !== dbUser.id) {
+    throw new Error("Unauthorized");
+  }
+
+  await db.update(emailDelegations).set({
+    status: 'revoked',
+    revokedAt: new Date(),
+  }).where(eq(emailDelegations.id, delegationId));
 
   revalidatePath("/dashboard");
 }
@@ -73,7 +111,7 @@ export async function syncConnectedEmails() {
 export async function createProxyKey(formData: FormData) {
   const dbUser = await getDbUser();
   const label = formData.get("label") as string;
-  const emailIds = formData.getAll("emailIds") as string[];
+  const emailAddresses = formData.getAll("emails") as string[];
 
   if (!label) throw new Error("Label is required");
 
@@ -84,11 +122,36 @@ export async function createProxyKey(formData: FormData) {
     label,
   }).returning().then(res => res[0]);
 
-  // Grant email access
-  for (const emailId of emailIds) {
+  // Grant email access — look up delegation for each email
+  for (const email of emailAddresses) {
+    // Check if this is the user's own email or a delegated email
+    let delegationId: string | null = null;
+
+    if (email.toLowerCase() !== dbUser.email.toLowerCase()) {
+      // This is a delegated email — find the active delegation
+      const ownerUser = await db.select().from(users)
+        .where(eq(users.email, email))
+        .limit(1).then(res => res[0]);
+
+      if (ownerUser) {
+        const delegation = await db.select().from(emailDelegations)
+          .where(and(
+            eq(emailDelegations.ownerUserId, ownerUser.id),
+            eq(emailDelegations.delegateUserId, dbUser.id),
+            eq(emailDelegations.status, 'active'),
+          ))
+          .limit(1).then(res => res[0]);
+
+        if (delegation) {
+          delegationId = delegation.id;
+        }
+      }
+    }
+
     await db.insert(keyEmailAccess).values({
       proxyKeyId: newKey.id,
-      connectedEmailId: emailId,
+      delegationId,
+      targetEmail: email,
     });
   }
 
@@ -98,7 +161,6 @@ export async function createProxyKey(formData: FormData) {
 export async function revokeProxyKey(keyId: string) {
   const dbUser = await getDbUser();
 
-  // Verify ownership
   const key = await db.select().from(proxyKeys).where(eq(proxyKeys.id, keyId)).limit(1).then(res => res[0]);
   if (!key || key.userId !== dbUser.id) throw new Error("Unauthorized");
 
@@ -109,7 +171,6 @@ export async function revokeProxyKey(keyId: string) {
 export async function rollProxyKey(keyId: string) {
   const dbUser = await getDbUser();
 
-  // Verify ownership
   const oldKey = await db.select().from(proxyKeys).where(eq(proxyKeys.id, keyId)).limit(1).then(res => res[0]);
   if (!oldKey || oldKey.userId !== dbUser.id) throw new Error("Unauthorized");
 
@@ -130,7 +191,8 @@ export async function rollProxyKey(keyId: string) {
   for (const ea of oldEmailAccess) {
     await db.insert(keyEmailAccess).values({
       proxyKeyId: newKey.id,
-      connectedEmailId: ea.connectedEmailId,
+      delegationId: ea.delegationId,
+      targetEmail: ea.targetEmail,
     });
   }
 
@@ -159,14 +221,8 @@ export async function createRule(formData: FormData) {
   const targetEmail = formData.get("targetEmail") as string || null;
   const keyIds = formData.getAll("keyIds") as string[];
 
-  console.log("[createRule] Received form data:", {
-    ruleName, service, actionType, regexPattern, targetEmail,
-    keyIds, allKeys: Array.from(formData.keys()),
-  });
-
   if (!ruleName || !service || !actionType || !regexPattern) {
     console.error("[createRule] Missing required fields:", { ruleName, service, actionType, regexPattern });
-    // Don't throw — server action throws crash the entire page in Next.js
     revalidatePath("/dashboard");
     return;
   }
@@ -180,7 +236,6 @@ export async function createRule(formData: FormData) {
     targetEmail: targetEmail || null,
   }).returning().then(res => res[0]);
 
-  // If specific keys are selected, create assignments (otherwise it's a global rule)
   for (const keyId of keyIds) {
     await db.insert(keyRuleAssignments).values({
       proxyKeyId: keyId,

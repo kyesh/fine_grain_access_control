@@ -22,27 +22,37 @@ export const proxyKeys = pgTable('proxy_keys', {
   createdAt: timestamp('created_at').defaultNow().notNull(),
 });
 
-// ─── Connected Emails ────────────────────────────────────────────────────────
-// Tracks which Google accounts a user has connected via Clerk.
-// No tokens stored here — Clerk is the token vault.
-export const connectedEmails = pgTable('connected_emails', {
+// ─── Email Delegations ───────────────────────────────────────────────────────
+// Tracks cross-user email delegation. Owner grants delegate permission to
+// create API keys/rules that access the owner's Gmail.
+// The owner's Clerk user has the Google OAuth token — Clerk is the token vault.
+// A user's OWN email is always implicitly accessible (no delegation needed).
+export const emailDelegations = pgTable('email_delegations', {
   id: uuid('id').defaultRandom().primaryKey(),
-  userId: uuid('user_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
-  googleEmail: text('google_email').notNull(),
-  label: text('label'), // "Personal", "Work", "School"
-  clerkExternalAccountId: text('clerk_external_account_id').notNull(),
+  ownerUserId: uuid('owner_user_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
+  delegateUserId: uuid('delegate_user_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
+  status: text('status').notNull().default('active'), // 'active', 'revoked'
   createdAt: timestamp('created_at').defaultNow().notNull(),
-});
+  revokedAt: timestamp('revoked_at'),
+}, (table) => [
+  uniqueIndex('delegation_unique').on(table.ownerUserId, table.delegateUserId),
+]);
 
 // ─── Key ↔ Email Access ─────────────────────────────────────────────────────
-// Join table: which proxy keys can access which connected emails.
+// Join table: which proxy keys can access which emails.
+// References either a delegation (for cross-user access) or NULL delegation
+// with a target email (for own-email access).
 // If a key has no rows here, it can access NO emails (deny by default).
 export const keyEmailAccess = pgTable('key_email_access', {
   id: uuid('id').defaultRandom().primaryKey(),
   proxyKeyId: uuid('proxy_key_id').references(() => proxyKeys.id, { onDelete: 'cascade' }).notNull(),
-  connectedEmailId: uuid('connected_email_id').references(() => connectedEmails.id, { onDelete: 'cascade' }).notNull(),
+  // For delegated emails, this references the delegation.
+  // For own-email access, this is NULL and targetEmail is set instead.
+  delegationId: uuid('delegation_id').references(() => emailDelegations.id, { onDelete: 'cascade' }),
+  // The email address this key can access (denormalized for query convenience).
+  targetEmail: text('target_email').notNull(),
 }, (table) => [
-  uniqueIndex('key_email_unique').on(table.proxyKeyId, table.connectedEmailId),
+  uniqueIndex('key_email_unique').on(table.proxyKeyId, table.targetEmail),
 ]);
 
 // ─── Access Rules ────────────────────────────────────────────────────────────

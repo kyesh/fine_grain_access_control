@@ -3,10 +3,10 @@
 import { useState, useTransition } from "react";
 import { createProxyKey, revokeProxyKey, rollProxyKey } from "./actions";
 
-interface ConnectedEmail {
-  id: string;
-  googleEmail: string;
-  label: string | null;
+interface AccessibleEmail {
+  email: string;
+  type: 'own' | 'delegated';
+  delegationId?: string;
 }
 
 interface ProxyKey {
@@ -16,14 +16,14 @@ interface ProxyKey {
   revokedAt: Date | null;
   expiresAt: Date | null;
   createdAt: Date;
-  emailAccess: string[]; // connected email IDs this key can access
+  emailAccess: string[]; // email addresses this key can access
 }
 
 export function KeyControls({
-  connectedEmails,
+  accessibleEmails,
   existingKeys,
 }: {
-  connectedEmails: ConnectedEmail[];
+  accessibleEmails: AccessibleEmail[];
   existingKeys: ProxyKey[];
 }) {
   const [isPending, startTransition] = useTransition();
@@ -71,16 +71,20 @@ export function KeyControls({
                 </code>
                 <div className="mt-2 flex flex-wrap gap-1">
                   {k.emailAccess.length > 0 ? (
-                    k.emailAccess.map((emailId) => {
-                      const email = connectedEmails.find(
-                        (ce) => ce.id === emailId
+                    k.emailAccess.map((email) => {
+                      const emailInfo = accessibleEmails.find(
+                        (ae) => ae.email.toLowerCase() === email.toLowerCase()
                       );
                       return (
                         <span
-                          key={emailId}
-                          className="inline-flex items-center rounded-full bg-green-50 px-2 py-0.5 text-xs font-medium text-green-700 ring-1 ring-inset ring-green-600/20"
+                          key={email}
+                          className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${
+                            emailInfo?.type === 'delegated'
+                              ? 'bg-indigo-50 text-indigo-700 ring-indigo-600/20'
+                              : 'bg-green-50 text-green-700 ring-green-600/20'
+                          }`}
                         >
-                          {email?.googleEmail ?? emailId}
+                          {email}
                         </span>
                       );
                     })
@@ -165,27 +169,32 @@ export function KeyControls({
                 <label className="block text-sm font-semibold text-slate-700 mb-1.5">
                   Email Access
                 </label>
-                {connectedEmails.length === 0 ? (
+                {accessibleEmails.length === 0 ? (
                   <p className="text-sm text-amber-700 bg-amber-50 p-2 rounded">
-                    No connected emails. Sync your Google accounts first.
+                    No accessible emails. Connect your Google account first.
                   </p>
                 ) : (
                   <div className="flex flex-col gap-2">
-                    {connectedEmails.map((ce) => (
+                    {accessibleEmails.map((ae) => (
                       <label
-                        key={ce.id}
+                        key={ae.email}
                         className="flex items-center gap-2 text-sm text-slate-800"
                       >
                         <input
                           type="checkbox"
-                          name="emailIds"
-                          value={ce.id}
+                          name="emails"
+                          value={ae.email}
                           className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
                         />
-                        {ce.googleEmail}
-                        {ce.label && (
-                          <span className="text-xs text-slate-500">
-                            ({ce.label})
+                        {ae.email}
+                        {ae.type === 'delegated' && (
+                          <span className="text-xs text-indigo-600 bg-indigo-50 px-1.5 py-0.5 rounded">
+                            Delegated
+                          </span>
+                        )}
+                        {ae.type === 'own' && (
+                          <span className="text-xs text-green-600 bg-green-50 px-1.5 py-0.5 rounded">
+                            You
                           </span>
                         )}
                       </label>
@@ -204,7 +213,7 @@ export function KeyControls({
                 </button>
                 <button
                   type="submit"
-                  disabled={isPending || connectedEmails.length === 0}
+                  disabled={isPending || accessibleEmails.length === 0}
                   className="px-5 py-2.5 text-sm font-semibold text-white bg-blue-600 hover:bg-blue-500 rounded-md disabled:opacity-50 shadow-sm transition-colors"
                 >
                   {isPending ? "Creating..." : "Create Key"}

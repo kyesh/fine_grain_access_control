@@ -1,13 +1,13 @@
-import { users, proxyKeys, connectedEmails, keyEmailAccess, accessRules, keyRuleAssignments } from '@/db/schema';
-import { eq } from 'drizzle-orm';
+import { users, proxyKeys, emailDelegations, keyEmailAccess, accessRules, keyRuleAssignments } from '@/db/schema';
+import { eq, and, or } from 'drizzle-orm';
 import { currentUser } from '@clerk/nextjs/server';
 import { redirect } from 'next/navigation';
 import { db } from '@/db';
-import { syncConnectedEmails } from './actions';
 import { RuleControls } from './RuleControls';
 import { DeleteRuleButton } from './DeleteRuleButton';
 import { KeyControls } from './KeyControls';
-import { ConnectGoogleButton } from './ConnectGoogleButton';
+import { DelegateAccessButton } from './DelegateAccessButton';
+import { RevokeDelegationButton } from './RevokeDelegationButton';
 
 export default async function DashboardPage() {
   const user = await currentUser();
@@ -27,27 +27,53 @@ export default async function DashboardPage() {
     dbUser = rawKeys[0];
   }
 
-  // Auto-sync connected emails from Clerk on every page load
-  // This ensures the dashboard is up-to-date after OAuth redirects
-  try {
-    await syncConnectedEmails();
-  } catch (e) {
-    console.error('[Dashboard] Failed to auto-sync connected emails:', e);
-  }
+  // ─── Fetch emails the user can access ─────────────────────────────────────
+  // 1. Own email (always implicit)
+  const ownEmail = dbUser.email;
 
-  // Fetch connected emails
-  const userConnectedEmails = await db.select().from(connectedEmails).where(eq(connectedEmails.userId, dbUser.id));
+  // 2. Emails delegated TO this user (they are the delegate)
+  const delegationsToMe = await db.select({
+    delegation: emailDelegations,
+    ownerEmail: users.email,
+  })
+    .from(emailDelegations)
+    .innerJoin(users, eq(users.id, emailDelegations.ownerUserId))
+    .where(and(
+      eq(emailDelegations.delegateUserId, dbUser.id),
+      eq(emailDelegations.status, 'active'),
+    ));
 
-  // Fetch proxy keys with their email access
+  // 3. Delegations FROM this user to others (they are the owner)
+  const delegationsFromMe = await db.select({
+    delegation: emailDelegations,
+    delegateEmail: users.email,
+  })
+    .from(emailDelegations)
+    .innerJoin(users, eq(users.id, emailDelegations.delegateUserId))
+    .where(eq(emailDelegations.ownerUserId, dbUser.id));
+
+  // Build the list of accessible emails for key creation
+  const accessibleEmails = [
+    { email: ownEmail, type: 'own' as const },
+    ...delegationsToMe.map(d => ({
+      email: d.ownerEmail,
+      type: 'delegated' as const,
+      delegationId: d.delegation.id,
+    })),
+  ];
+
+  // ─── Fetch proxy keys and their email access ─────────────────────────────
   const userProxyKeys = await db.select().from(proxyKeys).where(eq(proxyKeys.userId, dbUser.id));
   const allKeyEmailAccess = await db.select().from(keyEmailAccess);
 
   const keysWithAccess = userProxyKeys.map(k => ({
     ...k,
-    emailAccess: allKeyEmailAccess.filter(kea => kea.proxyKeyId === k.id).map(kea => kea.connectedEmailId),
+    emailAccess: allKeyEmailAccess
+      .filter(kea => kea.proxyKeyId === k.id)
+      .map(kea => kea.targetEmail),
   }));
 
-  // Fetch access rules and their key assignments
+  // ─── Fetch access rules and assignments ───────────────────────────────────
   const userRules = await db.select().from(accessRules).where(eq(accessRules.userId, dbUser.id));
   const allKeyRuleAssignments = await db.select().from(keyRuleAssignments);
 
@@ -71,34 +97,71 @@ export default async function DashboardPage() {
       <main>
         <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 mt-8 space-y-8">
 
-          {/* ─── Connected Emails Section ──────────────────────────── */}
+          {/* ─── Your Email & Delegated Emails ─────────────────────── */}
+          <div className="bg-white overflow-hidden shadow rounded-lg border border-gray-200">
+            <div className="px-4 py-5 sm:p-6">
+              <h2 className="text-lg font-medium leading-6 text-gray-900 mb-1">Accessible Gmail Accounts</h2>
+              <p className="text-sm text-gray-500 mb-4">
+                Your own email is always accessible. Other users can delegate their email access to you.
+              </p>
+
+              <div className="flex flex-wrap gap-3">
+                {/* Own email — always present */}
+                <div className="flex items-center gap-2 bg-green-50 border border-green-200 rounded-md px-3 py-2">
+                  <div className="w-2 h-2 rounded-full bg-green-500"></div>
+                  <span className="text-sm font-medium text-green-900">{ownEmail}</span>
+                  <span className="text-xs text-green-600 bg-green-100 px-1.5 py-0.5 rounded">You</span>
+                </div>
+
+                {/* Delegated emails */}
+                {delegationsToMe.map(d => (
+                  <div key={d.delegation.id} className="flex items-center gap-2 bg-indigo-50 border border-indigo-200 rounded-md px-3 py-2">
+                    <div className="w-2 h-2 rounded-full bg-indigo-500"></div>
+                    <span className="text-sm font-medium text-indigo-900">{d.ownerEmail}</span>
+                    <span className="text-xs text-indigo-600 bg-indigo-100 px-1.5 py-0.5 rounded">Delegated</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* ─── Manage Delegations (Owner View) ──────────────────── */}
           <div className="bg-white overflow-hidden shadow rounded-lg border border-gray-200">
             <div className="px-4 py-5 sm:p-6">
               <div className="flex justify-between items-center mb-4">
                 <div>
-                  <h2 className="text-lg font-medium leading-6 text-gray-900">Connected Google Accounts</h2>
-                  <p className="mt-1 text-sm text-gray-500">Connect your Gmail accounts to allow agents to access them through API keys.</p>
+                  <h2 className="text-lg font-medium leading-6 text-gray-900">Delegation Management</h2>
+                  <p className="mt-1 text-sm text-gray-500">
+                    Grant other users permission to create API keys for your Gmail ({ownEmail}).
+                  </p>
                 </div>
-                <ConnectGoogleButton />
+                <DelegateAccessButton />
               </div>
-              {userConnectedEmails.length === 0 ? (
-                <div className="bg-indigo-50 border border-indigo-200 rounded-lg p-5 text-center">
-                  <svg className="mx-auto h-10 w-10 text-indigo-400 mb-3" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M21.75 6.75v10.5a2.25 2.25 0 0 1-2.25 2.25h-15a2.25 2.25 0 0 1-2.25-2.25V6.75m19.5 0A2.25 2.25 0 0 0 19.5 4.5h-15a2.25 2.25 0 0 0-2.25 2.25m19.5 0v.243a2.25 2.25 0 0 1-1.07 1.916l-7.5 4.615a2.25 2.25 0 0 1-2.36 0L3.32 8.91a2.25 2.25 0 0 1-1.07-1.916V6.75" />
-                  </svg>
-                  <h3 className="text-sm font-semibold text-indigo-900">No Gmail accounts connected</h3>
-                  <p className="mt-1 text-sm text-indigo-700">
-                    Click <strong>&quot;Connect Google Account&quot;</strong> above to link a Gmail account.
-                    You can connect multiple accounts (personal, work, school).
+
+              {delegationsFromMe.length === 0 ? (
+                <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 text-center">
+                  <p className="text-sm text-gray-600">
+                    No active delegations. Click <strong>&quot;Delegate Access&quot;</strong> to let another user create API keys for your email.
                   </p>
                 </div>
               ) : (
-                <div className="flex flex-wrap gap-3">
-                  {userConnectedEmails.map((ce) => (
-                    <div key={ce.id} className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-md px-3 py-2">
-                      <div className="w-2 h-2 rounded-full bg-green-500"></div>
-                      <span className="text-sm font-medium text-slate-900">{ce.googleEmail}</span>
-                      {ce.label && <span className="text-xs text-slate-500">({ce.label})</span>}
+                <div className="space-y-2">
+                  {delegationsFromMe.map(d => (
+                    <div key={d.delegation.id} className="flex items-center justify-between bg-slate-50 border border-slate-200 rounded-md px-4 py-3">
+                      <div className="flex items-center gap-3">
+                        <span className="text-sm font-medium text-slate-900">{d.delegateEmail}</span>
+                        {d.delegation.status === 'active' ? (
+                          <span className="text-xs font-medium text-green-700 bg-green-100 px-2 py-0.5 rounded-full">Active</span>
+                        ) : (
+                          <span className="text-xs font-medium text-red-700 bg-red-100 px-2 py-0.5 rounded-full">Revoked</span>
+                        )}
+                        <span className="text-xs text-slate-400">
+                          since {d.delegation.createdAt.toLocaleDateString()}
+                        </span>
+                      </div>
+                      {d.delegation.status === 'active' && (
+                        <RevokeDelegationButton delegationId={d.delegation.id} />
+                      )}
                     </div>
                   ))}
                 </div>
@@ -110,7 +173,7 @@ export default async function DashboardPage() {
           <div className="bg-white overflow-hidden shadow rounded-lg border border-gray-200">
             <div className="px-4 py-5 sm:p-6">
               <KeyControls
-                connectedEmails={userConnectedEmails}
+                accessibleEmails={accessibleEmails}
                 existingKeys={keysWithAccess}
               />
               <p className="mt-3 text-sm text-gray-800">
@@ -124,7 +187,7 @@ export default async function DashboardPage() {
           <div className="mt-8 flex justify-between items-center">
             <h2 className="text-xl font-semibold text-gray-900">Access Rules</h2>
             <RuleControls
-              connectedEmails={userConnectedEmails}
+              accessibleEmails={accessibleEmails.map(e => e.email)}
               activeKeys={activeKeys.map(k => ({ id: k.id, label: k.label }))}
             />
           </div>

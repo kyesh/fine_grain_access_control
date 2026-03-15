@@ -3,21 +3,16 @@
 import { useState, useTransition } from "react";
 import { applyRecommendedSecurityRules, createRule } from "./actions";
 
-interface ConnectedEmail {
-  id: string;
-  googleEmail: string;
-}
-
 interface ProxyKeyInfo {
   id: string;
   label: string;
 }
 
 export function RuleControls({
-  connectedEmails = [],
+  accessibleEmails = [],
   activeKeys = [],
 }: {
-  connectedEmails?: ConnectedEmail[];
+  accessibleEmails?: string[];
   activeKeys?: ProxyKeyInfo[];
 }) {
   const [isPending, startTransition] = useTransition();
@@ -127,10 +122,10 @@ export function RuleControls({
                   name="targetEmail"
                   className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 shadow-sm"
                 >
-                  <option value="">All connected emails</option>
-                  {connectedEmails.map((ce) => (
-                    <option key={ce.id} value={ce.googleEmail}>
-                      {ce.googleEmail}
+                  <option value="">All accessible emails</option>
+                  {accessibleEmails.map((email) => (
+                    <option key={email} value={email}>
+                      {email}
                     </option>
                   ))}
                 </select>

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/db';
-import { users, proxyKeys, connectedEmails, keyEmailAccess, accessRules, keyRuleAssignments } from '@/db/schema';
-import { eq, and, isNull, or } from 'drizzle-orm';
+import { users, proxyKeys, emailDelegations, keyEmailAccess, accessRules, keyRuleAssignments } from '@/db/schema';
+import { eq, and } from 'drizzle-orm';
 import { clerkClient } from '@clerk/nextjs/server';
 
 export async function GET(request: NextRequest, { params }: { params: Promise<{ path: string[] }> }) {
@@ -58,7 +58,7 @@ async function handleProxyRequest(request: NextRequest, params: { path: string[]
       return NextResponse.json({ error: 'This API key has expired.' }, { status: 401 });
     }
 
-    // Fetch the owning user
+    // Fetch the owning user (the delegate / key creator)
     const dbUser = await db
       .select()
       .from(users)
@@ -73,29 +73,12 @@ async function handleProxyRequest(request: NextRequest, params: { path: string[]
     // ─── 2. Resolve Target Email ────────────────────────────────────────────
     const gmailUserId = extractGmailUserId(fullPath);
 
-    // Get all connected emails the user has
-    const userConnectedEmails = await db
-      .select()
-      .from(connectedEmails)
-      .where(eq(connectedEmails.userId, dbUser.id));
-
-    // Resolve 'me' to the user's primary email, or use the specific email from the path
+    // Resolve 'me' to the key owner's primary email, or use the specific email from the path
     let targetEmail: string;
     if (gmailUserId === 'me') {
       targetEmail = dbUser.email;
     } else {
       targetEmail = gmailUserId;
-    }
-
-    // Find the connected email record
-    const connectedEmail = userConnectedEmails.find(
-      ce => ce.googleEmail.toLowerCase() === targetEmail.toLowerCase()
-    );
-
-    if (!connectedEmail) {
-      return NextResponse.json({
-        error: `Email '${targetEmail}' is not connected to your account.`
-      }, { status: 403 });
     }
 
     // ─── 3. Check Key ↔ Email Access ────────────────────────────────────────
@@ -105,26 +88,31 @@ async function handleProxyRequest(request: NextRequest, params: { path: string[]
       .where(
         and(
           eq(keyEmailAccess.proxyKeyId, dbKey.id),
-          eq(keyEmailAccess.connectedEmailId, connectedEmail.id)
+          eq(keyEmailAccess.targetEmail, targetEmail.toLowerCase()),
         )
       )
       .limit(1)
       .then(res => res[0]);
 
-    if (!emailAccess) {
+    // Also try case-insensitive match
+    const emailAccessFallback = emailAccess || await db
+      .select()
+      .from(keyEmailAccess)
+      .where(eq(keyEmailAccess.proxyKeyId, dbKey.id))
+      .then(rows => rows.find(r => r.targetEmail.toLowerCase() === targetEmail.toLowerCase()));
+
+    if (!emailAccessFallback) {
       return NextResponse.json({
         error: `This API key does not have access to '${targetEmail}'.`
       }, { status: 403 });
     }
 
     // ─── 4. Load Applicable Rules ───────────────────────────────────────────
-    // Fetch all rules for this user
     const allUserRules = await db
       .select()
       .from(accessRules)
       .where(eq(accessRules.userId, dbUser.id));
 
-    // Fetch key-specific rule assignments for this key
     const keyAssignments = await db
       .select()
       .from(keyRuleAssignments)
@@ -132,14 +120,9 @@ async function handleProxyRequest(request: NextRequest, params: { path: string[]
 
     const assignedRuleIds = new Set(keyAssignments.map(a => a.accessRuleId));
 
-    // Also check which rules have ANY assignments at all (to distinguish global vs key-specific)
     const allAssignments = await db.select().from(keyRuleAssignments);
     const rulesWithAssignments = new Set(allAssignments.map(a => a.accessRuleId));
 
-    // A rule applies if:
-    // 1. It has NO assignments anywhere (global rule), OR
-    // 2. It is specifically assigned to THIS key
-    // AND: targetEmail matches rule.targetEmail (or rule.targetEmail is NULL = all emails)
     const applicableRules = allUserRules.filter(rule => {
       const isGlobal = !rulesWithAssignments.has(rule.id);
       const isAssignedToThisKey = assignedRuleIds.has(rule.id);
@@ -200,21 +183,54 @@ async function handleProxyRequest(request: NextRequest, params: { path: string[]
       }
     }
 
-    // ─── 7. Fetch Real Google Token from Clerk ──────────────────────────────
+    // ─── 7. Resolve the token owner's Clerk user ID ─────────────────────────
+    // If the target email is the key owner's own email, use their Clerk ID.
+    // If it's a delegated email, look up the email owner's Clerk ID.
+    let tokenOwnerClerkUserId: string;
+
+    if (targetEmail.toLowerCase() === dbUser.email.toLowerCase()) {
+      // Own email — use the key owner's token
+      tokenOwnerClerkUserId = dbUser.clerkUserId;
+    } else {
+      // Delegated email — find the email owner
+      const emailOwner = await db.select().from(users)
+        .where(eq(users.email, targetEmail))
+        .limit(1)
+        .then(res => res[0]);
+
+      if (!emailOwner) {
+        return NextResponse.json({
+          error: `Email '${targetEmail}' owner not found in system.`
+        }, { status: 403 });
+      }
+
+      // Verify there's an active delegation
+      const delegation = await db.select().from(emailDelegations)
+        .where(and(
+          eq(emailDelegations.ownerUserId, emailOwner.id),
+          eq(emailDelegations.delegateUserId, dbUser.id),
+          eq(emailDelegations.status, 'active'),
+        ))
+        .limit(1)
+        .then(res => res[0]);
+
+      if (!delegation) {
+        return NextResponse.json({
+          error: `Access to '${targetEmail}' has been revoked or is not delegated to you.`
+        }, { status: 403 });
+      }
+
+      tokenOwnerClerkUserId = emailOwner.clerkUserId;
+    }
+
+    // ─── 8. Fetch Real Google Token from Clerk ──────────────────────────────
     const client = await clerkClient();
-
-    const tokenResponse = await client.users.getUserOauthAccessToken(dbUser.clerkUserId, 'oauth_google');
-
-    // Find the token matching this specific connected email
-    const matchingToken = tokenResponse.data.find(
-      t => t.externalAccountId === connectedEmail.clerkExternalAccountId
-    );
-
-    const realGoogleToken = matchingToken?.token;
+    const tokenResponse = await client.users.getUserOauthAccessToken(tokenOwnerClerkUserId, 'oauth_google');
+    const realGoogleToken = tokenResponse.data?.[0]?.token;
 
     if (!realGoogleToken) {
       return NextResponse.json({
-        error: `Could not fetch Google access token for '${targetEmail}'. The user may need to reconnect this account.`
+        error: `Could not fetch Google access token for '${targetEmail}'. The account owner may need to reconnect their Google account.`
       }, { status: 403 });
     }
 
