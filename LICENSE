@@ -1,0 +1,37 @@
+Copyright (c) 2026 Ken Yesh
+
+PERSONAL USE ONLY LICENSE
+
+Permission is hereby granted, free of charge, to any independent individual 
+obtaining a copy of this software and associated documentation files 
+(the "Software"), to deal in the Software without restriction, including without 
+limitation the rights to use, copy, modify, merge, publish, distribute, and/or 
+sublicense copies of the Software for personal, non-commercial purposes only, 
+subject to the following conditions:
+
+1. PERSONAL USE RESTRICTION: This Software may only be used by an individual 
+managing their own personal Google Workspace or Gmail accounts on their local or personal servers.
+
+2. CORPORATE AND EDUCATIONAL RESTRICTION: Use of this Software by, or on behalf 
+of, any corporation, company, business entity, government agency, or educational 
+institution (including by employees or students acting in such capacity) is 
+EXPLICITLY PROHIBITED. For Enterprise or Educational licensing, you must contact 
+the author directly to negotiate separate terms.
+
+3. HOSTING AND SAAS RESTRICTION: You are EXPLICITLY PROHIBITED from offering this 
+Software as a managed service, hosted solution, API, SaaS (Software as a Service), 
+or any other third-party offering. This restriction includes deploying the proxy 
+infrastructure to provide access control services for other users' AI agents. All 
+commercial, white-label, or multi-tenant hosting applications of this codebase are 
+strictly forbidden.
+
+4. The above copyright notice and this permission notice shall be included in all 
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR 
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, 
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE 
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER 
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, 
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE 
+SOFTWARE.

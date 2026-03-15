@@ -33,6 +33,9 @@ yarn-error.log*
 # env files (can opt-in for committing if needed)
 .env*
 
+# private QA test emails (copy .qa_test_emails.json.example to .qa_test_emails.json)
+.qa_test_emails.json
+
 # vercel
 .vercel
 
@@ -40,3 +43,6 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 .env*.local
+
+# clerk configuration (can include secrets)
+/.clerk/

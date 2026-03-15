@@ -12,8 +12,8 @@ import Link from 'next/link';
 const inter = Inter({ subsets: ['latin'] });
 
 export const metadata: Metadata = {
-  title: 'Agent Security Proxy',
-  description: 'Fine-grained access control for AI Agents using Google APIs.',
+  title: 'FGAC.ai | Fine Grain Access Control for AI',
+  description: 'Fine-grained access control proxy for AI Agents using Google APIs.',
 };
 
 export default function RootLayout({
@@ -32,7 +32,7 @@ export default function RootLayout({
                   <div className="flex">
                     <div className="flex flex-shrink-0 items-center">
                       <Link href="/" className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-600 to-indigo-600">
-                        SecureAgent
+                        FGAC.ai
                       </Link>
                     </div>
                     <div className="hidden sm:-my-px sm:ml-6 sm:flex sm:space-x-8">
@@ -70,6 +70,15 @@ export default function RootLayout({
             <main>
               {children}
             </main>
+            <footer className="bg-white border-t border-gray-200 mt-auto">
+              <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-8 flex flex-col sm:flex-row justify-between items-center text-sm text-gray-500 gap-4 sm:gap-0">
+                <p>&copy; {new Date().getFullYear()} FGAC.ai. All rights reserved.</p>
+                <div className="flex space-x-8">
+                  <Link href="/privacy" className="hover:text-gray-900 border-b border-transparent hover:border-gray-400">Privacy Policy</Link>
+                  <Link href="/terms" className="hover:text-gray-900 border-b border-transparent hover:border-gray-400">Terms of Service</Link>
+                </div>
+              </div>
+            </footer>
           </div>
         </ClerkProvider>
       </body>

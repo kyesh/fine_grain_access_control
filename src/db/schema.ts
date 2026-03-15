@@ -74,6 +74,25 @@ export const accessRules = pgTable('access_rules', {
 // Join table: maps access rules to specific proxy keys.
 // If a rule has NO rows here, it is a GLOBAL rule (applies to ALL keys for that user).
 // If a rule has rows, it ONLY applies to those specific keys.
+// ─── Waitlist ────────────────────────────────────────────────────────────────
+// Captures both partial and completed waitlist / beta sign-up submissions.
+export const waitlist = pgTable('waitlist', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  email: text('email'),
+  numAccounts: text('num_accounts'),
+  priceTooCheap: text('price_too_cheap'),
+  priceBargain: text('price_bargain'),
+  priceExpensive: text('price_expensive'),
+  priceTooExpensive: text('price_too_expensive'),
+  pricingModelPreference: text('pricing_model_preference'), // 'seat-based vs usage-based'
+  wantsBeta: text('wants_beta'), // stored as text or boolean, using text for flexibility (e.g. 'true'/'false')
+  agreedToInterview: text('agreed_to_interview'),
+  agreedToBetaPricing: text('agreed_to_beta_pricing'),
+  status: text('status').default('partial'), // 'partial', 'completed'
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+});
+
 export const keyRuleAssignments = pgTable('key_rule_assignments', {
   id: uuid('id').defaultRandom().primaryKey(),
   proxyKeyId: uuid('proxy_key_id').references(() => proxyKeys.id, { onDelete: 'cascade' }).notNull(),
