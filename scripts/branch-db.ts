@@ -53,6 +53,11 @@ async function updateEnvLocal(connectionString: string) {
 }
 
 async function main() {
+  if (process.env.VERCEL || process.env.CI) {
+    console.log('☁️  Vercel CI environment detected. Skipping interactive database branching.');
+    return;
+  }
+
   const gitBranch = await getGitBranch()
   const branchName = gitBranch.replace(/[^a-zA-Z0-9-]/g, '-').toLowerCase()
 
