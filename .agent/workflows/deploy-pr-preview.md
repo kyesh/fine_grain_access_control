@@ -20,21 +20,29 @@ description: Deploys changes to a new PR, waits for the Vercel Preview to build,
     gh pr view || gh pr create --fill
     ```
 
-4.  Wait for the Vercel Preview Deployment to build and extract the live alias URL. Use the Vercel CLI to find the specific Preview deployment associated with your branch. Wait for its status to change to `Ready`:
+4.  Clean up any pending or hanging builds in the queue for older commits on your branch. This ensures you don't wait for outdated builds to complete before your actual build can start.
+    Use `npx vercel ls googleapis-fine-grain-access-control` to identify any deployments in the `Building` or `Queued` state that are older than your current push.
+    Cancel them using the Vercel CLI:
+    
+    ```bash
+    npx vercel cancel <deployment-url>
+    ```
+
+5.  Wait for the Vercel Preview Deployment to build and extract the live alias URL. Use the Vercel CLI to find the specific Preview deployment associated with your branch. Wait for its status to change to `Ready`:
 
     ```bash
     # Tip: Pipe the output to bypass interactive pagination prompts
     npx vercel ls googleapis-fine-grain-access-control | grep -w "Ready" | grep -w "Preview" | head -n 1 | awk '{print $2}'
     ```
 
-5.  If the deployment fails, analyze the logs, fix the code, push again, and return to step 4.
+6.  If the deployment fails, analyze the logs, fix the code, push again, and return to step 4.
 
-6.  Once the Vercel Preview URL is `Ready`, you MUST launch a `browser_subagent` mission to validate the frontend.
+7.  Once the Vercel Preview URL is `Ready`, you MUST launch a `browser_subagent` mission to validate the frontend.
     a. Provide the subagent the specific Vercel URL (e.g., `https://project-branch.vercel.app`).
     b. Instruct the subagent to log in with a test user context if necessary.
     c. Wait for the page to fully load and instruct the subagent to take a screenshot confirming the specific features you built are visible and functional.
 
-7.  Only AFTER the browser validation proves successful, notify the user.
+8.  Only AFTER the browser validation proves successful, notify the user.
     - If the browser subagent fails due to `user did not add URL to allowlist` or similar access issues, stop and immediately inform the user.
     - Fetch the GitHub PR URL explicitly to ensure you have it in context:
       ```bash
