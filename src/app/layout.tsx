@@ -30,15 +30,15 @@ export default function RootLayout({
               <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
                 <div className="flex h-16 justify-between">
                   <div className="flex">
-                    <div className="flex flex-shrink-0 items-center">
-                      <Link href="/" className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-600 to-indigo-600">
-                        FGAC.ai
-                      </Link>
-                    </div>
+                      <div className="flex flex-shrink-0 items-center">
+                        <Link href="/" className="flex items-center">
+                          <img src="/logo.png" alt="FGAC.ai" className="h-12 w-auto" />
+                        </Link>
+                      </div>
                     <div className="hidden sm:-my-px sm:ml-6 sm:flex sm:space-x-8">
                       <Link
                         href="/setup"
-                        className="inline-flex items-center border-b-2 border-transparent px-1 pt-1 text-sm font-medium text-gray-800 hover:border-gray-400 hover:text-gray-900"
+                        className="inline-flex items-center border-b-2 border-transparent px-1 pt-1 text-sm font-medium text-gray-800 hover:border-brand-blue hover:text-brand-blue"
                       >
                         Setup Guide
                       </Link>
@@ -47,7 +47,7 @@ export default function RootLayout({
                       <div className="hidden sm:-my-px sm:ml-6 sm:flex sm:space-x-8">
                         <Link
                           href="/dashboard"
-                          className="inline-flex items-center border-b-2 border-transparent px-1 pt-1 text-sm font-medium text-gray-800 hover:border-gray-400 hover:text-gray-900"
+                          className="inline-flex items-center border-b-2 border-transparent px-1 pt-1 text-sm font-medium text-gray-800 hover:border-brand-blue hover:text-brand-blue"
                         >
                           Dashboard
                         </Link>
@@ -57,7 +57,7 @@ export default function RootLayout({
                   <div className="flex items-center">
                     <Show when="signed-out">
                       <SignUpButton mode="modal">
-                        <button className="text-sm font-medium text-gray-800 hover:text-gray-900">Sign Up</button>
+                        <button className="text-sm font-medium text-gray-800 hover:text-brand-blue">Sign Up</button>
                       </SignUpButton>
                     </Show>
                     <Show when="signed-in">

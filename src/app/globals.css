@@ -11,6 +11,9 @@
   --color-foreground: var(--foreground);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
+  
+  --color-brand-blue: #0a468c;
+  --color-brand-orange: #e66e00;
 }
 
 body {
