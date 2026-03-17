@@ -99,6 +99,6 @@ fi
 
 echo ""
 echo "Done! Next steps:"
-echo "  1. Add domain in Vercel: vercel domains add ${DOMAIN} googleapis_fine_grain_access_control"
+echo "  1. Add domain in Vercel: vercel domains add ${DOMAIN} fine_grain_access_control"
 echo "  2. Verify: vercel domains inspect ${DOMAIN}"
 echo "  3. DNS propagation may take up to 48 hours"

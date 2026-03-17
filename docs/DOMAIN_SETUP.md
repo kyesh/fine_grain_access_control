@@ -39,10 +39,10 @@ vercel link
 
 # Add your domain(s) to the project
 # Replace YOUR_DOMAIN with your actual domain (e.g., proxy.yourdomain.com or yourdomain.com)
-vercel domains add YOUR_DOMAIN googleapis_fine_grain_access_control
+vercel domains add YOUR_DOMAIN fine_grain_access_control
 
-# For www subdomain (optional but recommended):
-vercel domains add www.YOUR_DOMAIN googleapis_fine_grain_access_control
+# If you also want the www subdomain
+vercel domains add www.YOUR_DOMAIN fine_grain_access_control
 ```
 
 ### Inspect Domain Configuration
@@ -127,7 +127,7 @@ For your proxy subdomain as mentioned in the architecture:
 
 ```bash
 # Add to Vercel
-vercel domains add proxy.YOUR_DOMAIN googleapis_fine_grain_access_control
+vercel domains add proxy.YOUR_DOMAIN fine_grain_access_control
 ```
 
 Then in Cloudflare, add:

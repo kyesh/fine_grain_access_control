@@ -7,7 +7,7 @@
 #
 # Usage:
 #   export DOMAIN="yourdomain.com"
-#   export PROJECT_NAME="googleapis_fine_grain_access_control"
+#   export PROJECT_NAME="fine_grain_access_control"
 #   ./scripts/setup-vercel-domain.sh
 #
 # Or pass domain as argument:
@@ -15,7 +15,7 @@
 
 set -e
 
-PROJECT_NAME="${PROJECT_NAME:-googleapis_fine_grain_access_control}"
+PROJECT_NAME="${PROJECT_NAME:-fine_grain_access_control}"
 DOMAIN="${DOMAIN:-$1}"
 
 if [[ -z "$DOMAIN" ]]; then

@@ -1,5 +1,5 @@
 {
-  "name": "googleapis_fine_grain_access_control",
+  "name": "fine_grain_access_control",
   "version": "0.1.0",
   "private": true,
   "scripts": {
