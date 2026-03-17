@@ -21,6 +21,7 @@ export default function WaitlistPage() {
   const [wantsBeta, setWantsBeta] = useState<boolean | null>(null);
   const [agreedToInterview, setAgreedToInterview] = useState(false);
   const [agreedToBetaPricing, setAgreedToBetaPricing] = useState(false);
+  const [comfortableWithUnverifiedApp, setComfortableWithUnverifiedApp] = useState<boolean | null>(null);
 
   // Auto-save logic
   const saveProgress = async (currentStatus: "partial" | "completed" = "partial") => {
@@ -38,6 +39,7 @@ export default function WaitlistPage() {
         wantsBeta: wantsBeta !== null ? wantsBeta.toString() : undefined,
         agreedToInterview: agreedToInterview.toString(),
         agreedToBetaPricing: agreedToBetaPricing.toString(),
+        comfortableWithUnverifiedApp: comfortableWithUnverifiedApp !== null ? comfortableWithUnverifiedApp.toString() : undefined,
         status: currentStatus,
       };
 
@@ -70,6 +72,10 @@ export default function WaitlistPage() {
     if (wantsBeta) {
       if (!agreedToInterview || !agreedToBetaPricing) {
         alert("Please agree to the beta requirements before submitting.");
+        return;
+      }
+      if (comfortableWithUnverifiedApp === null) {
+        alert("Please confirm whether you are comfortable proceeding with an unverified app.");
         return;
       }
     } else if (wantsBeta === null) {
@@ -234,6 +240,19 @@ export default function WaitlistPage() {
                       <input type="checkbox" checked={agreedToBetaPricing} onChange={e => setAgreedToBetaPricing(e.target.checked)} className="mt-1 w-4 h-4 text-blue-600" />
                       <span className="text-sm text-gray-800">I agree to the beta pricing of $5/month per connected Gmail account.</span>
                     </label>
+                    <div className="pt-2">
+                      <p className="text-sm text-gray-800 font-semibold mb-2">Google displays an "Unverified App" warning during our beta phase. Are you comfortable proceeding with an unverified app?</p>
+                      <div className="flex gap-4">
+                        <label className="flex items-center gap-2">
+                          <input type="radio" name="unverifiedApp" checked={comfortableWithUnverifiedApp === true} onChange={() => setComfortableWithUnverifiedApp(true)} className="w-4 h-4 text-blue-600" />
+                          <span className="text-sm text-gray-800">Yes</span>
+                        </label>
+                        <label className="flex items-center gap-2">
+                          <input type="radio" name="unverifiedApp" checked={comfortableWithUnverifiedApp === false} onChange={() => setComfortableWithUnverifiedApp(false)} className="w-4 h-4 text-blue-600" />
+                          <span className="text-sm text-gray-800">No</span>
+                        </label>
+                      </div>
+                    </div>
                   </div>
                 )}
               </div>

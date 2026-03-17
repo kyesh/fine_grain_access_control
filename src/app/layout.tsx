@@ -1,6 +1,6 @@
 import {
   ClerkProvider,
-  SignInButton,
+  SignUpButton,
   Show,
   UserButton
 } from '@clerk/nextjs';
@@ -56,9 +56,9 @@ export default function RootLayout({
                   </div>
                   <div className="flex items-center">
                     <Show when="signed-out">
-                      <SignInButton mode="modal">
-                        <button className="text-sm font-medium text-gray-800 hover:text-gray-900">Sign In</button>
-                      </SignInButton>
+                      <SignUpButton mode="modal">
+                        <button className="text-sm font-medium text-gray-800 hover:text-gray-900">Sign Up</button>
+                      </SignUpButton>
                     </Show>
                     <Show when="signed-in">
                       <UserButton />

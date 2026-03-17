@@ -20,11 +20,6 @@ export default async function LandingPage() {
                 Join Beta Waitlist
               </button>
             </Link>
-            <SignInButton mode="modal">
-              <button className="rounded-full bg-white px-8 py-3.5 text-sm font-semibold text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 hover:bg-gray-50 transition-all">
-                Sign In
-              </button>
-            </SignInButton>
           </Show>
           <Show when="signed-in">
             <Link 
