@@ -30,11 +30,11 @@ export default function RootLayout({
               <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
                 <div className="flex h-16 justify-between">
                   <div className="flex">
-                    <div className="flex flex-shrink-0 items-center">
-                      <Link href="/" className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-600 to-indigo-600">
-                        FGAC.ai
-                      </Link>
-                    </div>
+                      <div className="flex flex-shrink-0 items-center">
+                        <Link href="/" className="flex items-center">
+                          <img src="/logo.png" alt="FGAC.ai" className="h-12 w-auto" />
+                        </Link>
+                      </div>
                     <div className="hidden sm:-my-px sm:ml-6 sm:flex sm:space-x-8">
                       <Link
                         href="/setup"
