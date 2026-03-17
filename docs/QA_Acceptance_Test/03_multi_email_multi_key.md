@@ -2,9 +2,9 @@
 
 ## Prerequisites
 - A testing environment with the proxy active.
-- A test user account (`test-user-1@gmail.com`) successfully created with Google OAuth Gmail scopes granted.
-- **Two separate Google accounts** available for testing (e.g., `personal@gmail.com` and `work@company.com`).
-- Both Google accounts connected to the test user's Clerk profile via the `<UserProfile />` Connected Accounts section.
+- A test user account (using `USER_A_EMAIL` from `.qa_test_emails.json`) successfully created with Google OAuth Gmail scopes granted.
+- **Two separate Google accounts** available for testing (i.e. `USER_A_EMAIL` and `USER_B_EMAIL`).
+- Both Google accounts connected to the first Clerk profile via the `<UserProfile />` Connected Accounts section.
 - A mock AI agent script configured to make calls using proxy credentials with the endpoint override.
 
 ## Dependencies
@@ -21,10 +21,10 @@
 **Steps**:
 1. Log into the Web UI as the test user.
 2. Navigate to Clerk `<UserProfile />` (e.g., via the user avatar menu).
-3. Under "Connected Accounts", click "Connect Account" and authenticate with `personal@gmail.com`.
-4. Repeat step 3 with `work@company.com`.
+3. Under "Connected Accounts", click "Connect Account" and authenticate with `USER_A_EMAIL`.
+4. Repeat step 3 with `USER_B_EMAIL`.
 5. Return to the application dashboard.
-6. Verify that the "Connected Emails" section lists both `personal@gmail.com` and `work@company.com`.
+6. Verify that the "Connected Emails" section lists both `USER_A_EMAIL` and `USER_B_EMAIL`.
 
 **Expected Outcome**: Both Google accounts are visible in the dashboard with their email addresses and optional labels.
 
@@ -37,14 +37,14 @@
 1. In the dashboard, navigate to the "API Keys" section.
 2. Click "Create New Key".
 3. Enter label: `Personal Assistant Agent`.
-4. Under "Email Access", select only `personal@gmail.com`.
+4. Under "Email Access", select only `USER_A_EMAIL`.
 5. Save. Verify a new key value is generated.
 6. Verify that the key is hidden/obfuscated by default (e.g., `sk_proxy_****************`) to prevent accidental screen recording leaks, but can be revealed or copied to clipboard securely.
 7. Create a second key with label: `Work Automation Bot`.
-8. Under "Email Access", select only `work@company.com`.
+8. Under "Email Access", select only `USER_B_EMAIL`.
 9. Save. Verify a second, different key is displayed and behaves with the same secure masking parameters.
 10. Create a third key with label: `Power Agent`.
-11. Under "Email Access", select **both** `personal@gmail.com` and `work@company.com`.
+11. Under "Email Access", select **both** `USER_A_EMAIL` and `USER_B_EMAIL`.
 12. Save. Verify a third key is displayed.
 
 **Expected Outcome**: Three distinct proxy keys exist, each with different email access grants. The dashboard clearly indicates which emails each key can access.
@@ -56,17 +56,17 @@
 
 **Steps**:
 1. Configure the agent script with **Key A** (`Personal Assistant Agent`).
-2. Make a Gmail API call: `GET /gmail/v1/users/personal@gmail.com/messages`.
+2. Make a Gmail API call: `GET /gmail/v1/users/USER_A_EMAIL/messages`.
    - **Validation**: The proxy returns a successful response with message list data.
-3. Make a Gmail API call: `GET /gmail/v1/users/work@company.com/messages` (using the same Key A).
-   - **Validation**: The proxy returns `403 Forbidden` with a clear message: e.g., *"This API key does not have access to 'work@company.com'."*
+3. Make a Gmail API call: `GET /gmail/v1/users/USER_B_EMAIL/messages` (using the same Key A).
+   - **Validation**: The proxy returns `403 Forbidden` with a clear message: e.g., *"This API key does not have access to 'USER_B_EMAIL'."*
 4. Switch to **Key B** (`Work Automation Bot`).
-5. Make a Gmail API call: `GET /gmail/v1/users/work@company.com/messages`.
+5. Make a Gmail API call: `GET /gmail/v1/users/USER_B_EMAIL/messages`.
    - **Validation**: Successful response.
-6. Make a Gmail API call: `GET /gmail/v1/users/personal@gmail.com/messages`.
+6. Make a Gmail API call: `GET /gmail/v1/users/USER_A_EMAIL/messages`.
    - **Validation**: `403 Forbidden`.
 7. Switch to **Key C** (`Power Agent`).
-8. Make a Gmail API call to both `personal@gmail.com` and `work@company.com`.
+8. Make a Gmail API call to both `USER_A_EMAIL` and `USER_B_EMAIL`.
    - **Validation**: Both return successful responses.
 
 **Expected Outcome**: Each key can only access the emails it was explicitly granted. No cross-email leakage.
@@ -84,10 +84,10 @@
    - Regex Pattern: `2FA Code`
    - Target Email: *(leave blank — applies to all emails)*
    - Key Assignment: *(leave blank — global rule)*
-2. Send a test email containing "Your 2FA Code is 991234" to both `personal@gmail.com` and `work@company.com`.
-3. Using **Key A**, attempt to read the 2FA email from `personal@gmail.com`.
+2. Send a test email containing "Your 2FA Code is 991234" to both `USER_A_EMAIL` and `USER_B_EMAIL`.
+3. Using **Key A**, attempt to read the 2FA email from `USER_A_EMAIL`.
    - **Validation**: Proxy blocks with *"Access restricted: Email content blocked by rule 'Block 2FA Codes'."*
-4. Using **Key B**, attempt to read the 2FA email from `work@company.com`.
+4. Using **Key B**, attempt to read the 2FA email from `USER_B_EMAIL`.
    - **Validation**: Same block — the global rule applies to this key too.
 5. Using **Key C**, attempt to read the 2FA email from either inbox.
    - **Validation**: Same block — global rule applies to all keys.
@@ -107,10 +107,10 @@
    - Regex Pattern: `*@competitor.com`
    - Target Email: *(blank — all emails)*
    - Key Assignment: **Key B** (`Work Automation Bot`) only
-2. Send a test email from `sales@competitor.com` to `work@company.com`.
+2. Send a test email from `sales@competitor.com` to `USER_B_EMAIL`.
 3. Using **Key B**, attempt to read the email.
    - **Validation**: Proxy blocks with *"Access restricted: Email content blocked by rule 'Block Competitor Emails'."*
-4. Using **Key C** (which also has access to `work@company.com`), attempt to read the same email.
+4. Using **Key C** (which also has access to `USER_B_EMAIL`), attempt to read the same email.
    - **Validation**: Proxy **allows** the read — the rule was only assigned to Key B.
 
 **Expected Outcome**: Key-specific rules are enforced only on the assigned key. Other keys with access to the same email are unaffected.
@@ -126,12 +126,12 @@
    - Service: `gmail`
    - Action Type: `read_blacklist`
    - Regex Pattern: `Password Reset`
-   - Target Email: `personal@gmail.com`
+   - Target Email: `USER_A_EMAIL`
    - Key Assignment: *(blank — global)*
-2. Send a "Password Reset" email to both `personal@gmail.com` and `work@company.com`.
-3. Using **Key C**, attempt to read the password reset email from `personal@gmail.com`.
+2. Send a "Password Reset" email to both `USER_A_EMAIL` and `USER_B_EMAIL`.
+3. Using **Key C**, attempt to read the password reset email from `USER_A_EMAIL`.
    - **Validation**: Proxy blocks — rule targets this email.
-4. Using **Key C**, attempt to read the password reset email from `work@company.com`.
+4. Using **Key C**, attempt to read the password reset email from `USER_B_EMAIL`.
    - **Validation**: Proxy **allows** — rule does not target this email.
 
 **Expected Outcome**: `targetEmail`-scoped rules only fire for the specified email, even when using a key that has access to multiple emails.
@@ -176,10 +176,10 @@
 
 **Steps**:
 1. Log out of `test-user-1`.
-2. Log in as `test-user-2@gmail.com` (a separate Clerk account).
+2. Log in as an alternate Clerk account not tied to USER_A or USER_B.
 3. Navigate to the dashboard.
-4. Verify that `test-user-2` sees no connected emails, no keys, and no rules from `test-user-1`.
-5. If `test-user-2` obtains or guesses one of `test-user-1`'s proxy key values, attempt a Gmail API call.
-   - **Validation**: The proxy authenticates the key but it belongs to `test-user-1` — the request proceeds under `test-user-1`'s permissions (not `test-user-2`'s). This confirms keys are opaque bearer tokens tied to the issuing user, as designed.
+4. Verify that this second user sees no connected emails, no keys, and no rules from the first user profile.
+5. If the second user obtains or guesses one of the first user's proxy key values, attempt a Gmail API call.
+   - **Validation**: The proxy authenticates the key but it belongs to the first user — the request proceeds under the first user's permissions. This confirms keys are opaque bearer tokens tied to the issuing user, as designed.
 
 **Expected Outcome**: Complete tenant isolation. A user cannot see or modify another user's configuration. Keys are cryptographically opaque — knowing a key does not grant access to modify the associated rules.
