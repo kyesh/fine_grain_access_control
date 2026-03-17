@@ -56,7 +56,7 @@ This acceptance test ensures that the new Waitlist / Beta Sign Up flow correctly
 1. **Action:** On Step 4, observe the prompt asking if the user wants to join the active Beta group or just the waitlist.
 2. **Action:** Select "Join Waitlist Only" and click "Submit".
 3. **Verify:** The UI transitions to a success state. The database marks the row `status = 'completed'` and `wantsBeta = false`.
-4. **Action:** (Alternative Flow) Instead of waitlist only, select "Join Beta Group".
+4. **Action:** (Alternative Flow) Instead of waitlist only, select "Request to Join the Active Beta Group".
 5. **Verify:** Additional confirmation questions/checkboxes appear:
     * "I agree to a 30-minute user feedback interview."
     * "I agree to the beta pricing of $5/month per connected Gmail account."

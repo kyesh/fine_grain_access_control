@@ -224,7 +224,7 @@ export default function WaitlistPage() {
                 className={`p-4 border-2 rounded-xl cursor-pointer transition-all ${wantsBeta === true ? 'border-blue-600 bg-blue-50' : 'border-gray-200 hover:border-blue-300'}`}
               >
                 <div className="flex items-center gap-2 mb-1">
-                  <h4 className="font-bold text-blue-900">Join the Active Beta Group</h4>
+                  <h4 className="font-bold text-blue-900">Request to Join the Active Beta Group</h4>
                   <span className="bg-blue-600 text-white text-[10px] uppercase font-bold px-2 py-0.5 rounded">Exclusive</span>
                 </div>
                 <p className="text-sm text-gray-700 mb-4">Get immediate access today, bypass the waitlist, and help us test the platform.</p>
