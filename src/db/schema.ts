@@ -88,6 +88,7 @@ export const waitlist = pgTable('waitlist', {
   wantsBeta: text('wants_beta'), // stored as text or boolean, using text for flexibility (e.g. 'true'/'false')
   agreedToInterview: text('agreed_to_interview'),
   agreedToBetaPricing: text('agreed_to_beta_pricing'),
+  comfortableWithUnverifiedApp: text('comfortable_with_unverified_app'),
   status: text('status').default('partial'), // 'partial', 'completed'
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),

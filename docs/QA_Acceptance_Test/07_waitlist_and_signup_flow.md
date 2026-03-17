@@ -56,14 +56,15 @@ This acceptance test ensures that the new Waitlist / Beta Sign Up flow correctly
 1. **Action:** On Step 4, observe the prompt asking if the user wants to join the active Beta group or just the waitlist.
 2. **Action:** Select "Join Waitlist Only" and click "Submit".
 3. **Verify:** The UI transitions to a success state. The database marks the row `status = 'completed'` and `wantsBeta = false`.
-4. **Action:** (Alternative Flow) Instead of waitlist only, select "Join Beta Group".
-5. **Verify:** Additional confirmation checkboxes appear:
+4. **Action:** (Alternative Flow) Instead of waitlist only, select "Request to Join the Active Beta Group".
+5. **Verify:** Additional confirmation questions/checkboxes appear:
     * "I agree to a 30-minute user feedback interview."
     * "I agree to the beta pricing of $5/month per connected Gmail account."
-6. **Action:** Leave a checkbox empty and attempt to submit.
+    * "Google displays an 'Unverified App' warning during our beta phase. Are you comfortable proceeding with an unverified app?" (Yes/No radio buttons)
+6. **Action:** Leave a checkbox empty or don't answer the radio button question and attempt to submit.
 7. **Verify:** The form prevents submission and shows a validation error.
-8. **Action:** Check both boxes and click "Submit".
-9. **Verify:** The UI transitions to a success state. Database marks `status = 'completed'`, `wantsBeta = true`, `agreedToInterview = true`, and `agreedToBetaPricing = true`.
+8. **Action:** Check both boxes, select "Yes" for the unverified app question, and click "Submit".
+9. **Verify:** The UI transitions to a success state. Database marks `status = 'completed'`, `wantsBeta = true`, `agreedToInterview = true`, `agreedToBetaPricing = true`, and `comfortableWithUnverifiedApp = true`.
 
 ## Test 6: License and Hosting Restriction Documentation
 **Objective:** Verify that the open-source community is explicitly informed that the project cannot be hosted or resold as a SaaS.
