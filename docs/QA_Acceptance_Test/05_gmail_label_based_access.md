@@ -9,6 +9,20 @@
 
 ## Dependencies
 - Must pass `01_signup_and_credential_workflow.md` first to ensure credentials and the Web UI are functioning.
+- Must pass `02_gmail_fine_grain_control.md` first.
+
+---
+
+## 🔒 Vercel Preview Automation Bypass
+When executing the mock AI agent scripts against a **Vercel Preview URL**, Vercel's SSO Protection shields the API endpoints.
+
+> **CRITICAL WARNING:** This bypass token is ONLY for automated scripts. Do NOT append `?x-vercel-protection-bypass=YOUR_SECRET` to the URL when testing in the browser manually or via the Browser Agent. Applying the bypass token to browser URLs will fail to authenticate sub-resources (like CSS and Fonts) and break the page rendering.
+
+**To test the API programmatically on a Preview Branch:**
+1. In the Vercel Dashboard, navigate to **Settings -> Deployment Protection**.
+2. Enable **Protection Bypass for Automation** and copy the generated secret token.
+3. Save this token as `VERCEL_AUTOMATION_BYPASS_SECRET` in your `.env.preview` file.
+4. Update your testing scripts (e.g. `scripts/test-preview-api.ts`) to include the `x-vercel-protection-bypass: YOUR_SECRET` HTTP header on all proxy requests. This securely tunnels the request directly to the Next.js API.
 
 ---
 

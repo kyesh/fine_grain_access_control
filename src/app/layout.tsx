@@ -8,6 +8,8 @@ import type { Metadata } from 'next';
 import { Inter } from 'next/font/google';
 import './globals.css';
 import Link from 'next/link';
+import { PostHogProviderWrapper } from './providers';
+import SuspendedPostHogPageView from './PostHogPageView';
 
 const inter = Inter({ subsets: ['latin'] });
 
@@ -72,7 +74,10 @@ export default function RootLayout({
               </div>
             </nav>
             <main>
-              {children}
+              <PostHogProviderWrapper>
+                <SuspendedPostHogPageView />
+                {children}
+              </PostHogProviderWrapper>
             </main>
             <footer className="bg-white border-t border-gray-200 mt-auto">
               <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-8 flex flex-col sm:flex-row justify-between items-center text-sm text-gray-500 gap-4 sm:gap-0">

@@ -35,7 +35,12 @@ description: Deploys changes to a new PR, waits for the Vercel Preview to build,
     npx vercel ls googleapis-fine-grain-access-control | grep -w "Ready" | grep -w "Preview" | head -n 1 | awk '{print $2}'
     ```
 
-6.  If the deployment fails, analyze the logs, fix the code, push again, and return to step 4.
+6.  If the deployment fails with an error (for example, if you hit your Neon Database Branch Limit), run the script to find and delete stale Neon branches:
+
+    ```bash
+    npx tsx scripts/cleanup-neon-branches.ts
+    ```
+    After cleaning up, fix any other code issues, push again, and return to step 4.
 
 7.  Once the Vercel Preview URL is `Ready`, you MUST launch a `browser_subagent` mission to validate the frontend.
     a. Provide the subagent the specific Vercel URL (e.g., `https://project-branch.vercel.app`).
