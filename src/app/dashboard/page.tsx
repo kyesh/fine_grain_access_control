@@ -81,7 +81,22 @@ export default async function DashboardPage() {
       oauthTokensDump = oauthTokens.data;
       
       if (oauthTokens.data.length > 0) {
-        hasCompleteGoogleAccess = oauthTokens.data[0].scopes?.includes(REQUIRED_SCOPE) ?? false;
+        const tokenInfo = oauthTokens.data[0];
+        const hasScopesInClerk = tokenInfo.scopes?.includes(REQUIRED_SCOPE) ?? false;
+        
+        if (hasScopesInClerk && tokenInfo.token) {
+          // Clerk's token cache might be in a 'limbo' state (e.g. revoked by Google but still sitting in Clerk's DB).
+          // To absolutely guarantee it's healthy, we actively ping the Gmail API.
+          const ping = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/profile", {
+            headers: { Authorization: `Bearer ${tokenInfo.token}` }
+          });
+          
+          if (ping.ok) {
+            hasCompleteGoogleAccess = true;
+          } else {
+            console.error("Token rejected by Google (likely revoked or expired in limbo state).", ping.status);
+          }
+        }
       }
     } catch (error) {
       console.error("Failed to validate Google OAuth token. Account is likely disconnected in Clerk.", error);
