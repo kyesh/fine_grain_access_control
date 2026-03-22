@@ -67,7 +67,13 @@ export default function RootLayout({
                       </SignUpButton>
                     </Show>
                     <Show when="signed-in">
-                      <UserButton />
+                      <UserButton 
+                        userProfileProps={{
+                          additionalOAuthScopes: {
+                            google: ['https://www.googleapis.com/auth/gmail.modify']
+                          }
+                        }}
+                      />
                     </Show>
                   </div>
                 </div>

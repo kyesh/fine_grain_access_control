@@ -17,7 +17,8 @@ export function ConnectGoogleWarning() {
     if (existingGoogleAccount && existingGoogleAccount.verification?.status === 'verified') {
       const response = await existingGoogleAccount.reauthorize({ 
         additionalScopes: ['https://www.googleapis.com/auth/gmail.modify'],
-        redirectUrl: window.location.href 
+        redirectUrl: window.location.href,
+        oidcPrompt: 'consent'
       });
       verificationUrl = response.verification?.externalVerificationRedirectURL?.href;
     } else {
