@@ -15,15 +15,15 @@ export function ConnectGoogleWarning() {
       
       let verificationUrl: string | undefined;
 
-      if (existingGoogleAccount) {
-        // If they have an account but missing scopes, FORCE reauthorization with explicit additional scopes
+      if (existingGoogleAccount && existingGoogleAccount.verification?.status === 'verified') {
+        // If they have an active account but missing scopes, FORCE reauthorization with explicit additional scopes
         const response = await existingGoogleAccount.reauthorize({ 
           additionalScopes: ['https://www.googleapis.com/auth/gmail.modify'],
           redirectUrl: window.location.href 
         });
         verificationUrl = response.verification?.externalVerificationRedirectURL?.href;
       } else {
-        // If they never linked Google, create a new connection
+        // If they never linked Google OR if it was disconnected (unverified), create a new connection
         const response = await user.createExternalAccount({
           strategy: "oauth_google",
           redirectUrl: window.location.href,
