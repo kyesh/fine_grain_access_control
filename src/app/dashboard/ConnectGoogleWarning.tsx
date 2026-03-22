@@ -1,43 +1,55 @@
 "use client";
 
-import { useUser } from "@clerk/nextjs";
+import { useUser, useReverification } from "@clerk/nextjs";
 import { useState } from "react";
+import { isReverificationCancelledError } from "@clerk/nextjs/errors";
 
 export function ConnectGoogleWarning() {
   const { user } = useUser();
   const [isLoading, setIsLoading] = useState(false);
 
-  const handleConnect = async () => {
+  const connectAction = async () => {
     if (!user) return;
+    const existingGoogleAccount = user.externalAccounts.find(acc => acc.provider === 'google' || acc.provider === 'oauth_google' as any);
+      
+    let verificationUrl: string | undefined;
+
+    if (existingGoogleAccount && existingGoogleAccount.verification?.status === 'verified') {
+      const response = await existingGoogleAccount.reauthorize({ 
+        additionalScopes: ['https://www.googleapis.com/auth/gmail.modify'],
+        redirectUrl: window.location.href 
+      });
+      verificationUrl = response.verification?.externalVerificationRedirectURL?.href;
+    } else {
+      if (existingGoogleAccount) {
+        await existingGoogleAccount.destroy();
+      }
+      const response = await user.createExternalAccount({
+        strategy: "oauth_google",
+        redirectUrl: window.location.href,
+      });
+      verificationUrl = response.verification?.externalVerificationRedirectURL?.href;
+    }
+
+    if (verificationUrl) {
+      window.location.href = verificationUrl;
+    } else {
+      setIsLoading(false); // In case it returns without a URL
+    }
+  };
+
+  const enhancedConnectAction = useReverification(connectAction);
+
+  const handleConnect = async () => {
     setIsLoading(true);
     try {
-      const existingGoogleAccount = user.externalAccounts.find(acc => acc.provider === 'google' || acc.provider === 'oauth_google' as any);
-      
-      let verificationUrl: string | undefined;
-
-      if (existingGoogleAccount) {
-        // If they have an active or unverified account but missing scopes, FORCE reauthorization with explicit additional scopes
-        const response = await existingGoogleAccount.reauthorize({ 
-          additionalScopes: ['https://www.googleapis.com/auth/gmail.modify'],
-          redirectUrl: window.location.href 
-        });
-        verificationUrl = response.verification?.externalVerificationRedirectURL?.href;
-      } else {
-        // If they never linked Google, create a new connection
-        const response = await user.createExternalAccount({
-          strategy: "oauth_google",
-          redirectUrl: window.location.href,
-        });
-        verificationUrl = response.verification?.externalVerificationRedirectURL?.href;
-      }
-
-      if (verificationUrl) {
-        window.location.href = verificationUrl;
-      } else {
-        setIsLoading(false); // In case it returns without a URL
-      }
+      await enhancedConnectAction();
     } catch (error) {
-      console.error("Failed to connect Google:", error);
+      if (isReverificationCancelledError(error)) {
+        console.log("User cancelled reverification modal");
+      } else {
+        console.error("Failed to connect Google:", error);
+      }
       setIsLoading(false);
     }
   };
