@@ -1,7 +1,7 @@
 # QA Acceptance Test: 08 - Missing Google Scopes
 
 ## Overview
-This test verifies that the dashboard correctly identifies when a user logs in without checking all the requested Google OAuth scopes (specifically `gmail.readonly`, `gmail.send`, and `gmail.modify`) or bypasses the flow entirely via a waitlist invite. It ensures that the system gracefully handles the missing permissions and directs the user to Clerk's native, compliant Account Settings UI to resolve it.
+This test verifies that the dashboard correctly identifies when a user logs in without checking all the requested Google OAuth scopes (specifically `gmail.modify`) or bypasses the flow entirely via a waitlist invite. It ensures that the system gracefully handles the missing permissions and directs the user to Clerk's native, compliant Account Settings UI to resolve it.
 
 ## Pre-requisites
 * Application is running locally or deployed.

@@ -1,7 +1,7 @@
 # Handling Waitlist Invites Pending Google OAuth (v4)
 
 ## Goal Description
-When waitlist users log in or when users sign in iteratively, they may completely bypass the Google OAuth consent screens, leaving them without the required Gmail scopes (`gmail.readonly`, `gmail.send`, `gmail.modify`).
+When waitlist users log in or when users sign in iteratively, they may completely bypass the Google OAuth consent screens, leaving them without the required Gmail scopes (`gmail.modify`).
 We need a compliant way to surface the Google OAuth consent requirement to these users directly on the dashboard. Utilizing Clerk's native user profile UX ensures strict adherence to Google's branding guidelines while avoiding confusing terminology.
 
 ## Proposed Changes
@@ -11,8 +11,6 @@ We need a compliant way to surface the Google OAuth consent requirement to these
 #### [MODIFY] src/app/dashboard/page.tsx
 - In the React Server Component, check the `user.externalAccounts` array for the `oauth_google` account and its `approvedScopes`.
 - Define the `REQUIRED_SCOPES`:
-  - `https://www.googleapis.com/auth/gmail.readonly`
-  - `https://www.googleapis.com/auth/gmail.send`
   - `https://www.googleapis.com/auth/gmail.modify`
 - Pass a boolean flag `hasCompleteGoogleAccess` (true if the Google account exists AND all required scopes are present) down to the client components.
 
