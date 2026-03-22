@@ -72,24 +72,11 @@ export default async function DashboardPage() {
   const REQUIRED_SCOPE = 'https://www.googleapis.com/auth/gmail.modify';
   let hasCompleteGoogleAccess = false;
 
-  let oauthTokensDump: any = null;
-  let pingDump: any = null;
-
   if (googleAccount) {
     try {
       const clerk = await clerkClient();
       const oauthTokens = await clerk.users.getUserOauthAccessToken(user.id, 'oauth_google');
       
-      // Safely clone and sanitize tokens for debugging
-      oauthTokensDump = oauthTokens.data.map(t => ({
-        provider: t.provider,
-        scopes: t.scopes,
-        label: t.label,
-        publicMetadata: t.publicMetadata,
-        hasToken: !!t.token,
-        hasTokenSecret: !!t.tokenSecret
-      }));
-
       if (oauthTokens.data.length > 0) {
         const tokenInfo = oauthTokens.data[0];
         const hasScopesInClerk = tokenInfo.scopes?.includes(REQUIRED_SCOPE) ?? false;
@@ -101,19 +88,16 @@ export default async function DashboardPage() {
           
           if (ping.ok) {
             const tokenData = await ping.json();
-            pingDump = { status: ping.status, data: tokenData };
             if (tokenData.scope?.includes(REQUIRED_SCOPE)) {
               hasCompleteGoogleAccess = true;
             }
           } else {
             console.error("Token rejected by Google (likely revoked or expired in limbo state).", ping.status);
-            pingDump = { status: ping.status, error: await ping.text() };
           }
         }
       }
     } catch (error) {
       console.error("Failed to validate Google OAuth token. Account is likely disconnected in Clerk.", error);
-      oauthTokensDump = { error: String(error) };
     }
   }
 
@@ -157,20 +141,6 @@ export default async function DashboardPage() {
       <main>
         <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 mt-8 space-y-8">
           
-          {dbUser.email.startsWith('ken') && dbUser.email.includes('2') && (
-            <div className="bg-gray-900 text-green-400 p-4 rounded overflow-auto text-xs m-4">
-              <h2 className="text-white font-bold mb-2">DEBUG: Sanitized Clerk Data</h2>
-              <strong className="block text-yellow-300">googleAccount:</strong>
-              <pre className="mb-4">{JSON.stringify(googleAccount, null, 2)}</pre>
-              
-              <strong className="block text-yellow-300">oauthTokensDump:</strong>
-              <pre className="mb-4">{JSON.stringify(oauthTokensDump, null, 2)}</pre>
-
-              <strong className="block text-yellow-300">Google TokenInfo Ping Dump:</strong>
-              <pre>{JSON.stringify(pingDump, null, 2)}</pre>
-            </div>
-          )}
-
           {!hasCompleteGoogleAccess && <ConnectGoogleWarning />}
 
           {/* ─── Your Email & Delegated Emails ─────────────────────── */}
