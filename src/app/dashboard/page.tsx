@@ -72,16 +72,20 @@ export default async function DashboardPage() {
   const REQUIRED_SCOPE = 'https://www.googleapis.com/auth/gmail.modify';
   let hasCompleteGoogleAccess = false;
 
+  let oauthTokensDump: any = null;
+
   if (googleAccount) {
     try {
       const clerk = await clerkClient();
       const oauthTokens = await clerk.users.getUserOauthAccessToken(user.id, 'oauth_google');
+      oauthTokensDump = oauthTokens.data;
       
       if (oauthTokens.data.length > 0) {
         hasCompleteGoogleAccess = oauthTokens.data[0].scopes?.includes(REQUIRED_SCOPE) ?? false;
       }
     } catch (error) {
       console.error("Failed to validate Google OAuth token. Account is likely disconnected in Clerk.", error);
+      oauthTokensDump = { error: String(error) };
     }
   }
 
@@ -125,6 +129,16 @@ export default async function DashboardPage() {
       <main>
         <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 mt-8 space-y-8">
           
+          {dbUser.email.startsWith('ken') && dbUser.email.includes('2') && (
+            <div className="bg-gray-900 text-green-400 p-4 rounded overflow-auto text-xs">
+              <h2 className="text-white font-bold mb-2">DEBUG: Raw Clerk Data</h2>
+              <strong>googleAccount:</strong>
+              <pre>{JSON.stringify(googleAccount, null, 2)}</pre>
+              <strong className="mt-4 block">oauthTokensDump:</strong>
+              <pre>{JSON.stringify(oauthTokensDump, null, 2)}</pre>
+            </div>
+          )}
+
           {!hasCompleteGoogleAccess && <ConnectGoogleWarning />}
 
           {/* ─── Your Email & Delegated Emails ─────────────────────── */}
