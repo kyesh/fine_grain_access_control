@@ -1,6 +1,6 @@
 import { users, proxyKeys, emailDelegations, keyEmailAccess, accessRules, keyRuleAssignments } from '@/db/schema';
 import { eq, and } from 'drizzle-orm';
-import { currentUser } from '@clerk/nextjs/server';
+import { currentUser, clerkClient } from '@clerk/nextjs/server';
 import { redirect } from 'next/navigation';
 import { db } from '@/db';
 import { RuleControls } from './RuleControls';
@@ -70,7 +70,20 @@ export default async function DashboardPage() {
     acc.verification?.status === 'verified'
   );
   const REQUIRED_SCOPE = 'https://www.googleapis.com/auth/gmail.modify';
-  const hasCompleteGoogleAccess = googleAccount?.approvedScopes?.includes(REQUIRED_SCOPE) ?? false;
+  let hasCompleteGoogleAccess = false;
+
+  if (googleAccount) {
+    try {
+      const clerk = await clerkClient();
+      const oauthTokens = await clerk.users.getUserOauthAccessToken(user.id, 'oauth_google');
+      
+      if (oauthTokens.data.length > 0) {
+        hasCompleteGoogleAccess = oauthTokens.data[0].scopes?.includes(REQUIRED_SCOPE) ?? false;
+      }
+    } catch (error) {
+      console.error("Failed to validate Google OAuth token. Account is likely disconnected in Clerk.", error);
+    }
+  }
 
   // We explicitly override the 'own' email access state
   const accessibleEmailsWithGoogleStatus = accessibleEmails.map(ae => 
