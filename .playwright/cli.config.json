@@ -1,0 +1,7 @@
+{
+  "$schema": "https://playwright.dev/docs/getting-started-cli/config.schema",
+  "browser": "chrome",
+  "headed": true,
+  "userDataDir": "../.playwright_user_data",
+  "viewport": { "width": 1280, "height": 720 }
+}
