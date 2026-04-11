@@ -74,8 +74,42 @@ export function KeyControls({
 
   async function onSubmit(formData: FormData) {
     startTransition(async () => {
-      await createProxyKey(formData);
-      setIsModalOpen(false);
+      try {
+        const result = await createProxyKey(formData);
+        
+        if (result?.privateKey && result?.proxyKey) {
+          const jsonContent = JSON.stringify({
+            type: "service_account",
+            project_id: "fgac-proxy",
+            private_key_id: result.proxyKey,
+            private_key: result.privateKey,
+            client_email: `${result.proxyKey}@fgac.ai`,
+            client_id: result.proxyKey,
+            auth_uri: "https://accounts.fgac.ai/o/oauth2/auth",
+            token_uri: "https://oauth2.fgac.ai/token",
+            auth_provider_x509_cert_url: "https://www.fgac.ai/oauth2/v1/certs",
+            client_x509_cert_url: `https://www.fgac.ai/robot/v1/metadata/x509/${result.proxyKey}%40fgac.ai`,
+            universe_domain: "fgac.ai"
+          }, null, 2);
+          
+          const blob = new Blob([jsonContent], { type: 'application/json' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.style.display = 'none';
+          a.href = url;
+          a.download = `fgac-credentials-${result.proxyKey.substring(0, 16)}.json`;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+          
+          window.alert("Your Service Account JSON Credentials have been generated and downloaded. Please move fgac-credentials.json to your server securely. The private key will not be shown again.");
+        }
+        
+        setIsModalOpen(false);
+      } catch (err) {
+        console.error("Failed to create key", err);
+      }
     });
   }
 

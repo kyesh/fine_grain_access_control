@@ -16,6 +16,7 @@ export const proxyKeys = pgTable('proxy_keys', {
   id: uuid('id').defaultRandom().primaryKey(),
   userId: uuid('user_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
   key: text('key').notNull().unique(), // "sk_proxy_xxx"
+  publicKey: text('public_key'), // RSA Public Key PEM
   label: text('label').notNull(), // "Claude Agent", "Work Bot"
   revokedAt: timestamp('revoked_at'), // NULL = active, set = revoked
   expiresAt: timestamp('expires_at'), // optional TTL

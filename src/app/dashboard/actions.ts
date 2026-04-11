@@ -5,6 +5,8 @@ import { users, proxyKeys, emailDelegations, keyEmailAccess, accessRules, keyRul
 import { eq, and } from "drizzle-orm";
 import { currentUser } from "@clerk/nextjs/server";
 import { revalidatePath } from "next/cache";
+import safeRegex from "safe-regex";
+import * as jose from "jose";
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -115,10 +117,17 @@ export async function createProxyKey(formData: FormData) {
 
   if (!label) throw new Error("Label is required");
 
+  // Generate RSA Keypair for Service Account compatibility
+  const { publicKey, privateKey } = await jose.generateKeyPair('RS256', { extractable: true });
+  const publicKeyPem = await jose.exportSPKI(publicKey);
+  const privateKeyPem = await jose.exportPKCS8(privateKey);
+
   // Create the key
+  const proxyKeyString = `sk_proxy_${crypto.randomUUID().replace(/-/g, '')}`;
   const newKey = await db.insert(proxyKeys).values({
     userId: dbUser.id,
-    key: `sk_proxy_${crypto.randomUUID().replace(/-/g, '')}`,
+    key: proxyKeyString,
+    publicKey: publicKeyPem,
     label,
   }).returning().then(res => res[0]);
 
@@ -156,6 +165,12 @@ export async function createProxyKey(formData: FormData) {
   }
 
   revalidatePath("/dashboard");
+
+  // We return the private key and proxy key string so the UI can construct the generated JSON
+  return {
+    proxyKey: proxyKeyString,
+    privateKey: privateKeyPem,
+  };
 }
 
 export async function revokeProxyKey(keyId: string) {
@@ -227,6 +242,10 @@ export async function createRule(formData: FormData) {
     return;
   }
 
+  if (!safeRegex(regexPattern)) {
+    throw new Error(`The provided regular expression '${regexPattern}' is too complex and poses a performance risk. Please simplify it (e.g. avoid nested quantifiers).`);
+  }
+
   const newRule = await db.insert(accessRules).values({
     userId: dbUser.id,
     ruleName,
@@ -260,6 +279,10 @@ export async function updateRule(formData: FormData) {
     console.error("[updateRule] Missing required fields");
     revalidatePath("/dashboard");
     return;
+  }
+
+  if (!safeRegex(regexPattern)) {
+    throw new Error(`The provided regular expression '${regexPattern}' is too complex and poses a performance risk. Please simplify it (e.g. avoid nested quantifiers).`);
   }
 
   // Verify ownership

@@ -8,7 +8,14 @@ description: Deploys changes to a new PR, waits for the Vercel Preview to build,
     git fetch origin main && git merge origin/main
     ```
 
-2.  Push your current changes to the branch:
+2.  If you made any schema/data model changes during this task, ensure you have generated a migration file and added it to the `MIGRATIONS` array in `src/db/migrate.ts` *before* pushing. Without this, your changes will not propagate to the Vercel Preview Database.
+    
+    ```bash
+    npm run db:generate
+    # Manually append the new file name (e.g. 000X_xxx.sql) to src/db/migrate.ts
+    ```
+
+3.  Push your current changes to the branch:
 
     ```bash
     git push origin HEAD

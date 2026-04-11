@@ -47,11 +47,11 @@ if (!finalConnectionString) {
   process.exit(0);
 }
 
-// Migration files in execution order
 const MIGRATIONS = [
   '0000_redundant_night_nurse.sql',
   '0001_multi_key_multi_email.sql',
   '0002_email_delegations.sql',
+  '0003_huge_celestials.sql',
 ];
 
 /**
@@ -130,6 +130,7 @@ async function main() {
           'undefined_column', // column dropped by later migration
           'undefined_table',  // table dropped by later migration
           '42703',            // PostgreSQL undefined_column
+          '42704',            // PostgreSQL undefined_object (e.g. constraints)
           '42P01',            // PostgreSQL undefined_table
         ];
         const isIgnorable = ignorable.some(s =>
