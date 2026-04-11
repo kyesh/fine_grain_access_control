@@ -1,45 +1,59 @@
-# Playwright MCP Agent Workflow (/browser-agent)
+# Browser Agent Workflow (/browser-agent)
 
-This workflow defines how Antigravity natively drives your authenticated browsing sessions using the Playwright CLI over the MCP Bridge Extension, seamlessly hooking into your live browser window to bypass Google bot-detection blocks!
+This workflow drives the user's real Chrome browser via `@playwright/cli attach --cdp`, preserving all Google sign-in sessions and cookies.
 
 **Trigger:** `/browser-agent [url]`
+
+## Prerequisites
+
+The user must have Chrome running with remote debugging enabled and their persistent profile:
+```bash
+google-chrome-stable --remote-debugging-port=9222 --user-data-dir="$(pwd)/.playwright_user_data"
+```
 
 ## Workflow Execution Steps
 
 // turbo-all
 
-1. **Verify Host Environment & MCP Bridge**
-   The agent MUST check if the Chrome debugging port is active.
+1. **Check if Chrome debugging port is available**
    ```bash
    curl -s http://localhost:9222/json/version
    ```
-   **If this fails (connection refused):** HALT immediately! Ask the user to:
-   1. Install the "Playwright MCP Bridge" extension in their Chrome profile natively.
-   2. Spawn the Headed Chrome instance natively on their OS using:
+   - If this succeeds (returns JSON), proceed to step 2.
+   - If this fails (connection refused), STOP and ask the user to run:
+     ```
+     google-chrome-stable --remote-debugging-port=9222 --user-data-dir="$(pwd)/.playwright_user_data"
+     ```
+
+2. **Attach to the running browser**
    ```bash
-   google-chrome-stable --remote-debugging-port=9222 --user-data-dir="$(pwd)/.playwright_user_data"
+   npx @playwright/cli attach --cdp=http://localhost:9222 -s=antigravity_ui
+   ```
+   This connects the CLI session to the user's real Chrome instance with all existing cookies and auth state intact.
+
+3. **Navigate to the target URL**
+   ```bash
+   npx @playwright/cli -s=antigravity_ui goto [url]
    ```
 
-2. **Initialize CLI via MCP**
-   Once the port is active and the extension is present, connect the CLI directly to the active tabs:
-   ```bash
-   npx -y @playwright/cli -s=antigravity_ui open [url] --extension
-   ```
-
-3. **Evaluate the DOM state**
-   Obtain the deterministic element-ref snapshot emitted by Playwright:
+4. **Take a snapshot to read the page structure**
    ```bash
    npx @playwright/cli -s=antigravity_ui snapshot
    ```
-   Read the resulting `.yml` file generated in `.playwright-cli/`.
+   Read the YAML output to identify element refs (e.g. `e15`, `e23`).
 
-4. **Navigate & Act sequentially**
-   Act natively using the references parsed from the `.yml` snapshot. Ex:
+5. **Interact with elements using refs from the snapshot**
+   Examples:
    - `npx @playwright/cli -s=antigravity_ui click e15`
-   - `npx @playwright/cli -s=antigravity_ui fill e12 "Email"`
+   - `npx @playwright/cli -s=antigravity_ui fill e12 "some text"`
+   - `npx @playwright/cli -s=antigravity_ui select e8 "option_value"`
 
-5. **Take Final Assessment**
-   When the target state is reached:
+6. **Capture proof screenshots**
    ```bash
-   npx @playwright/cli -s=antigravity_ui screenshot final_dashboard.png
+   npx @playwright/cli -s=antigravity_ui screenshot qa_proof.png
+   ```
+
+7. **Close the session when done** (does NOT close the user's browser)
+   ```bash
+   npx @playwright/cli -s=antigravity_ui close
    ```
