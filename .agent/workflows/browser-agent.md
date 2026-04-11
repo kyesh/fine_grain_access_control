@@ -11,7 +11,7 @@ This workflow defines the explicit sequence of operations Antigravity must execu
 1. **Initialize the Session**
    Always launch the cli with a dedicated named session so state propagates correctly through your bash bounds. Run:
    ```bash
-   npx -y @playwright/cli -s=antigravity_ui open [url]
+   npx -y @playwright/cli --config .playwright/cli.config.json -s=antigravity_ui open [url] --headed
    ```
 
 2. **Evaluate the DOM state**
