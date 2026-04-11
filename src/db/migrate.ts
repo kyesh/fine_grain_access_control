@@ -130,6 +130,7 @@ async function main() {
           'undefined_column', // column dropped by later migration
           'undefined_table',  // table dropped by later migration
           '42703',            // PostgreSQL undefined_column
+          '42704',            // PostgreSQL undefined_object (e.g. constraints)
           '42P01',            // PostgreSQL undefined_table
         ];
         const isIgnorable = ignorable.some(s =>
