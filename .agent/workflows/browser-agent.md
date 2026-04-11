@@ -1,6 +1,6 @@
-# Playwright Browser Agent Workflow (/browser-agent)
+# Playwright CDP Agent Workflow (/browser-agent)
 
-This workflow defines the explicit sequence of operations Antigravity must execute when tasked with navigating the UI natively using the Playwright CLI agent (`@playwright/cli`).
+This workflow defines how Antigravity natively drives your authenticated browsing sessions using standard Playwright Node automation over the Chrome Debugging Protocol (CDP), completely bypassing Google Bot-Detection blocks!
 
 **Trigger:** `/browser-agent [url]`
 
@@ -8,32 +8,28 @@ This workflow defines the explicit sequence of operations Antigravity must execu
 
 // turbo-all
 
-1. **Initialize the Session**
-   Always launch the cli with a dedicated named session so state propagates correctly through your bash bounds. Run:
+1. **Verify Host Port**
+   The agent MUST check if the Chrome debugging port is active.
    ```bash
-   npx -y @playwright/cli --config .playwright/cli.config.json -s=antigravity_ui open [url] --headed
+   curl -s http://localhost:9222/json/version
+   ```
+   **If this fails (connection refused):** HALT immediately! Ask the user to spawn the Headed Chrome instance natively on their OS using this exact command:
+   ```bash
+   google-chrome-stable --remote-debugging-port=9222 --user-data-dir="$(pwd)/.playwright_user_data"
    ```
 
-2. **Evaluate the DOM state**
-   Do not guess locators. Obtain the deterministic element-ref snapshot emitted by Playwright to target elements securely:
-   ```bash
-   npx @playwright/cli -s=antigravity_ui snapshot
+2. **Execute Automation**
+   Once the port is active, do NOT use the rigid `@playwright/cli`. Instead, write a fast, deterministic Node.js script using native `@playwright/test` logic to execute the UI checks.
+   Example `test-runner.ts`:
+   ```typescript
+   import { chromium } from 'playwright';
+   (async () => {
+       const browser = await chromium.connectOverCDP('http://localhost:9222');
+       const context = browser.contexts()[0];
+       const page = context.pages()[0] || await context.newPage();
+       await page.goto('[url]');
+       await page.screenshot({ path: 'qa_proof.png' });
+       await browser.disconnect();
+   })();
    ```
-   Read the resulting snapshot `.yml` file generated in the `.playwright-cli/` directory.
-
-3. **Navigate & Act sequentially**
-   Act natively using the references parsed from the `.yml` snapshot. Ex:
-   - `npx @playwright/cli -s=antigravity_ui click e15`
-   - `npx @playwright/cli -s=antigravity_ui fill e12 "Email"`
-
-4. **Take Final Assessment**
-   When the target state is reached (e.g. Dashboard fully loaded with authentication preserved via our configuration defaults):
-   ```bash
-   npx @playwright/cli -s=antigravity_ui screenshot final_dashboard.png
-   ```
-
-5. **Resource Cleanup**
-   Respect system resources by formally closing the session after your objectives are fulfilled:
-   ```bash
-   npx @playwright/cli -s=antigravity_ui close
-   ```
+   Run it via `npx tsx test-runner.ts` and evaluate the output natively.
