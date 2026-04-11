@@ -10,7 +10,7 @@ When asked to work on a task you should:
 4. Review the docs folder and make updates to the docs and data model based on your changes.
 5. Commit frequently as you work through the problem.
 6. **Validation**: Validate changes work locally and then in the preview branch using the `/deploy-pr-preview` workflow and the browser tool to run through applicable `docs/QA_Acceptance_Test` before handing it back to the user for review.
-7. **Browser Automation**: NEVER directly call raw `playwright` generic screenshot tools. When requested to analyze or test the UI interactively as an AI, you MUST explicitly trigger the `/browser-agent` workflow (`.agent/workflows/browser-agent.md`) which properly utilizes native Playwright Node scripts over CDP (`9222`) avoiding explicit Chrome OS encryption limits and Google bot-detection boundaries.
+7. **Browser Automation**: NEVER directly call raw `playwright` generic screenshot tools. When requested to analyze or test the UI interactively as an AI, you MUST explicitly trigger the `/browser-agent` workflow (`.agent/workflows/browser-agent.md`) which properly utilizes the `@playwright/cli` over the MCP Bridge Extension to natively drive your running browser.
 
 
 ### Security, Safety, and Workflow Best Practices
