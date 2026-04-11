@@ -6,13 +6,13 @@
 
 ## 1. Application Architecture & Data Flow
 **Q: Describe the architecture of your application and how it handles user data.**
-Our application acts strictly as a proxy middleware interface. The backend is hosted on Vercel Edge functions and primarily written in Node.js (TypeScript). Data comes in via an API call from an authenticated AI Agent using a designated token. We authenticate this token, verify the granular access rules stored in our Neon Postgres database, and if the rules pass, inject the active Google OAuth token to forward the request to the official Google APIs. We receive the response from Google, filter or redact the data according to the same user-defined blacklists/whitelists, and return the filtered JSON payload to the requesting Agent.
+Our application acts strictly as a proxy middleware interface. The backend is hosted on Vercel Edge functions and primarily written in Node.js (TypeScript). AI Agents authenticate by generating standard JWTs signed with dynamically provided true RSA Private Keys (mimicking Google Cloud Service Accounts exactly, including explicit `universe_domain` declarations). We parse these incoming JWT signatures strictly within our edge network utilizing the `jose` crypto library. Upon successful signature validation, we verify the granular access rules stored in our Neon Postgres database natively. If the rules pass, we inject the active Google OAuth token to forward the exact request structure to the official Google APIs. We receive the response from Google, apply algorithmic redaction and filtering via user-defined Regex blacklists/whitelists, and return the safe JSON payload to the requesting Agent.
 
 ## 2. Data Storage & Encryption
 **Q: How and where is Google User Data stored?**
 Google User Data *is never permanently stored* on our infrastructure. We do not persist messages, email bodies, subject lines, or attachments. The only data processed is temporarily held in memory during the real-time proxy evaluation sequence. 
 
-Tokens and metadata (Access Rules, Blacklists, user emails) are securely stored in our Neon Serverless Postgres database. Connections to the database are strictly encrypted via TLS, and sensitive columns are encrypted at rest by the database provider.
+Tokens and metadata (Access Rules, Blacklists, user emails, and Public RSA Keys) are securely stored in our Neon Serverless Postgres database. Connections to the database are strictly encrypted via TLS, and sensitive columns are encrypted at rest by the database provider. We explicitly enforce that newly generated RSA Private Credentials are synchronously downloaded to the user's local machine via standard JSON files and are immediately discarded from memory to guarantee stateless edge storage compliance.
 
 ## 3. Data Deletion
 **Q: What is your data deletion policy?**
