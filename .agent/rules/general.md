@@ -10,6 +10,8 @@ When asked to work on a task you should:
 4. Review the docs folder and make updates to the docs and data model based on your changes.
 5. Commit frequently as you work through the problem.
 6. **Validation**: Validate changes work locally and then in the preview branch using the `/deploy-pr-preview` workflow and the browser tool to run through applicable `docs/QA_Acceptance_Test` before handing it back to the user for review.
+7. **Browser Automation**: When executing autonomous browser testing or manual UI inspection as an AI, use the Playwright CLI agent (`npx @playwright/cli`) instead of running test suites like `npx playwright test`. You MUST always open in headed mode and use the user profile in our workspace (`--user-data-dir=./.playwright_user_data`) so that we retain the appropriate Google sign-in metadata and allow for efficient user interaction.
+
 
 ### Security, Safety, and Workflow Best Practices
 
