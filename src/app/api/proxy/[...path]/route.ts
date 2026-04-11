@@ -3,6 +3,7 @@ import { db } from '@/db';
 import { users, proxyKeys, emailDelegations, keyEmailAccess, accessRules, keyRuleAssignments } from '@/db/schema';
 import { eq, and } from 'drizzle-orm';
 import { clerkClient } from '@clerk/nextjs/server';
+import safeRegex from 'safe-regex';
 
 export const dynamic = 'force-dynamic';
 
@@ -157,6 +158,10 @@ async function handleProxyRequest(request: NextRequest, params: { path: string[]
           let isWhitelisted = false;
           for (const rule of sendRules) {
             const regexStr = rule.regexPattern.replace(/\*/g, '.*');
+            if (!safeRegex(regexStr)) {
+              console.error(`Skipping unsafe regex pattern: ${regexStr}`);
+              continue;
+            }
             const regex = new RegExp(regexStr, 'i');
             if (regex.test(toAddress)) {
               isWhitelisted = true;
@@ -319,6 +324,10 @@ async function handleProxyRequest(request: NextRequest, params: { path: string[]
       if (readBlacklistRules.length > 0) {
         for (const rule of readBlacklistRules) {
           const regexStr = rule.regexPattern.replace(/\*/g, '.*');
+          if (!safeRegex(regexStr)) {
+            console.error(`Skipping unsafe regex pattern: ${regexStr}`);
+            continue;
+          }
           const regex = new RegExp(regexStr, 'i');
           if (regex.test(returnBody)) {
             return NextResponse.json({

@@ -26,6 +26,7 @@
     "posthog-js": "^1.360.2",
     "react": "^19.2.3",
     "react-dom": "19.2.3",
+    "safe-regex": "^2.1.1",
     "tailwind-merge": "^3.5.0",
     "tsx": "^4.21.0"
   },

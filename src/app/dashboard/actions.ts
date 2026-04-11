@@ -242,6 +242,10 @@ export async function createRule(formData: FormData) {
     return;
   }
 
+  if (!safeRegex(regexPattern)) {
+    throw new Error(`The provided regular expression '${regexPattern}' is too complex and poses a performance risk. Please simplify it (e.g. avoid nested quantifiers).`);
+  }
+
   const newRule = await db.insert(accessRules).values({
     userId: dbUser.id,
     ruleName,
@@ -275,6 +279,10 @@ export async function updateRule(formData: FormData) {
     console.error("[updateRule] Missing required fields");
     revalidatePath("/dashboard");
     return;
+  }
+
+  if (!safeRegex(regexPattern)) {
+    throw new Error(`The provided regular expression '${regexPattern}' is too complex and poses a performance risk. Please simplify it (e.g. avoid nested quantifiers).`);
   }
 
   // Verify ownership
