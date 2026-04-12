@@ -13,16 +13,15 @@ export default clerkMiddleware(async (auth, req) => {
     return NextResponse.rewrite(url);
   }
 
-  // Route API Proxy requests
+  // Route API Proxy requests (production subdomain: gmail.fgac.ai)
   if (hostname.startsWith('gmail.')) {
     url.pathname = `/api/proxy${url.pathname}`;
     return NextResponse.rewrite(url);
   }
 
-  // Local dev: rewrite /gmail/v1/... → /api/proxy/gmail/v1/...
-  // The Google SDK strips the path from rootUrl, so rootUrl='http://localhost:3000/api/proxy/'
-  // actually sends requests to http://localhost:3000/gmail/v1/... which needs this rewrite.
-  // In production, the gmail.fgac.ai subdomain handles this via the hostname check above.
+  // Local dev: The Google SDK's rootUrl only uses the origin for URL construction,
+  // so requests arrive at /gmail/v1/... instead of /api/proxy/gmail/v1/...
+  // In production, the gmail.fgac.ai subdomain + the rewrite above handles this.
   if (process.env.NODE_ENV === 'development' && url.pathname.startsWith('/gmail/')) {
     url.pathname = `/api/proxy${url.pathname}`;
     return NextResponse.rewrite(url);

@@ -35,20 +35,26 @@ cat > ~/.openclaw/gmail-fgac/tokens/qa-test.json << EOF
 EOF
 ```
 
-### Step 3: Set the Proxy URL for Local Testing
+### Step 3: Set the Root URL for Local Testing
 
-The skill defaults to production (`https://fgac.ai/api/proxy`). For local dev testing, override via environment variable:
+The skill defaults to production (`https://gmail.fgac.ai`). For local dev testing, override via environment variable:
 
 ```bash
-export FGAC_PROXY_URL=http://localhost:3000/api/proxy
+export FGAC_ROOT_URL=http://localhost:3000
 ```
 
 > [!IMPORTANT]
-> All test commands below assume `FGAC_PROXY_URL` is set to your local dev server. The skill uses the `api_endpoint` override pattern — in Node.js, this is the `rootUrl` parameter passed to the Google SDK.
+> **How root URL override works in each SDK:**
+> - **Node.js `rootUrl`**: Replaces only the domain. The SDK appends `/gmail/v1/` automatically. Any path in `rootUrl` is stripped.
+> - **Python `api_endpoint`**: Replaces `rootUrl + servicePath`. You must include `/gmail/v1` in the value.
+>
+> For local dev, the middleware rewrites `/gmail/v1/*` → `/api/proxy/gmail/v1/*` so the proxy catches all requests.
+>
+> All test commands below use `FGAC_ROOT_URL` (not the old `FGAC_PROXY_URL`).
 
 ## Dependencies
 - Must pass `01_signup_and_credential_workflow.md` first to ensure credentials exist.
-- Must pass `09_universe_domain_rollback.md` to ensure the skill uses the correct `api_endpoint` pattern.
+- Must pass `09_universe_domain_rollback.md` to ensure the skill uses the root URL override pattern.
 
 ## Context
 This test validates the gmail-fgac skill that is distributed to OpenClaw users. It is the **primary repeatable regression test** for the skill and should be run after any changes to:
@@ -83,13 +89,13 @@ This test validates the gmail-fgac skill that is distributed to OpenClaw users. 
    grep -rn "universe_domain" docs/skills/gmail-fgac/scripts/*.js | grep -v "// " | grep -v "DEPRECATED"
    # Must return 0 active references
    ```
-4. Verify the skill uses the `api_endpoint` override pattern:
+4. Verify the skill uses the root URL override pattern:
    ```bash
-   grep -n "FGAC_PROXY_URL\|api/proxy\|rootUrl" docs/skills/gmail-fgac/scripts/gmail.js
-   # Must return at least 1 match for each
+   grep -n "FGAC_ROOT_URL\|rootUrl\|gmail\.fgac\.ai" docs/skills/gmail-fgac/scripts/gmail.js
+   # Must return matches showing rootUrl override with gmail.fgac.ai default
    ```
 
-**Expected Outcome**: All files present. Dependencies install cleanly. Skill code uses the `api_endpoint` override pattern (configured via `FGAC_PROXY_URL` env var, implemented as `rootUrl` in the Google Node.js SDK), not `universe_domain`.
+**Expected Outcome**: All files present. Dependencies install cleanly. Skill code uses the root URL override pattern (`rootUrl` for Node.js), not `universe_domain`.
 
 ---
 
@@ -98,7 +104,7 @@ This test validates the gmail-fgac skill that is distributed to OpenClaw users. 
 
 **Steps (Command Line)**:
 ```bash
-FGAC_PROXY_URL=http://localhost:3000/api/proxy \
+FGAC_ROOT_URL=http://localhost:3000 \
   node docs/skills/gmail-fgac/scripts/gmail.js \
   --account qa-test \
   --action labels
@@ -110,7 +116,7 @@ FGAC_PROXY_URL=http://localhost:3000/api/proxy \
 3. Output contains standard Gmail labels (INBOX, SENT, DRAFT, TRASH, SPAM).
 4. No `401`, `403`, or `invalid_grant` errors in output.
 
-**Expected Outcome**: The skill connects to Gmail **through the FGAC.AI proxy** and returns a list of labels. This confirms: proxy key authentication works, `api_endpoint` routing works, proxy forwards to Google successfully.
+**Expected Outcome**: The skill connects to Gmail **through the FGAC.AI proxy** and returns a list of labels. This confirms: proxy key authentication works, root URL routing works, proxy forwards to Google successfully.
 
 ---
 
@@ -119,7 +125,7 @@ FGAC_PROXY_URL=http://localhost:3000/api/proxy \
 
 **Steps (Command Line)**:
 ```bash
-FGAC_PROXY_URL=http://localhost:3000/api/proxy \
+FGAC_ROOT_URL=http://localhost:3000 \
   node docs/skills/gmail-fgac/scripts/gmail.js \
   --account qa-test \
   --action list \
@@ -141,13 +147,13 @@ FGAC_PROXY_URL=http://localhost:3000/api/proxy \
 **Steps (Command Line)**:
 ```bash
 # First, get a message ID from the list action
-MSG_ID=$(FGAC_PROXY_URL=http://localhost:3000/api/proxy \
+MSG_ID=$(FGAC_ROOT_URL=http://localhost:3000 \
   node docs/skills/gmail-fgac/scripts/gmail.js \
   --account qa-test --action list --max 1 \
   | python3 -c "import json,sys; print(json.load(sys.stdin)['messages'][0]['id'])")
 
 # Read that message
-FGAC_PROXY_URL=http://localhost:3000/api/proxy \
+FGAC_ROOT_URL=http://localhost:3000 \
   node docs/skills/gmail-fgac/scripts/gmail.js \
   --account qa-test \
   --action read \
@@ -171,7 +177,7 @@ FGAC_PROXY_URL=http://localhost:3000/api/proxy \
 
 **Steps (Command Line)**:
 ```bash
-FGAC_PROXY_URL=http://localhost:3000/api/proxy \
+FGAC_ROOT_URL=http://localhost:3000 \
   node docs/skills/gmail-fgac/scripts/gmail.js \
   --account qa-test \
   --action send \
@@ -193,7 +199,7 @@ FGAC_PROXY_URL=http://localhost:3000/api/proxy \
 
 **Steps (Command Line)**:
 ```bash
-FGAC_PROXY_URL=http://localhost:3000/api/proxy \
+FGAC_ROOT_URL=http://localhost:3000 \
   node docs/skills/gmail-fgac/scripts/gmail.js \
   --account qa-test \
   --action send \
@@ -225,13 +231,13 @@ FGAC_PROXY_URL=http://localhost:3000/api/proxy \
    - Body: "Your verification code is 123456. Do not share this."
 2. List emails and find the blacklisted message ID:
    ```bash
-   FGAC_PROXY_URL=http://localhost:3000/api/proxy \
+   FGAC_ROOT_URL=http://localhost:3000 \
      node docs/skills/gmail-fgac/scripts/gmail.js \
      --account qa-test --action list --query "2FA Code" --max 1
    ```
 3. Attempt to read the blacklisted message:
    ```bash
-   FGAC_PROXY_URL=http://localhost:3000/api/proxy \
+   FGAC_ROOT_URL=http://localhost:3000 \
      node docs/skills/gmail-fgac/scripts/gmail.js \
      --account qa-test \
      --action read \
@@ -255,13 +261,13 @@ FGAC_PROXY_URL=http://localhost:3000/api/proxy \
 **Steps (Command Line)**:
 ```bash
 # Get a message ID to forward
-MSG_ID=$(FGAC_PROXY_URL=http://localhost:3000/api/proxy \
+MSG_ID=$(FGAC_ROOT_URL=http://localhost:3000 \
   node docs/skills/gmail-fgac/scripts/gmail.js \
   --account qa-test --action list --max 1 \
   | python3 -c "import json,sys; print(json.load(sys.stdin)['messages'][0]['id'])")
 
 # Forward to whitelisted recipient
-FGAC_PROXY_URL=http://localhost:3000/api/proxy \
+FGAC_ROOT_URL=http://localhost:3000 \
   node docs/skills/gmail-fgac/scripts/gmail.js \
   --account qa-test \
   --action forward \
@@ -275,7 +281,7 @@ FGAC_PROXY_URL=http://localhost:3000/api/proxy \
 
 ```bash
 # Forward to blocked recipient — should fail
-FGAC_PROXY_URL=http://localhost:3000/api/proxy \
+FGAC_ROOT_URL=http://localhost:3000 \
   node docs/skills/gmail-fgac/scripts/gmail.js \
   --account qa-test \
   --action forward \
@@ -353,7 +359,7 @@ node docs/skills/gmail-fgac/scripts/gmail.js --action labels 2>&1
 # Validate each action's output is valid JSON
 for action in labels list; do
   echo "--- Testing $action ---"
-  FGAC_PROXY_URL=http://localhost:3000/api/proxy \
+  FGAC_ROOT_URL=http://localhost:3000 \
     node docs/skills/gmail-fgac/scripts/gmail.js \
     --account qa-test --action $action --max 2 \
     | python3 -c "import json,sys; json.load(sys.stdin); print('VALID JSON')" \
@@ -376,7 +382,7 @@ Run this after any skill code change. Tests the skill **through the proxy** end-
 
 ```bash
 cd docs/skills/gmail-fgac/scripts
-export FGAC_PROXY_URL=http://localhost:3000/api/proxy
+export FGAC_ROOT_URL=http://localhost:3000
 LABEL=qa-test  # Replace with your token label
 
 echo "=== 1. Argument validation ==="

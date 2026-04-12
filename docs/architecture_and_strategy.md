@@ -19,14 +19,19 @@ To balance developer experience (DX) and perfect security across our target mark
 
 ### Prong 1: Developer API Endpoint Override (PLG)
 **Target**: Individual developers, startups, and open-source agent tinkerers.
-**Approach**: We issue developers a fake `proxy_credentials.json` file. The developer uses the standard Google SDK but adds a single line of configuration to override the default API endpoint.
+**Approach**: We issue developers a fake `proxy_credentials.json` file. The developer uses the standard Google SDK but adds a single line of configuration to override the default root URL.
 
-*   **Python Example**: `client_options={'api_endpoint': 'https://proxy.ourdomain.com'}`
-*   **Node.js Example**: `rootUrl: 'https://proxy.ourdomain.com'`
+> **Note:** Each Google SDK uses a different parameter to override the API base URL, and the values differ:
+> - **Python `api_endpoint`** replaces `rootUrl + servicePath`. You must include the service path (e.g., `/gmail/v1`).
+> - **Node.js `rootUrl`** replaces only the domain. The SDK appends the service path automatically. Any path in `rootUrl` is stripped.
+
+*   **Python Example**: `client_options={'api_endpoint': 'https://gmail.proxy.ourdomain.com/gmail/v1'}`
+*   **Node.js Example**: `rootUrl: 'https://gmail.proxy.ourdomain.com/'`
+*   **cURL Example**: `curl https://gmail.proxy.ourdomain.com/gmail/v1/users/me/messages`
 
 **Pros**: Low friction, uses official SDKs, completely prevents agent bypass (via the fake token).
 **Flaws & Risks**:
-*   **The "Leaky Abstraction"**: Google’s client libraries are finicky about pagination and file uploads when using custom endpoints. If an agent tries to upload an attachment to an email, the SDK might attempt to hit a specialized upload URI (like `https://www.googleapis.com/upload/gmail/v1/...` instead of the standard REST URI). The proxy must be engineered to catch and correctly map **all** varieties of Google's endpoint structures, or the standard code will mysteriously crash.
+*   **The "Leaky Abstraction"**: Google's client libraries are finicky about pagination and file uploads when using custom endpoints. If an agent tries to upload an attachment to an email, the SDK might attempt to hit a specialized upload URI (like `https://www.googleapis.com/upload/gmail/v1/...` instead of the standard REST URI). The proxy must be engineered to catch and correctly map **all** varieties of Google's endpoint structures, or the standard code will mysteriously crash.
 
 ### Prong 2: Wrapper SDKs (Mid-Market)
 **Target**: Application developers wanting a completely "zero-thought" integration.

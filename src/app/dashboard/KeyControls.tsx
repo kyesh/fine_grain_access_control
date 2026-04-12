@@ -79,7 +79,7 @@ export function KeyControls({
         
         if (result?.privateKey && result?.proxyKey) {
           // Show the key and endpoint to the user (primary flow)
-          const proxyEndpoint = "https://fgac.ai/api/proxy";
+          const proxyEndpoint = "https://gmail.fgac.ai";
           const keyDisplay = result.proxyKey;
           
           // Copy key to clipboard
@@ -117,12 +117,13 @@ export function KeyControls({
           window.alert(
             `✅ API Key Created!\n\n` +
             `Your proxy key: ${keyDisplay}\n` +
-            `Endpoint URL: ${proxyEndpoint}\n\n` +
+            `Endpoint: ${proxyEndpoint}\n\n` +
             `The key has been copied to your clipboard.\n\n` +
             `Configure your agent:\n` +
-            `  Python: client_options={"api_endpoint": "${proxyEndpoint}"}\n` +
+            `  Python: client_options={"api_endpoint": "${proxyEndpoint}/gmail/v1"}\n` +
             `  Node.js: rootUrl: "${proxyEndpoint}/"\n` +
-            `  Header: Authorization: Bearer ${keyDisplay}`
+            `  cURL:    ${proxyEndpoint}/gmail/v1/users/me/messages\n` +
+            `  Header:  Authorization: Bearer ${keyDisplay}`
           );
           
           // Offer SA JSON as a secondary download

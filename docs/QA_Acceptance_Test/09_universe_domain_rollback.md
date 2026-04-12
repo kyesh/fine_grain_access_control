@@ -41,10 +41,10 @@ This test validates that all `universe_domain` artifacts have been removed from 
 4. Verify Step 2 shows `sk_proxy_****************` display format (NOT `fgac-credentials-***.json`).
 5. Verify there is NO mention of `GOOGLE_APPLICATION_CREDENTIALS`.
 6. Verify there is NO text saying "Zero code changes needed".
-7. Verify the page contains code examples using the `api_endpoint` pattern:
-   - Python: `client_options={"api_endpoint": "https://fgac.ai/api/proxy"}`
-   - Node.js: `rootUrl: "https://fgac.ai/api/proxy/"`
-   - cURL: `https://fgac.ai/api/proxy/gmail/v1/...`
+7. Verify the page contains code examples using the root URL override pattern:
+   - Python: `client_options={"api_endpoint": "https://gmail.fgac.ai/gmail/v1"}`
+   - Node.js: `rootUrl: "https://gmail.fgac.ai/"`
+   - cURL: `https://gmail.fgac.ai/gmail/v1/users/me/...`
 8. Take a proof screenshot.
 
 **Expected Outcome**: The setup page accurately guides users to use the explicit endpoint override pattern with their proxy key. No references to `universe_domain`, `GOOGLE_APPLICATION_CREDENTIALS`, or "zero code changes".
@@ -62,7 +62,7 @@ This test validates that all `universe_domain` artifacts have been removed from 
 5. Submit the form.
 6. Verify the post-creation state shows:
    - The `sk_proxy_...` key string with a "Copy" button
-   - The endpoint URL `https://fgac.ai/api/proxy` displayed prominently
+   - The endpoint URL `https://gmail.fgac.ai` displayed prominently
    - A secondary/collapsible "Download Service Account JSON" option (NOT the primary action)
 7. Take a proof screenshot of the post-creation state.
 
@@ -78,13 +78,13 @@ This test validates that all `universe_domain` artifacts have been removed from 
    ```bash
    curl -s -o /dev/null -w "%{http_code}" \
      -H "Authorization: Bearer sk_proxy_REPLACE_ME" \
-     "https://fgac.ai/api/proxy/gmail/v1/users/me/labels"
+     "https://gmail.fgac.ai/gmail/v1/users/me/labels"
    ```
 2. Verify the HTTP response code is `200` (not `401`, `403`, or `500`).
 3. Execute the full request and parse the response:
    ```bash
    curl -s -H "Authorization: Bearer sk_proxy_REPLACE_ME" \
-     "https://fgac.ai/api/proxy/gmail/v1/users/me/labels" | python3 -c "
+     "https://gmail.fgac.ai/gmail/v1/users/me/labels" | python3 -c "
    import json, sys
    data = json.load(sys.stdin)
    labels = data.get('labels', [])
@@ -143,8 +143,8 @@ This test validates that all `universe_domain` artifacts have been removed from 
 
 ---
 
-### 7. gmail-fgac Skill — api_endpoint Pattern
-**Objective**: Validate that the gmail-fgac skill uses the `api_endpoint`/`rootUrl` pattern, NOT the `universe_domain` approach.
+### 7. gmail-fgac Skill — Root URL Override Pattern
+**Objective**: Validate that the gmail-fgac skill uses the `rootUrl` override pattern (Node.js) / `api_endpoint` pattern (Python), NOT the `universe_domain` approach.
 
 **Steps (Command Line)**:
 1. Verify the skill exists:
@@ -158,7 +158,7 @@ This test validates that all `universe_domain` artifacts have been removed from 
    ```
 3. Verify it uses the explicit endpoint pattern:
    ```bash
-   grep -c "api/proxy\|rootUrl\|api_endpoint" docs/skills/gmail-fgac/scripts/gmail.js
+   grep -c "gmail\.fgac\.ai\|rootUrl\|FGAC_ROOT_URL" docs/skills/gmail-fgac/scripts/gmail.js
    # Must return at least 1
    ```
 

@@ -27,7 +27,7 @@ Google APIs. It acts as a transparent proxy that enforces:
 - **Recipient Allow-lists**: Restrict who agents can send/forward emails to
 - **Deletion Safeguards**: Whitelist domains for deletion, block "Empty Trash"
 
-Uses standard Google SDKs with an explicit endpoint override pointing to `https://fgac.ai/api/proxy`.
+Uses standard Google SDKs with a root URL override pointing to `https://gmail.fgac.ai`.
 
 ## Getting Started
 
@@ -78,14 +78,15 @@ node scripts/gmail.js --account <label> --action attachment --message-id <id> [-
 This skill uses the explicit endpoint override pattern (NOT `universe_domain`):
 
 ```javascript
-// FGAC.AI service account: Bearer token + explicit rootUrl
+// FGAC.AI service account: Bearer token + rootUrl override
 const auth = new google.auth.OAuth2();
 auth.setCredentials({ access_token: proxyKey }); // sk_proxy_xxx
 
+// rootUrl replaces only the domain — the SDK appends /gmail/v1/ automatically.
 const gmail = google.gmail({
   version: 'v1',
   auth,
-  rootUrl: 'https://fgac.ai/api/proxy/',  // Routes to FGAC.AI proxy
+  rootUrl: 'https://gmail.fgac.ai/',  // Routes to FGAC.AI proxy
 });
 ```
 

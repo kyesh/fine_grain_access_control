@@ -1,0 +1,9 @@
+{
+  "name": "qa-agent",
+  "type": "module",
+  "private": true,
+  "description": "QA agent scripts using the Google SDK with rootUrl override — tests the same code path our users follow.",
+  "dependencies": {
+    "googleapis": "^171.0.0"
+  }
+}

@@ -47,6 +47,8 @@ Your agent never sees or touches your real Google credentials.
 
 Point your agent at the SecureAgent proxy instead of `googleapis.com`. Replace the base URL and use your proxy key as the Bearer token.
 
+> **Note:** Each Google SDK uses a different parameter name to override the API base URL. Python uses `api_endpoint` (which replaces `rootUrl + servicePath`, so you must include `/gmail/v1`). Node.js uses `rootUrl` (which only replaces the domain — the SDK appends `/gmail/v1/` automatically).
+
 #### Python (Google API Client)
 
 ```python
@@ -55,17 +57,17 @@ from google.oauth2.credentials import Credentials
 
 # Your SecureAgent proxy key (NOT a Google token)
 PROXY_KEY = "sk_proxy_YOUR_KEY_HERE"
-PROXY_URL = "https://fgac.ai/api/proxy"
 
 # Create a credential object with your proxy key
 creds = Credentials(token=PROXY_KEY)
 
-# Build the Gmail service, pointing at SecureAgent instead of Google
+# Build the Gmail service, pointing at SecureAgent instead of Google.
+# api_endpoint replaces rootUrl + servicePath, so include "/gmail/v1".
 service = build(
     "gmail",
     "v1",
     credentials=creds,
-    client_options={"api_endpoint": PROXY_URL}
+    client_options={"api_endpoint": "https://gmail.fgac.ai/gmail/v1"}
 )
 
 # Use the Gmail API normally
@@ -81,15 +83,15 @@ for msg in messages:
 const { google } = require("googleapis");
 
 const PROXY_KEY = "sk_proxy_YOUR_KEY_HERE";
-const PROXY_URL = "https://fgac.ai/api/proxy";
 
 const auth = new google.auth.OAuth2();
 auth.setCredentials({ access_token: PROXY_KEY });
 
+// rootUrl replaces only the domain. The SDK appends /gmail/v1/ automatically.
 const gmail = google.gmail({
   version: "v1",
   auth,
-  rootUrl: PROXY_URL + "/",
+  rootUrl: "https://gmail.fgac.ai/",
 });
 
 const res = await gmail.users.messages.list({ userId: "me", maxResults: 5 });
@@ -100,13 +102,13 @@ console.log(res.data.messages);
 
 ```bash
 curl -H "Authorization: Bearer sk_proxy_YOUR_KEY_HERE" \
-  "https://fgac.ai/api/proxy/gmail/v1/users/me/messages?maxResults=5"
+  "https://gmail.fgac.ai/gmail/v1/users/me/messages?maxResults=5"
 ```
 
 #### Claude / LLM Tool Use
 
 If your LLM supports tool use or function calling, configure the Gmail tool to use:
-- **Base URL**: `https://fgac.ai/api/proxy`
+- **Base URL**: `https://gmail.fgac.ai/gmail/v1`
 - **Auth Header**: `Authorization: Bearer sk_proxy_...`
 - **Gmail user**: `me` (resolves to your email) or a specific email address
 

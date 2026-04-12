@@ -111,13 +111,18 @@ function getHeader(headers, name) {
 async function run() {
   const token = loadToken(args.account);
 
-  // Build gmail client with explicit FGAC.AI proxy endpoint
+  // Override the root URL to route all requests through the FGAC.AI proxy.
+  // The Node.js SDK's rootUrl replaces only the domain — the SDK appends
+  // /gmail/v1/ automatically. Any path in rootUrl gets stripped.
+  //   Node.js: rootUrl: 'https://gmail.fgac.ai/'
+  //   Python:  api_endpoint: 'https://gmail.fgac.ai/gmail/v1'
+  //            (api_endpoint replaces rootUrl + servicePath, so include /gmail/v1)
   // NOTE: Do NOT use universe_domain — it does not work for Workspace APIs.
   // See docs/adr/001_universe_domain_rejection.md for details.
-  const PROXY_URL = process.env.FGAC_PROXY_URL || 'https://fgac.ai/api/proxy';
+  const ROOT_URL = process.env.FGAC_ROOT_URL || 'https://gmail.fgac.ai';
   
   if (token.type === 'service_account') {
-    // FGAC.AI service account: use proxy key as Bearer token + explicit rootUrl
+    // FGAC.AI service account: use proxy key as Bearer token + root URL override
     const proxyKey = token.private_key_id; // The sk_proxy_xxx key
     const auth = new google.auth.OAuth2();
     auth.setCredentials({ access_token: proxyKey });
@@ -125,7 +130,7 @@ async function run() {
     const gmail = google.gmail({
       version: 'v1',
       auth,
-      rootUrl: PROXY_URL + '/',
+      rootUrl: ROOT_URL + '/',  // SDK appends /gmail/v1/ to this
     });
 
     await executeAction(gmail);
