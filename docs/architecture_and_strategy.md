@@ -11,6 +11,8 @@ The goal is to provide a proxy or gateway that intercepts agent requests to Goog
 2. **Tokens and Bypassing**: Giving self-modifying agents real Google Access Tokens is dangerous. An agent could simply rewrite its code to bypass our proxy and talk directly to `googleapis.com`. We must issue "Fake" tokens from a **Token Vault** that standard SDKs will pass to our proxy. If the agent tries to use the fake token directly with Google, it receives a 401 Unauthorized.
 3. **The "Zero Code" Myth**: It is architecturally impossible to securely reroute official Google SDK HTTP traffic to a proxy using *only* a custom credential file. The developer must make a code configuration change (specifying an API endpoint override) or the deployment environment must enforce traffic routing via proxy variables/hijacking.
 
+> **Note (April 2026):** We tested Google's `universe_domain` feature as a potential workaround to the Zero Code constraint. It does not work for Google Workspace APIs (Gmail, Calendar, Drive). The `googleapis` npm package and `google-api-python-client` hardcode API endpoints to `*.googleapis.com` regardless of `universe_domain`. See [ADR-001](adr/001_universe_domain_rejection.md) for full technical evidence.
+
 ## 3. The 3-Pronged Go-To-Market Strategy
 
 To balance developer experience (DX) and perfect security across our target markets, we will pursue the following structured approach:

@@ -36,8 +36,8 @@ export default async function LandingPage() {
 
         <div className="mt-16 grid grid-cols-1 gap-8 sm:grid-cols-3 text-left">
           <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
-            <h3 className="font-semibold text-gray-900 mb-2">Off-The-Shelf Libraries</h3>
-            <p className="text-sm text-gray-800">Agents can use the official Python and Node.js Google SDKs with zero code changes required.</p>
+            <h3 className="font-semibold text-gray-900 mb-2">Standard Google SDKs</h3>
+            <p className="text-sm text-gray-800">Works with official Python and Node.js Google SDKs. Just point the endpoint at your proxy and go.</p>
           </div>
           <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
             <h3 className="font-semibold text-gray-900 mb-2">Content Filtering</h3>
