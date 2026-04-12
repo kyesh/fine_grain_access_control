@@ -18,3 +18,20 @@ When asked to work on a task you should:
 - **Strict UI Policy**: Put debug information exclusively in server logs. NEVER render debug identifiers, developer tokens, or internal error objects directly into the HTML/UI.
 - **Git Hook Restrictions**: NEVER bypass Git hooks without explicit user approval. Stop and investigate failures like secret scanning to prevent compromised credentials.
 - **Never Push to Main**: NEVER push changes directly or merge automatically to the `main` branch. Always open a PR, use `/deploy-pr-preview` for validation, and leave `/deploy-prod` for the user.
+- **Never Deploy to Production**: NEVER run `npx vercel --prod`, `vercel --prod`, `vercel deploy --prod`, or ANY command that triggers a production deployment. This applies regardless of how small the change appears. Production deployments are ONLY done by the user via the `/deploy-prod` workflow. If a production redeploy is needed (e.g. after env var changes), inform the user and let them trigger it.
+
+### Vercel CLI Safety
+
+The following Vercel CLI operations are safe and do not require user approval:
+- `vercel env ls` — listing environment variables
+- `vercel env pull` — pulling env vars to local files
+- `vercel inspect` — inspecting deployments
+
+The following Vercel CLI operations modify state and require user approval (but are NOT production deployments):
+- `vercel env add/rm` — adding or removing environment variables
+- `vercel env add` with preview/development scope
+
+The following Vercel CLI operations are **BANNED** — never run them:
+- `vercel --prod` / `vercel deploy --prod` — deploys to production
+- `vercel promote` — promotes a deployment to production
+- `vercel alias` — aliases a deployment to a production domain
