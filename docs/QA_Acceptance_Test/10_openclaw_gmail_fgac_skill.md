@@ -2,38 +2,49 @@
 
 ## Prerequisites
 - Node.js installed (v18+).
-- The `gmail-fgac` skill installed at `docs/skills/gmail-fgac/` with `npm install` run in the `scripts/` directory.
+- Local dev server running (`npm run dev` at `http://localhost:3000`).
+- A user account signed in via the dashboard with Google OAuth Gmail scopes granted.
+- The `gmail-fgac` skill dependencies installed: `cd docs/skills/gmail-fgac/scripts && npm install`.
 
-### Testing Modes
+## Setup: Create a Proxy Key and Token File
 
-This test supports **two modes**. Tests 1, 9, 10, and 11 run in both modes. Tests 2-8 require a valid token.
+The skill **must** be tested through the FGAC.AI proxy. Follow these steps to create a proxy key and configure the skill to use it.
 
-| Mode | Token Location | What It Validates |
-|------|---------------|-------------------|
-| **Local Dev (OAuth)** | `~/.openclaw/gmail-fgac/tokens/<label>.json` (OAuth2 token) | Skill code, argument validation, JSON contracts, Gmail API integration via direct Google connection |
-| **Production (Proxy)** | `~/.openclaw/gmail-fgac/tokens/<label>.json` (Service Account with `sk_proxy_` key) | Full FGAC.AI proxy auth chain, access control rules, `rootUrl` routing |
+### Step 1: Create a Proxy Key via the Dashboard
 
-**Local Dev Setup** (if no proxy key available):
+1. Navigate to `http://localhost:3000/dashboard`.
+2. Click **"Create New Key"**.
+3. Enter a label (e.g., `QA-Test-Key`).
+4. Check the email account(s) you want the key to access.
+5. Click **"Create Key"**.
+6. Copy the `sk_proxy_...` key from the dialog.
+
+### Step 2: Save the Token File
+
+The skill reads tokens from `~/.openclaw/gmail-fgac/tokens/<label>.json`. Create a Service Account token file pointing at the proxy:
+
 ```bash
-# Copy an existing OAuth token from the old skill
-cp ~/.openclaw/google-workspace-byok/tokens/<name>.json \
-   ~/.openclaw/gmail-fgac/tokens/<label>.json
+mkdir -p ~/.openclaw/gmail-fgac/tokens
+cat > ~/.openclaw/gmail-fgac/tokens/qa-test.json << EOF
+{
+  "type": "service_account",
+  "private_key_id": "sk_proxy_PASTE_YOUR_KEY_HERE",
+  "client_email": "fgac-proxy@fgac.ai",
+  "token_uri": "https://fgac.ai/api/auth/token"
+}
+EOF
 ```
 
-**Production Setup** (full proxy test):
-1. Create a proxy key via the FGAC.AI dashboard
-2. Save as a Service Account JSON token:
-   ```bash
-   mkdir -p ~/.openclaw/gmail-fgac/tokens
-   cat > ~/.openclaw/gmail-fgac/tokens/<label>.json << EOF
-   {
-     "type": "service_account",
-     "private_key_id": "sk_proxy_YOUR_KEY_HERE",
-     "client_email": "fgac-proxy@fgac.ai",
-     "token_uri": "https://fgac.ai/api/auth/token"
-   }
-   EOF
-   ```
+### Step 3: Set the Proxy URL for Local Testing
+
+The skill defaults to production (`https://fgac.ai/api/proxy`). For local dev testing, override via environment variable:
+
+```bash
+export FGAC_PROXY_URL=http://localhost:3000/api/proxy
+```
+
+> [!IMPORTANT]
+> All test commands below assume `FGAC_PROXY_URL` is set to your local dev server. The skill uses the `api_endpoint` override pattern — in Node.js, this is the `rootUrl` parameter passed to the Google SDK.
 
 ## Dependencies
 - Must pass `01_signup_and_credential_workflow.md` first to ensure credentials exist.
@@ -46,7 +57,7 @@ This test validates the gmail-fgac skill that is distributed to OpenClaw users. 
 - `src/app/api/auth/token/route.ts` (token exchange)
 - `src/db/schema.ts` (access control schema)
 
-> **Run this test after every skill modification to catch regressions.** At minimum, run the **Local Dev Smoke Test** (below) to validate skill code correctness. Run the full production tests before any release.
+> **Run this test after every skill modification to catch regressions.**
 
 ---
 
@@ -72,23 +83,24 @@ This test validates the gmail-fgac skill that is distributed to OpenClaw users. 
    grep -rn "universe_domain" docs/skills/gmail-fgac/scripts/*.js | grep -v "// " | grep -v "DEPRECATED"
    # Must return 0 active references
    ```
-4. Verify the skill uses `api_endpoint` / `rootUrl` pattern:
+4. Verify the skill uses the `api_endpoint` override pattern:
    ```bash
-   grep -n "api/proxy\|rootUrl\|api_endpoint" docs/skills/gmail-fgac/scripts/gmail.js
-   # Must return at least 1 match
+   grep -n "FGAC_PROXY_URL\|api/proxy\|rootUrl" docs/skills/gmail-fgac/scripts/gmail.js
+   # Must return at least 1 match for each
    ```
 
-**Expected Outcome**: All files present. Dependencies install cleanly. Skill code uses explicit endpoint override, not `universe_domain`.
+**Expected Outcome**: All files present. Dependencies install cleanly. Skill code uses the `api_endpoint` override pattern (configured via `FGAC_PROXY_URL` env var, implemented as `rootUrl` in the Google Node.js SDK), not `universe_domain`.
 
 ---
 
-### 2. Labels — Basic Connectivity
-**Objective**: Validate the simplest API call works through the proxy. This is the "smoke test" for the full auth + proxy chain.
+### 2. Labels — Basic Connectivity (Through Proxy)
+**Objective**: Validate the simplest API call works through the FGAC.AI proxy. This is the "smoke test" for the full auth + proxy chain.
 
 **Steps (Command Line)**:
 ```bash
-node docs/skills/gmail-fgac/scripts/gmail.js \
-  --account <label> \
+FGAC_PROXY_URL=http://localhost:3000/api/proxy \
+  node docs/skills/gmail-fgac/scripts/gmail.js \
+  --account qa-test \
   --action labels
 ```
 
@@ -98,52 +110,46 @@ node docs/skills/gmail-fgac/scripts/gmail.js \
 3. Output contains standard Gmail labels (INBOX, SENT, DRAFT, TRASH, SPAM).
 4. No `401`, `403`, or `invalid_grant` errors in output.
 
-**Expected Outcome**: The skill connects to Gmail through the FGAC.AI proxy and returns a list of labels. This confirms: authentication works, endpoint routing works, proxy forwards to Google successfully.
+**Expected Outcome**: The skill connects to Gmail **through the FGAC.AI proxy** and returns a list of labels. This confirms: proxy key authentication works, `api_endpoint` routing works, proxy forwards to Google successfully.
 
 ---
 
-### 3. List — Recent Emails
-**Objective**: Validate that the skill can list emails with search queries.
+### 3. List — Recent Emails (Through Proxy)
+**Objective**: Validate that the skill can list emails through the proxy.
 
 **Steps (Command Line)**:
 ```bash
-# List 5 most recent emails
-node docs/skills/gmail-fgac/scripts/gmail.js \
-  --account <label> \
+FGAC_PROXY_URL=http://localhost:3000/api/proxy \
+  node docs/skills/gmail-fgac/scripts/gmail.js \
+  --account qa-test \
   --action list \
   --max 5
-
-# List unread emails
-node docs/skills/gmail-fgac/scripts/gmail.js \
-  --account <label> \
-  --action list \
-  --query "is:unread" \
-  --max 3
 ```
 
 **Validation**:
 1. Output is valid JSON with `count`, `messages` array.
 2. Each message has: `id`, `threadId`, `from`, `to`, `subject`, `date`, `snippet`.
-3. The `--query "is:unread"` filter actually narrows results (if unread emails exist).
-4. The `--max` parameter limits the number of results.
+3. The `--max` parameter limits the number of results.
 
-**Expected Outcome**: The skill successfully lists and filters emails through the proxy.
+**Expected Outcome**: The skill successfully lists emails through the proxy.
 
 ---
 
-### 4. Read — Message Content
-**Objective**: Validate that the skill can read full message content.
+### 4. Read — Message Content (Through Proxy)
+**Objective**: Validate that the skill can read full message content through the proxy.
 
 **Steps (Command Line)**:
 ```bash
 # First, get a message ID from the list action
-MSG_ID=$(node docs/skills/gmail-fgac/scripts/gmail.js \
-  --account <label> --action list --max 1 \
+MSG_ID=$(FGAC_PROXY_URL=http://localhost:3000/api/proxy \
+  node docs/skills/gmail-fgac/scripts/gmail.js \
+  --account qa-test --action list --max 1 \
   | python3 -c "import json,sys; print(json.load(sys.stdin)['messages'][0]['id'])")
 
 # Read that message
-node docs/skills/gmail-fgac/scripts/gmail.js \
-  --account <label> \
+FGAC_PROXY_URL=http://localhost:3000/api/proxy \
+  node docs/skills/gmail-fgac/scripts/gmail.js \
+  --account qa-test \
   --action read \
   --message-id "$MSG_ID"
 ```
@@ -165,8 +171,9 @@ node docs/skills/gmail-fgac/scripts/gmail.js \
 
 **Steps (Command Line)**:
 ```bash
-node docs/skills/gmail-fgac/scripts/gmail.js \
-  --account <label> \
+FGAC_PROXY_URL=http://localhost:3000/api/proxy \
+  node docs/skills/gmail-fgac/scripts/gmail.js \
+  --account qa-test \
   --action send \
   --to "<whitelisted-email>" \
   --subject "FGAC QA Test - $(date +%s)" \
@@ -186,8 +193,9 @@ node docs/skills/gmail-fgac/scripts/gmail.js \
 
 **Steps (Command Line)**:
 ```bash
-node docs/skills/gmail-fgac/scripts/gmail.js \
-  --account <label> \
+FGAC_PROXY_URL=http://localhost:3000/api/proxy \
+  node docs/skills/gmail-fgac/scripts/gmail.js \
+  --account qa-test \
   --action send \
   --to "unauthorized-target@evil-corp.com" \
   --subject "This should be blocked" \
@@ -217,13 +225,15 @@ node docs/skills/gmail-fgac/scripts/gmail.js \
    - Body: "Your verification code is 123456. Do not share this."
 2. List emails and find the blacklisted message ID:
    ```bash
-   node docs/skills/gmail-fgac/scripts/gmail.js \
-     --account <label> --action list --query "2FA Code" --max 1
+   FGAC_PROXY_URL=http://localhost:3000/api/proxy \
+     node docs/skills/gmail-fgac/scripts/gmail.js \
+     --account qa-test --action list --query "2FA Code" --max 1
    ```
 3. Attempt to read the blacklisted message:
    ```bash
-   node docs/skills/gmail-fgac/scripts/gmail.js \
-     --account <label> \
+   FGAC_PROXY_URL=http://localhost:3000/api/proxy \
+     node docs/skills/gmail-fgac/scripts/gmail.js \
+     --account qa-test \
      --action read \
      --message-id "<id-from-step-2>" \
      2>&1
@@ -245,13 +255,15 @@ node docs/skills/gmail-fgac/scripts/gmail.js \
 **Steps (Command Line)**:
 ```bash
 # Get a message ID to forward
-MSG_ID=$(node docs/skills/gmail-fgac/scripts/gmail.js \
-  --account <label> --action list --max 1 \
+MSG_ID=$(FGAC_PROXY_URL=http://localhost:3000/api/proxy \
+  node docs/skills/gmail-fgac/scripts/gmail.js \
+  --account qa-test --action list --max 1 \
   | python3 -c "import json,sys; print(json.load(sys.stdin)['messages'][0]['id'])")
 
 # Forward to whitelisted recipient
-node docs/skills/gmail-fgac/scripts/gmail.js \
-  --account <label> \
+FGAC_PROXY_URL=http://localhost:3000/api/proxy \
+  node docs/skills/gmail-fgac/scripts/gmail.js \
+  --account qa-test \
   --action forward \
   --message-id "$MSG_ID" \
   --to "<whitelisted-email>"
@@ -263,8 +275,9 @@ node docs/skills/gmail-fgac/scripts/gmail.js \
 
 ```bash
 # Forward to blocked recipient — should fail
-node docs/skills/gmail-fgac/scripts/gmail.js \
-  --account <label> \
+FGAC_PROXY_URL=http://localhost:3000/api/proxy \
+  node docs/skills/gmail-fgac/scripts/gmail.js \
+  --account qa-test \
   --action forward \
   --message-id "$MSG_ID" \
   --to "unauthorized-target@evil-corp.com" \
@@ -306,17 +319,17 @@ node docs/skills/gmail-fgac/scripts/gmail.js \
 ```bash
 # Read without message-id
 node docs/skills/gmail-fgac/scripts/gmail.js \
-  --account <label> --action read 2>&1
+  --account qa-test --action read 2>&1
 # Expected: "--message-id is required for read"
 
 # Send without --to
 node docs/skills/gmail-fgac/scripts/gmail.js \
-  --account <label> --action send --subject "Test" 2>&1
+  --account qa-test --action send --subject "Test" 2>&1
 # Expected: "--to is required for send"
 
 # Forward without --message-id
 node docs/skills/gmail-fgac/scripts/gmail.js \
-  --account <label> --action forward --to test@test.com 2>&1
+  --account qa-test --action forward --to test@test.com 2>&1
 # Expected: "--message-id is required for forward"
 
 # No --account at all
@@ -340,8 +353,9 @@ node docs/skills/gmail-fgac/scripts/gmail.js --action labels 2>&1
 # Validate each action's output is valid JSON
 for action in labels list; do
   echo "--- Testing $action ---"
-  node docs/skills/gmail-fgac/scripts/gmail.js \
-    --account <label> --action $action --max 2 \
+  FGAC_PROXY_URL=http://localhost:3000/api/proxy \
+    node docs/skills/gmail-fgac/scripts/gmail.js \
+    --account qa-test --action $action --max 2 \
     | python3 -c "import json,sys; json.load(sys.stdin); print('VALID JSON')" \
     || echo "INVALID JSON for $action"
 done
@@ -356,14 +370,14 @@ done
 
 ---
 
-## Local Dev Smoke Test (Minimum Required)
+## Smoke Test (Copy-Paste)
 
-Run this after any skill code change. Requires only an OAuth token (no proxy key needed).
+Run this after any skill code change. Tests the skill **through the proxy** end-to-end.
 
 ```bash
 cd docs/skills/gmail-fgac/scripts
-
-LABEL=ken  # Replace with your OAuth token label
+export FGAC_PROXY_URL=http://localhost:3000/api/proxy
+LABEL=qa-test  # Replace with your token label
 
 echo "=== 1. Argument validation ==="
 node gmail.js --action labels 2>&1 | grep -q "Usage:" && echo "PASS: no --account" || echo "FAIL"
@@ -374,17 +388,17 @@ node gmail.js --account $LABEL --action bogus 2>&1 | grep -q "Unknown action" &&
 node gmail.js --account nonexistent --action labels 2>&1 | grep -q "No token found" && echo "PASS: invalid account" || echo "FAIL"
 
 echo ""
-echo "=== 2. Labels (smoke test — auth + Gmail API) ==="
+echo "=== 2. Labels (through proxy — auth + routing + Gmail API) ==="
 node gmail.js --account $LABEL --action labels \
   | python3 -c "import json,sys; d=json.load(sys.stdin); names=[l['name'] for l in d['labels']]; print(f'Labels: {d[\"count\"]}  INBOX:{\"INBOX\" in names}  SENT:{\"SENT\" in names}'); sys.exit(0 if d['count']>0 else 1)"
 
 echo ""
-echo "=== 3. List (data flow) ==="
+echo "=== 3. List (through proxy — data flow) ==="
 node gmail.js --account $LABEL --action list --max 2 \
   | python3 -c "import json,sys; d=json.load(sys.stdin); m=d['messages'][0]; print(f'Messages: {d[\"count\"]}  Has id/subject/from: {bool(m.get(\"id\"))}/{bool(m.get(\"subject\"))}/{bool(m.get(\"from\"))}'); sys.exit(0 if d['count']>0 else 1)"
 
 echo ""
-echo "=== 4. Read (full message) ==="
+echo "=== 4. Read (through proxy — full message) ==="
 MSG_ID=$(node gmail.js --account $LABEL --action list --max 1 2>/dev/null | python3 -c "import json,sys; print(json.load(sys.stdin)['messages'][0]['id'])")
 node gmail.js --account $LABEL --action read --message-id "$MSG_ID" \
   | python3 -c "import json,sys; d=json.load(sys.stdin); print(f'Subject: {d[\"subject\"][:60]}'); print(f'Body len: {len(d.get(\"body\",\"\"))}'); sys.exit(0 if d.get('body') else 1)"
@@ -393,42 +407,10 @@ echo ""
 echo "=== 5. JSON output contract ==="
 for action in labels list; do
   node gmail.js --account $LABEL --action $action --max 2 2>/dev/null \
-    | python3 -c "import json,sys; json.load(sys.stdin); print(f'  {\"$action\"}: VALID JSON')" \
+    | python3 -c "import json,sys; json.load(sys.stdin); print(f'  $action: VALID JSON')" \
     || echo "  $action: INVALID JSON"
 done
 
 echo ""
-echo "--- Local dev smoke test complete ---"
+echo "--- Smoke test complete ---"
 ```
-
----
-
-## Production Smoke Test (Full FGAC Proxy)
-
-Run this before releases. Requires a `sk_proxy_...` key saved as a Service Account token (see Prerequisites above).
-
-```bash
-cd docs/skills/gmail-fgac/scripts
-
-LABEL=qa-test  # Replace with your Service Account token label
-
-# 1. Labels (smoke test — auth + proxy + Gmail API)
-node gmail.js --account $LABEL --action labels \
-  | python3 -c "import json,sys; d=json.load(sys.stdin); print(f'Labels: {d[\"count\"]}'); exit(0 if d['count'] > 0 else 1)"
-
-# 2. List (data flow through proxy)
-node gmail.js --account $LABEL --action list --max 2 \
-  | python3 -c "import json,sys; d=json.load(sys.stdin); print(f'Messages: {d[\"count\"]}'); exit(0 if d['count'] >= 0 else 1)"
-
-# 3. Read (full message through proxy)
-MSG_ID=$(node gmail.js --account $LABEL --action list --max 1 | python3 -c "import json,sys; print(json.load(sys.stdin)['messages'][0]['id'])")
-node gmail.js --account $LABEL --action read --message-id "$MSG_ID" \
-  | python3 -c "import json,sys; d=json.load(sys.stdin); print(f'Subject: {d[\"subject\"]}'); exit(0 if d.get('body') else 1)"
-
-# 4. Blocked send (security — requires send rules configured)
-node gmail.js --account $LABEL --action send --to "blocked@evil.com" --subject "blocked" --body "test" 2>&1 \
-  | grep -q "403\|Forbidden" && echo "BLOCKED OK" || echo "SECURITY FAILURE"
-
-echo "--- Production smoke test complete ---"
-```
-

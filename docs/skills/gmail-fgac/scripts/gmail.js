@@ -114,7 +114,7 @@ async function run() {
   // Build gmail client with explicit FGAC.AI proxy endpoint
   // NOTE: Do NOT use universe_domain — it does not work for Workspace APIs.
   // See docs/adr/001_universe_domain_rejection.md for details.
-  const PROXY_URL = 'https://fgac.ai/api/proxy';
+  const PROXY_URL = process.env.FGAC_PROXY_URL || 'https://fgac.ai/api/proxy';
   
   if (token.type === 'service_account') {
     // FGAC.AI service account: use proxy key as Bearer token + explicit rootUrl
