@@ -38,37 +38,77 @@ Your agent never sees or touches your real Google credentials.
    - Your own email is always available (green **"You"** badge).
    - Delegated emails appear with an indigo **"Delegated"** badge (see [Delegation](#delegation-access-to-other-peoples-email) below).
 4. Click **"Create Key"**.
-5. Your browser will automatically download a `fgac-credentials.json` Service Account file.
+5. **Copy the key** — it looks like `sk_proxy_YOUR_KEY_HERE`.
 
 > [!IMPORTANT]
-> Save this JSON file somewhere secure. It explicitly contains your agent's private cryptographic key. For security, we do not store this private key on our servers, so this is the **only** time you can download it.
+> Save your key somewhere secure. It will be visible on the dashboard, but treat it like a password.
 
-### Step 3: Configure Your AI Agent (Zero Code Changes)
+### Step 3: Configure Your AI Agent
 
-If you are using standard Google Client Libraries (Python, Node, Go, Java), integration is literally zero code changes. You do **not** need to manually override API endpoints or hosts.
+Point your agent at the SecureAgent proxy instead of `googleapis.com`. Replace the base URL and use your proxy key as the Bearer token.
 
-Simply move the downloaded JSON file to your server or workspace, and set the standard Google authentication environment variable:
+> **Note:** Each Google SDK uses a different parameter name to override the API base URL. Python uses `api_endpoint` (which replaces `rootUrl + servicePath`, so you must include `/gmail/v1`). Node.js uses `rootUrl` (which only replaces the domain — the SDK appends `/gmail/v1/` automatically).
 
-```bash
-export GOOGLE_APPLICATION_CREDENTIALS="/var/secrets/fgac-credentials.json"
+#### Python (Google API Client)
+
+```python
+from googleapiclient.discovery import build
+from google.oauth2.credentials import Credentials
+
+# Your SecureAgent proxy key (NOT a Google token)
+PROXY_KEY = "sk_proxy_YOUR_KEY_HERE"
+
+# Create a credential object with your proxy key
+creds = Credentials(token=PROXY_KEY)
+
+# Build the Gmail service, pointing at SecureAgent instead of Google.
+# api_endpoint replaces rootUrl + servicePath, so include "/gmail/v1".
+service = build(
+    "gmail",
+    "v1",
+    credentials=creds,
+    client_options={"api_endpoint": "https://gmail.fgac.ai/gmail/v1"}
+)
+
+# Use the Gmail API normally
+results = service.users().messages().list(userId="me", maxResults=5).execute()
+messages = results.get("messages", [])
+for msg in messages:
+    print(f"Message ID: {msg['id']}")
 ```
 
-Because our JSON file includes `"universe_domain": "fgac.ai"`, the Google SDK will naturally and automatically map all requests to SecureAgent's proxy endpoints.
+#### Node.js (Google APIs)
 
-#### Optional: Manual/Legacy API Key Injection
-If you aren't using the official Google SDKs, you can manually point your HTTP clients at the SecureAgent proxy (`https://fgac.ai/api/proxy`). You will need the raw proxy key (`sk_proxy_...`) which is still viewable on the dashboard.
+```javascript
+const { google } = require("googleapis");
 
-**cURL / Any HTTP Client**
+const PROXY_KEY = "sk_proxy_YOUR_KEY_HERE";
 
-```bash
-curl -H "Authorization: Bearer sk_proxy_SAMPLE123" \
-  "https://fgac.ai/api/proxy/gmail/v1/users/me/messages?maxResults=5"
+const auth = new google.auth.OAuth2();
+auth.setCredentials({ access_token: PROXY_KEY });
+
+// rootUrl replaces only the domain. The SDK appends /gmail/v1/ automatically.
+const gmail = google.gmail({
+  version: "v1",
+  auth,
+  rootUrl: "https://gmail.fgac.ai/",
+});
+
+const res = await gmail.users.messages.list({ userId: "me", maxResults: 5 });
+console.log(res.data.messages);
 ```
 
-**Claude / LLM Tool Use**
+#### cURL / Any HTTP Client
 
-If your LLM supports tool use or function calling natively, configure the Gmail tool to use:
-- **Base URL**: `https://fgac.ai/api/proxy`
+```bash
+curl -H "Authorization: Bearer sk_proxy_YOUR_KEY_HERE" \
+  "https://gmail.fgac.ai/gmail/v1/users/me/messages?maxResults=5"
+```
+
+#### Claude / LLM Tool Use
+
+If your LLM supports tool use or function calling, configure the Gmail tool to use:
+- **Base URL**: `https://gmail.fgac.ai/gmail/v1`
 - **Auth Header**: `Authorization: Bearer sk_proxy_...`
 - **Gmail user**: `me` (resolves to your email) or a specific email address
 

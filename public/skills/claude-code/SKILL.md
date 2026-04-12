@@ -17,7 +17,7 @@ This skill ensures Claude Code operates securely via the fgac.ai proxy when mana
 When the user asks you to interact with Gmail (e.g., via a Python script or direct API calls within the workspace), you must adhere to the following constraints:
 
 1. **Never use standard Google `credentials.json` or OAuth flows for Gmail.**
-2. **Override the API Endpoint**: All requests must be sent to `https://fgac.ai/api/proxy` instead of `googleapis.com`.
+2. **Override the API Endpoint**: All requests must be routed through `https://gmail.fgac.ai` instead of `googleapis.com`.
 3. **Authentication**: Use the `FGAC_PROXY_KEY` as the Authorization Bearer token.
 
 ### Code Examples for Workspace Scripts
@@ -30,17 +30,17 @@ from google.oauth2.credentials import Credentials
 import os
 
 PROXY_KEY = os.environ.get("FGAC_PROXY_KEY")
-PROXY_URL = "https://fgac.ai/api/proxy"
 
 # Create a credential object with the proxy key
 creds = Credentials(token=PROXY_KEY)
 
-# Point the service at fgac.ai
+# Point the service at gmail.fgac.ai.
+# api_endpoint replaces rootUrl + servicePath, so include "/gmail/v1".
 service = build(
     "gmail",
     "v1",
     credentials=creds,
-    client_options={"api_endpoint": PROXY_URL}
+    client_options={"api_endpoint": "https://gmail.fgac.ai/gmail/v1"}
 )
 ```
 

@@ -1,5 +1,5 @@
-import { USER_A_EMAIL, USER_B_EMAIL } from './config.js';
-import { listMessages, getMessage, sendEmail, trashMessage } from './gmail_api.js';
+import { USER_A_EMAIL, USER_B_EMAIL, ROOT_URL } from './config.js';
+import { listMessages, getMessage, sendEmail, trashMessage, listLabels } from './gmail_api.js';
 
 const scenarios = {
   '02_whitelist_send': async (email) => {
@@ -29,8 +29,16 @@ const scenarios = {
   },
   'basic_access_test': async (email) => {
     console.log(`\n--- Running Scenario: basic_access_test for ${email} ---`);
+    console.log(`Using Google SDK with rootUrl: ${ROOT_URL}/`);
+    console.log(`(SDK will send requests to ${ROOT_URL}/gmail/v1/users/${email}/...)`);
+
+    console.log(`\n1. Listing labels...`);
+    const resLabels = await listLabels(email);
+    console.log(`   Labels Status: ${resLabels.status} — Count: ${resLabels.data?.labels?.length || 0}`);
+
+    console.log(`\n2. Listing messages...`);
     const resList = await listMessages(email, 1);
-    console.log(`List Messages Status: ${resList.status}`, resList.data);
+    console.log(`   List Messages Status: ${resList.status}`, resList.data);
   }
 };
 
@@ -54,6 +62,7 @@ async function main() {
   }
 
   console.log(`Target Email: ${targetEmail}`);
+  console.log(`Root URL: ${ROOT_URL}`);
   await scenarios[scenario](targetEmail);
 }
 

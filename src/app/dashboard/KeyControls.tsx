@@ -78,6 +78,16 @@ export function KeyControls({
         const result = await createProxyKey(formData);
         
         if (result?.privateKey && result?.proxyKey) {
+          // Show the key and endpoint to the user (primary flow)
+          const proxyEndpoint = "https://gmail.fgac.ai";
+          const keyDisplay = result.proxyKey;
+          
+          // Copy key to clipboard
+          try {
+            await navigator.clipboard.writeText(keyDisplay);
+          } catch { /* Clipboard may not be available */ }
+
+          // Prepare SA JSON for optional download (secondary flow)
           const jsonContent = JSON.stringify({
             type: "service_account",
             project_id: "fgac-proxy",
@@ -89,21 +99,37 @@ export function KeyControls({
             token_uri: "https://oauth2.fgac.ai/token",
             auth_provider_x509_cert_url: "https://www.fgac.ai/oauth2/v1/certs",
             client_x509_cert_url: `https://www.fgac.ai/robot/v1/metadata/x509/${result.proxyKey}%40fgac.ai`,
-            universe_domain: "fgac.ai"
           }, null, 2);
           
-          const blob = new Blob([jsonContent], { type: 'application/json' });
-          const url = URL.createObjectURL(blob);
-          const a = document.createElement('a');
-          a.style.display = 'none';
-          a.href = url;
-          a.download = `fgac-credentials-${result.proxyKey.substring(0, 16)}.json`;
-          document.body.appendChild(a);
-          a.click();
-          document.body.removeChild(a);
-          URL.revokeObjectURL(url);
+          const downloadSaJson = () => {
+            const blob = new Blob([jsonContent], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.style.display = 'none';
+            a.href = url;
+            a.download = `fgac-credentials-${result.proxyKey.substring(0, 16)}.json`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+          };
+
+          window.alert(
+            `✅ API Key Created!\n\n` +
+            `Your proxy key: ${keyDisplay}\n` +
+            `Endpoint: ${proxyEndpoint}\n\n` +
+            `The key has been copied to your clipboard.\n\n` +
+            `Configure your agent:\n` +
+            `  Python: client_options={"api_endpoint": "${proxyEndpoint}/gmail/v1"}\n` +
+            `  Node.js: rootUrl: "${proxyEndpoint}/"\n` +
+            `  cURL:    ${proxyEndpoint}/gmail/v1/users/me/messages\n` +
+            `  Header:  Authorization: Bearer ${keyDisplay}`
+          );
           
-          window.alert("Your Service Account JSON Credentials have been generated and downloaded. Please move fgac-credentials.json to your server securely. The private key will not be shown again.");
+          // Offer SA JSON as a secondary download
+          if (window.confirm("Would you also like to download the Service Account JSON file? (Advanced — requires rootUrl override in your code)")) {
+            downloadSaJson();
+          }
         }
         
         setIsModalOpen(false);

@@ -20,4 +20,9 @@ if (fs.existsSync(configPath)) {
 export const USER_A_EMAIL = emails.USER_A_EMAIL;
 export const USER_B_EMAIL = emails.USER_B_EMAIL;
 export const PROXY_API_KEY = process.env.PROXY_API_KEY || '';
-export const PROXY_URL = process.env.PROXY_URL || 'http://localhost:3000/api/proxy';
+
+// ROOT_URL is the domain the Google SDK will use as rootUrl.
+// The SDK appends /gmail/v1/ automatically — any path in rootUrl gets stripped.
+// For local dev: http://localhost:3000 (middleware rewrites /gmail/v1/* → /api/proxy/gmail/v1/*)
+// For production: https://gmail.fgac.ai (subdomain routing handles the rewrite)
+export const ROOT_URL = process.env.FGAC_ROOT_URL || 'https://gmail.fgac.ai';

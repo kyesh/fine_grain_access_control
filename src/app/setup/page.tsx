@@ -76,17 +76,17 @@ export default function SetupPage() {
                 <span className="bg-emerald-50 text-emerald-700 w-6 h-6 rounded-full inline-flex items-center justify-center text-sm font-medium">
                   2
                 </span>
-                Download Credentials
+                Generate Key
               </h3>
-              <p className="text-gray-600 mb-4 leading-relaxed">
-                Create a new API Key in the dashboard. We will generate and download a Google-compatible Service Account JSON file automatically for you.
+              <p className="text-gray-600 mb-6 leading-relaxed">
+                Create a new API Key in the dashboard. Select which email
+                inboxes this key should have access to (including delegated
+                accounts).
               </p>
-              <div className="p-3 bg-gray-50 border border-emerald-200 rounded-xl flex items-center justify-center font-mono text-sm text-emerald-700 font-semibold mb-3 shadow-inner">
-                fgac-credentials-***.json
+              <div className="p-3 bg-gray-50 border border-gray-200 rounded-xl flex items-center justify-between font-mono text-xs text-emerald-700">
+                <span className="truncate">sk_proxy_****************</span>
+                <Copy className="w-4 h-4 text-emerald-600/50" />
               </div>
-              <p className="text-xs text-slate-500 leading-relaxed">
-                Set <span className="font-mono bg-slate-100 text-slate-800 px-1 rounded">GOOGLE_APPLICATION_CREDENTIALS</span> pointing to this file. <strong>Zero code changes needed.</strong>
-              </p>
             </div>
           </div>
         </section>

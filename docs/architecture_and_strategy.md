@@ -11,20 +11,27 @@ The goal is to provide a proxy or gateway that intercepts agent requests to Goog
 2. **Tokens and Bypassing**: Giving self-modifying agents real Google Access Tokens is dangerous. An agent could simply rewrite its code to bypass our proxy and talk directly to `googleapis.com`. We must issue "Fake" tokens from a **Token Vault** that standard SDKs will pass to our proxy. If the agent tries to use the fake token directly with Google, it receives a 401 Unauthorized.
 3. **The "Zero Code" Myth**: It is architecturally impossible to securely reroute official Google SDK HTTP traffic to a proxy using *only* a custom credential file. The developer must make a code configuration change (specifying an API endpoint override) or the deployment environment must enforce traffic routing via proxy variables/hijacking.
 
+> **Note (April 2026):** We tested Google's `universe_domain` feature as a potential workaround to the Zero Code constraint. It does not work for Google Workspace APIs (Gmail, Calendar, Drive). The `googleapis` npm package and `google-api-python-client` hardcode API endpoints to `*.googleapis.com` regardless of `universe_domain`. See [ADR-001](adr/001_universe_domain_rejection.md) for full technical evidence.
+
 ## 3. The 3-Pronged Go-To-Market Strategy
 
 To balance developer experience (DX) and perfect security across our target markets, we will pursue the following structured approach:
 
 ### Prong 1: Developer API Endpoint Override (PLG)
 **Target**: Individual developers, startups, and open-source agent tinkerers.
-**Approach**: We issue developers a fake `proxy_credentials.json` file. The developer uses the standard Google SDK but adds a single line of configuration to override the default API endpoint.
+**Approach**: We issue developers a fake `proxy_credentials.json` file. The developer uses the standard Google SDK but adds a single line of configuration to override the default root URL.
 
-*   **Python Example**: `client_options={'api_endpoint': 'https://proxy.ourdomain.com'}`
-*   **Node.js Example**: `rootUrl: 'https://proxy.ourdomain.com'`
+> **Note:** Each Google SDK uses a different parameter to override the API base URL, and the values differ:
+> - **Python `api_endpoint`** replaces `rootUrl + servicePath`. You must include the service path (e.g., `/gmail/v1`).
+> - **Node.js `rootUrl`** replaces only the domain. The SDK appends the service path automatically. Any path in `rootUrl` is stripped.
+
+*   **Python Example**: `client_options={'api_endpoint': 'https://gmail.proxy.ourdomain.com/gmail/v1'}`
+*   **Node.js Example**: `rootUrl: 'https://gmail.proxy.ourdomain.com/'`
+*   **cURL Example**: `curl https://gmail.proxy.ourdomain.com/gmail/v1/users/me/messages`
 
 **Pros**: Low friction, uses official SDKs, completely prevents agent bypass (via the fake token).
 **Flaws & Risks**:
-*   **The "Leaky Abstraction"**: Google’s client libraries are finicky about pagination and file uploads when using custom endpoints. If an agent tries to upload an attachment to an email, the SDK might attempt to hit a specialized upload URI (like `https://www.googleapis.com/upload/gmail/v1/...` instead of the standard REST URI). The proxy must be engineered to catch and correctly map **all** varieties of Google's endpoint structures, or the standard code will mysteriously crash.
+*   **The "Leaky Abstraction"**: Google's client libraries are finicky about pagination and file uploads when using custom endpoints. If an agent tries to upload an attachment to an email, the SDK might attempt to hit a specialized upload URI (like `https://www.googleapis.com/upload/gmail/v1/...` instead of the standard REST URI). The proxy must be engineered to catch and correctly map **all** varieties of Google's endpoint structures, or the standard code will mysteriously crash.
 
 ### Prong 2: Wrapper SDKs (Mid-Market)
 **Target**: Application developers wanting a completely "zero-thought" integration.

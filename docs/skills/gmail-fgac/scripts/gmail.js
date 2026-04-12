@@ -1,0 +1,445 @@
+/**
+ * Gmail script for gmail-fgac skill — read, send, and forward emails via Gmail API.
+ * 
+ * When configured with FGAC.AI credentials, all requests are routed through
+ * the FGAC.AI security proxy for fine-grain access control.
+ * 
+ * Usage:
+ *   node gmail.js --account <label> --action <action> [options]
+ * 
+ * Actions:
+ *   list                        List recent emails
+ *   read                        Read a specific email
+ *   send                        Send a new email
+ *   forward                     Forward an email to another recipient
+ *   labels                      List all labels
+ *   attachment                  Download an attachment
+ * 
+ * Options:
+ *   --query <text>              Gmail search query (e.g., "is:unread")
+ *   --max <number>              Max results (default: 10)
+ *   --message-id <id>           Message ID (for read/forward/attachment)
+ *   --to <email>                Recipient (for send/forward)
+ *   --subject <text>            Subject line (for send)
+ *   --body <text>               Email body (for send)
+ *   --attachment-id <id>        Attachment ID (for attachment action)
+ *   --filename <name>           Filename to save attachment as
+ *   --out-dir <path>            Output directory for attachment (default: /tmp)
+ *   --label <id>                Label ID filter (default: INBOX)
+ */
+
+const fs = require('fs');
+const path = require('path');
+const { google } = require('googleapis');
+const { getAuthClient, parseArgs, loadToken } = require('./shared');
+
+const args = parseArgs(process.argv);
+
+if (!args.account) {
+  console.error('Usage: node gmail.js --account <label> --action <action>');
+  process.exit(1);
+}
+
+const action = args.action || 'list';
+const maxResults = parseInt(args.max || '10', 10);
+
+/**
+ * Encode a string to base64url format (for Gmail API raw messages).
+ */
+function encodeBase64Url(str) {
+  return Buffer.from(str)
+    .toString('base64')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '');
+}
+
+/**
+ * Decode base64url encoded string.
+ */
+function decodeBase64Url(str) {
+  if (!str) return '';
+  const base64 = str.replace(/-/g, '+').replace(/_/g, '/');
+  return Buffer.from(base64, 'base64').toString('utf8');
+}
+
+/**
+ * Extract the plain text body from a message payload.
+ */
+function extractBody(payload) {
+  // Simple message with body data
+  if (payload.body && payload.body.data) {
+    return decodeBase64Url(payload.body.data);
+  }
+
+  // Multipart message — look for text/plain first, then text/html
+  if (payload.parts) {
+    // Try text/plain first
+    for (const part of payload.parts) {
+      if (part.mimeType === 'text/plain' && part.body && part.body.data) {
+        return decodeBase64Url(part.body.data);
+      }
+    }
+    // Recurse into nested multipart
+    for (const part of payload.parts) {
+      if (part.parts) {
+        const nested = extractBody(part);
+        if (nested) return nested;
+      }
+    }
+    // Fall back to text/html
+    for (const part of payload.parts) {
+      if (part.mimeType === 'text/html' && part.body && part.body.data) {
+        const html = decodeBase64Url(part.body.data);
+        // Strip HTML tags for readability
+        return html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+      }
+    }
+  }
+
+  return '(no readable body)';
+}
+
+/**
+ * Get header value by name.
+ */
+function getHeader(headers, name) {
+  const h = headers.find(h => h.name.toLowerCase() === name.toLowerCase());
+  return h ? h.value : null;
+}
+
+async function run() {
+  const token = loadToken(args.account);
+
+  // Override the root URL to route all requests through the FGAC.AI proxy.
+  // The Node.js SDK's rootUrl replaces only the domain — the SDK appends
+  // /gmail/v1/ automatically. Any path in rootUrl gets stripped.
+  //   Node.js: rootUrl: 'https://gmail.fgac.ai/'
+  //   Python:  api_endpoint: 'https://gmail.fgac.ai/gmail/v1'
+  //            (api_endpoint replaces rootUrl + servicePath, so include /gmail/v1)
+  // NOTE: Do NOT use universe_domain — it does not work for Workspace APIs.
+  // See docs/adr/001_universe_domain_rejection.md for details.
+  const ROOT_URL = process.env.FGAC_ROOT_URL || 'https://gmail.fgac.ai';
+  
+  if (token.type === 'service_account') {
+    // FGAC.AI service account: use proxy key as Bearer token + root URL override
+    const proxyKey = token.private_key_id; // The sk_proxy_xxx key
+    const auth = new google.auth.OAuth2();
+    auth.setCredentials({ access_token: proxyKey });
+    
+    const gmail = google.gmail({
+      version: 'v1',
+      auth,
+      rootUrl: ROOT_URL + '/',  // SDK appends /gmail/v1/ to this
+    });
+
+    await executeAction(gmail);
+  } else {
+    // Standard OAuth token (non-FGAC.AI path)
+    const auth = getAuthClient(args.account);
+    const gmail = google.gmail({ version: 'v1', auth });
+    await executeAction(gmail);
+  }
+}
+
+async function executeAction(gmail) {
+  switch (action) {
+    case 'list': {
+      const params = {
+        userId: 'me',
+        maxResults,
+      };
+
+      if (args.query) {
+        params.q = args.query;
+      }
+
+      if (args.label) {
+        params.labelIds = [args.label];
+      }
+
+      const res = await gmail.users.messages.list(params);
+      const messageList = res.data.messages || [];
+
+      if (messageList.length === 0) {
+        console.log(JSON.stringify({
+          account: args.account,
+          query: args.query || null,
+          count: 0,
+          messages: [],
+        }, null, 2));
+        break;
+      }
+
+      // Fetch metadata for each message
+      const messages = await Promise.all(
+        messageList.map(async (m) => {
+          const msg = await gmail.users.messages.get({
+            userId: 'me',
+            id: m.id,
+            format: 'metadata',
+            metadataHeaders: ['From', 'To', 'Subject', 'Date'],
+          });
+          const headers = msg.data.payload.headers;
+          return {
+            id: msg.data.id,
+            threadId: msg.data.threadId,
+            snippet: msg.data.snippet,
+            from: getHeader(headers, 'From'),
+            to: getHeader(headers, 'To'),
+            subject: getHeader(headers, 'Subject'),
+            date: getHeader(headers, 'Date'),
+            labelIds: msg.data.labelIds,
+            isUnread: (msg.data.labelIds || []).includes('UNREAD'),
+          };
+        })
+      );
+
+      console.log(JSON.stringify({
+        account: args.account,
+        query: args.query || null,
+        count: messages.length,
+        messages,
+      }, null, 2));
+      break;
+    }
+
+    case 'read': {
+      if (!args['message-id']) {
+        console.error('--message-id is required for read');
+        process.exit(1);
+      }
+
+      const res = await gmail.users.messages.get({
+        userId: 'me',
+        id: args['message-id'],
+        format: 'full',
+      });
+
+      const msg = res.data;
+      const headers = msg.payload.headers;
+      const body = extractBody(msg.payload);
+
+      // Truncate very long bodies
+      const maxBodyLength = 5000;
+      const truncated = body.length > maxBodyLength;
+
+      console.log(JSON.stringify({
+        id: msg.id,
+        threadId: msg.threadId,
+        from: getHeader(headers, 'From'),
+        to: getHeader(headers, 'To'),
+        cc: getHeader(headers, 'Cc'),
+        subject: getHeader(headers, 'Subject'),
+        date: getHeader(headers, 'Date'),
+        labelIds: msg.labelIds,
+        isUnread: (msg.labelIds || []).includes('UNREAD'),
+        body: truncated ? body.substring(0, maxBodyLength) : body,
+        bodyTruncated: truncated,
+        attachments: (msg.payload.parts || [])
+          .filter(p => p.filename && p.filename.length > 0)
+          .map(p => ({
+            filename: p.filename,
+            mimeType: p.mimeType,
+            size: p.body ? p.body.size : null,
+            attachmentId: p.body ? p.body.attachmentId : null,
+          })),
+      }, null, 2));
+      break;
+    }
+
+    case 'send': {
+      if (!args.to) {
+        console.error('--to is required for send');
+        process.exit(1);
+      }
+      if (!args.subject) {
+        console.error('--subject is required for send');
+        process.exit(1);
+      }
+
+      const body = args.body || '';
+      const rawEmail = [
+        'MIME-Version: 1.0',
+        'Content-Type: text/plain; charset=UTF-8',
+        `To: ${args.to}`,
+        `Subject: ${args.subject}`,
+        '',
+        body,
+      ].join('\r\n');
+
+      const raw = encodeBase64Url(rawEmail);
+
+      const res = await gmail.users.messages.send({
+        userId: 'me',
+        requestBody: { raw },
+      });
+
+      console.log(JSON.stringify({
+        action: 'send',
+        success: true,
+        id: res.data.id,
+        threadId: res.data.threadId,
+        to: args.to,
+        subject: args.subject,
+      }, null, 2));
+      break;
+    }
+
+    case 'forward': {
+      if (!args['message-id']) {
+        console.error('--message-id is required for forward');
+        process.exit(1);
+      }
+      if (!args.to) {
+        console.error('--to is required for forward');
+        process.exit(1);
+      }
+
+      // Fetch original message
+      const origRes = await gmail.users.messages.get({
+        userId: 'me',
+        id: args['message-id'],
+        format: 'full',
+      });
+
+      const origMsg = origRes.data;
+      const origHeaders = origMsg.payload.headers;
+      const origBody = extractBody(origMsg.payload);
+      const origFrom = getHeader(origHeaders, 'From') || 'Unknown';
+      const origDate = getHeader(origHeaders, 'Date') || 'Unknown';
+      const origSubject = getHeader(origHeaders, 'Subject') || '(no subject)';
+      const origTo = getHeader(origHeaders, 'To') || 'Unknown';
+
+      // Construct forwarded email
+      const fwdBody = [
+        '---------- Forwarded message ----------',
+        `From: ${origFrom}`,
+        `Date: ${origDate}`,
+        `Subject: ${origSubject}`,
+        `To: ${origTo}`,
+        '',
+        origBody,
+      ].join('\r\n');
+
+      const rawEmail = [
+        'MIME-Version: 1.0',
+        'Content-Type: text/plain; charset=UTF-8',
+        `To: ${args.to}`,
+        `Subject: Fwd: ${origSubject}`,
+        '',
+        fwdBody,
+      ].join('\r\n');
+
+      const raw = encodeBase64Url(rawEmail);
+
+      const res = await gmail.users.messages.send({
+        userId: 'me',
+        requestBody: { raw },
+      });
+
+      console.log(JSON.stringify({
+        action: 'forward',
+        success: true,
+        id: res.data.id,
+        threadId: res.data.threadId,
+        to: args.to,
+        originalSubject: origSubject,
+        originalFrom: origFrom,
+      }, null, 2));
+      break;
+    }
+
+    case 'attachment': {
+      if (!args['message-id']) {
+        console.error('--message-id is required for attachment');
+        process.exit(1);
+      }
+
+      const outDir = args['out-dir'] || '/tmp';
+
+      // If no attachment-id given, download all attachments from the message
+      const msgRes = await gmail.users.messages.get({
+        userId: 'me',
+        id: args['message-id'],
+        format: 'full',
+      });
+
+      const allParts = [];
+      function collectParts(parts) {
+        for (const p of (parts || [])) {
+          if (p.filename && p.filename.length > 0 && p.body && p.body.attachmentId) {
+            allParts.push(p);
+          }
+          if (p.parts) collectParts(p.parts);
+        }
+      }
+      collectParts(msgRes.data.payload.parts);
+
+      let targetParts = allParts;
+      if (args['attachment-id']) {
+        targetParts = allParts.filter(p => p.body.attachmentId === args['attachment-id']);
+        if (targetParts.length === 0) {
+          console.error('Attachment ID not found. Available attachments:');
+          allParts.forEach(p => console.error(`  ${p.filename}: ${p.body.attachmentId}`));
+          process.exit(1);
+        }
+      }
+
+      const downloaded = [];
+      for (const part of targetParts) {
+        const attRes = await gmail.users.messages.attachments.get({
+          userId: 'me',
+          messageId: args['message-id'],
+          id: part.body.attachmentId,
+        });
+
+        const data = attRes.data.data;
+        const buf = Buffer.from(data.replace(/-/g, '+').replace(/_/g, '/'), 'base64');
+        const fname = args.filename || part.filename;
+        const outPath = path.join(outDir, fname);
+        fs.writeFileSync(outPath, buf);
+        downloaded.push({ filename: fname, path: outPath, size: buf.length, mimeType: part.mimeType });
+      }
+
+      console.log(JSON.stringify({
+        account: args.account,
+        messageId: args['message-id'],
+        downloaded,
+      }, null, 2));
+      break;
+    }
+
+    case 'labels': {
+      const res = await gmail.users.labels.list({ userId: 'me' });
+      const labels = (res.data.labels || []).map(l => ({
+        id: l.id,
+        name: l.name,
+        type: l.type,
+      }));
+      console.log(JSON.stringify({
+        account: args.account,
+        count: labels.length,
+        labels,
+      }, null, 2));
+      break;
+    }
+
+    default:
+      console.error(`Unknown action: ${action}`);
+      console.error('Available: list, read, send, forward, labels, attachment');
+      process.exit(1);
+  }
+}
+
+run().catch((err) => {
+  console.error(`Gmail error: ${err.message}`);
+  if (err.message.includes('invalid_grant') || err.message.includes('Token has been expired')) {
+    console.error(`\nToken may be expired. Re-authorize:\n  node auth.js --account ${args.account}`);
+  }
+  if (err.response && err.response.status === 403) {
+    console.error('\n⛔ FGAC.AI Security Policy: This action was blocked by your access control rules.');
+    console.error('Check your allow-list configuration at https://fgac.ai/dashboard');
+  }
+  process.exit(1);
+});
