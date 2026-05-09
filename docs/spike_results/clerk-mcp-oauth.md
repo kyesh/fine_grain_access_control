@@ -126,38 +126,67 @@ authInfo.extra keys: [ 'userId' ]
 ## Architecture Revision Based on Findings
 
 ### Problem
-We cannot inject `fgac_profile_id` into the Clerk OAuth token, and we cannot replace the consent page.
+1. We cannot inject `fgac_profile_id` into the Clerk OAuth token
+2. We cannot replace the consent page
+3. The agent must NEVER control its own permissions — user must bind profiles
 
-### Solution: Post-Auth Profile Selection
+### Solution: User-Controlled Pending Approval (Validated in Spike #2)
 
 ```
-Agent → MCP → Clerk OAuth (sign-in + consent)
-  → Token issued with just userId
-  → MCP server receives token
-  → Looks up userId → finds user's agent profiles
-  → If 1 profile: auto-select
-  → If 0 profiles: auto-create default
-  → If N profiles: MCP exposes `select_profile` tool
-     → Agent calls select_profile before any other tool
-     → Server stores selection in MCP session
-  → All subsequent calls use selected profile's permissions
+Agent → MCP endpoint → OAuth → Clerk consent → Token issued (userId + clientId)
+  → Agent calls MCP tool → MCP creates "pending" connection record
+  → MCP returns: "⚠️ Not approved yet. Ask user to visit dashboard."
+  → User opens dashboard → sees new pending connection
+  → User approves + assigns a proxy key (agent profile) + optional nickname
+  → Agent retries → MCP resolves connection → approved → uses profile's permissions
+  → Future sessions with same clientId auto-inherit (one-time approval)
 ```
 
-This is the **Fallback #4** from the original spike plan, and it works cleanly:
+### Why This Works
 
-1. **Zero friction for single-profile users** — auto-selection
-2. **Agent-driven for multi-profile users** — the agent calls `select_profile` (the agent can describe the profiles to the human and help them choose)
-3. **No custom consent UI needed** — works with Clerk's standard flow
-4. **Session-scoped** — profile selection persists for the MCP session
+1. **User controls permissions** — The agent NEVER selects its own profile
+2. **Deny-by-default** — Unapproved connections can't access anything
+3. **One-time friction** — Same `client_id` reconnecting auto-inherits approval
+4. **Third-party safe** — Give any agent your MCP URL; approve with specific permissions
+5. **Distinguishable agents** — Each DCR client has a unique name shown in Clerk consent
 
-### Required MCP Tools (updated)
+---
 
-| Tool | When Available |
-|------|---------------|
-| `select_profile` | Always first call — returns list or auto-selects |
-| `get_my_permissions` | After profile selected |
-| `gmail_list/read/send/...` | After profile selected |
-| `request_permission` | After profile selected |
+## Spike #2: Pending Approval Flow — ✅ VALIDATED
+
+### Setup
+- Registered two distinct DCR clients: `Claude-Code-Agent` and `Third-Party-Bot`
+- Each got a unique `client_id` (persistent per agent)
+- Clerk consent page shows the correct `client_name` for each
+
+### Results
+
+| Test | Client 1 (Claude-Code-Agent) | Client 2 (Third-Party-Bot) |
+|------|------|------|
+| DCR registration | ✅ `uJytZBYnERUpjv4g` | ✅ `fol7nvq2PC6ctcQu` |
+| Clerk consent name | "Claude-Code-Agent" | "Third-Party-Bot" |
+| Connection created | ✅ `80c1f9ac-...` (pending) | ✅ `f829fc24-...` (pending) |
+| MCP before approval | ⚠️ "pending_approval" + dashboard link | ⚠️ "pending_approval" + dashboard link |
+| User approves Client 1 | ✅ Bound to "Restricted Agent" key | — |
+| MCP after approval | ✅ Returns proxy_key_id + nickname | ⚠️ Still pending |
+
+### Key Validation Points
+
+1. **Two agents, same user, different approval states** — Confirmed
+2. **Pending connection blocks all MCP tools** — Confirmed
+3. **Approval binds connection to specific proxy key** — Confirmed
+4. **Approved connection returns proxy_key_id** — Confirmed
+5. **Dashboard link included in pending message** — Confirmed
+
+### Schema
+
+```sql
+agent_connections (
+  id, user_id, client_id, client_name, nickname,
+  proxy_key_id (NULL=pending), status, created_at, approved_at, last_used_at
+  UNIQUE(user_id, client_id)
+)
+```
 
 ---
 
@@ -166,5 +195,5 @@ This is the **Fallback #4** from the original spike plan, and it works cleanly:
 - Clerk instance: `pumped-quetzal-63.clerk.accounts.dev`
 - DCR: enabled in development
 - Valid scopes: `email profile offline_access`
-- Test user: `user_3BJN08XElmDVNILqWw1IT4fXzUd` (test user)
-- Test client: `dGd3hVEbAbMZNBbK`
+- mcp-handler basePath: `/api/spike` (handler appends `/mcp` automatically)
+- Test clients: `uJytZBYnERUpjv4g` (Claude-Code-Agent), `fol7nvq2PC6ctcQu` (Third-Party-Bot)
