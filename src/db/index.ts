@@ -9,6 +9,8 @@ if (!connectionString) {
   console.warn('DATABASE_URL (or neon__POSTGRES_URL) is not set; database operations will fail.');
 }
 
+import * as schema from './schema';
+
 // Fallback to a dummy connection for build time static analysis if no string is provided.
 const sql = neon(connectionString || 'postgres://dummy:dummy@localhost:5432/dummy');
-export const db = drizzle({ client: sql });
+export const db = drizzle({ client: sql, schema });
