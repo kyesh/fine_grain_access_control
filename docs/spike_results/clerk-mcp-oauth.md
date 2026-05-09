@@ -5,8 +5,8 @@ Validate 5 critical Clerk capabilities before committing to the MCP server build
 
 ## Prerequisites
 - [ ] `npm install @clerk/mcp-tools mcp-handler` (done)
-- [ ] Enable DCR in Clerk Dashboard (see below)
-- [ ] Dev server running (`npm run dev`)
+- [ ] Enable DCR in Clerk Dashboard (see below) — **BLOCKING: registration_endpoint not yet in metadata**
+- [x] Dev server running (`npm run dev`)
 
 ## Step 1: Enable DCR in Clerk Dashboard
 
@@ -42,10 +42,24 @@ curl -s http://localhost:3000/.well-known/oauth-authorization-server | python3 -
 # }
 ```
 
-### Result: Discovery Endpoints
-- [ ] Protected Resource returns valid JSON with authorization_servers
-- [ ] Auth Server Metadata returns valid JSON with all required endpoints
-- [ ] registration_endpoint is present (confirms DCR is available)
+### Result: Discovery Endpoints (TESTED 2026-05-09)
+- [x] Protected Resource returns valid JSON with authorization_servers → `https://pumped-quetzal-63.clerk.accounts.dev`
+- [x] Auth Server Metadata returns valid JSON with all required endpoints (authorization, token, revocation, jwks)
+- [ ] registration_endpoint is **NOT present** — DCR needs to be enabled in Clerk Dashboard
+
+**Actual Protected Resource Response:**
+```json
+{
+  "resource": "http://localhost:3000",
+  "authorization_servers": ["https://pumped-quetzal-63.clerk.accounts.dev"]
+}
+```
+
+**Key Auth Server Metadata fields:**
+- `authorization_endpoint`: `https://pumped-quetzal-63.clerk.accounts.dev/oauth/authorize`
+- `token_endpoint`: `https://pumped-quetzal-63.clerk.accounts.dev/oauth/token`
+- `code_challenge_methods_supported`: `["S256"]` (PKCE ✅)
+- `scopes_supported`: `openid, profile, email, public_metadata, private_metadata, offline_access`
 
 ## Step 3: Test MCP Endpoint Directly
 
@@ -58,9 +72,10 @@ curl -s -o /dev/null -w "%{http_code}" -X POST http://localhost:3000/api/spike/m
 # Expected: 401 (Unauthorized)
 ```
 
-### Result: MCP Endpoint
-- [ ] Returns 401 without auth token (confirms auth is enforced)
-- [ ] Response includes WWW-Authenticate header with resource metadata URL
+### Result: MCP Endpoint (TESTED 2026-05-09)
+- [x] Returns 401 without auth token: `{"error":"invalid_token","error_description":"No authorization provided"}`
+- [x] WWW-Authenticate header: `Bearer error="invalid_token", resource_metadata="http://localhost:3000/.well-known/oauth-protected-resource/mcp"`
+- [x] Server logs confirm `verifyClerkToken` correctly returns undefined for unauthenticated requests
 
 ## Step 4: Test with Claude Code
 
@@ -114,13 +129,13 @@ From the `spike_whoami` output, document what's in `authInfo`:
 
 | # | Capability | Status | Notes |
 |---|-----------|--------|-------|
-| 1 | DCR works | ⬜ | |
-| 2 | OAuth token issuance | ⬜ | |
-| 3 | Custom claims in tokens | ⬜ | |
-| 4 | Custom consent redirect | ⬜ | |
-| 5 | Token verification | ⬜ | |
+| 1 | DCR works | ⬜ BLOCKED | `registration_endpoint` missing from metadata — need to enable in Clerk Dashboard |
+| 2 | OAuth token issuance | ⬜ PENDING | Depends on DCR or manual client registration |
+| 3 | Custom claims in tokens | ⬜ PENDING | Need to test after successful OAuth flow |
+| 4 | Custom consent redirect | ⬜ PENDING | Need to test after successful OAuth flow |
+| 5 | Token verification | ✅ PARTIAL | `verifyClerkToken` correctly rejects unauthenticated requests; need to test with valid token |
 
-### Overall: ⬜ PENDING
+### Overall: ⬜ PARTIALLY VALIDATED — need Clerk Dashboard DCR toggle to proceed
 
 **Next steps based on results:**
 - All pass → Proceed with Phase 2 as designed
