@@ -50,3 +50,4 @@ next-env.d.ts
 .clerk_session
 spike-clients.json
 spike-token-*.json
+.playwright_user_data/

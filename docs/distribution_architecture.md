@@ -66,6 +66,7 @@ Each proxy key can access multiple email accounts via `key_email_access`:
 |---------|-----|------|---------|
 | REST Proxy | `https://gmail.fgac.ai/gmail/v1/...` | `Bearer sk_proxy_...` | Local scripts, direct API calls |
 | MCP Server | `https://fgac.ai/api/mcp` | OAuth Bearer token (Clerk) | Claude Code MCP, any MCP client |
+| CLI Token | `https://fgac.ai/api/auth/cli-token` | OAuth Bearer token (Clerk) | Local scripts (auth.js) — exchanges token for proxy key |
 | Dashboard | `https://fgac.ai/dashboard` | Clerk session | Users managing agents |
 
 ## File Locations
@@ -73,6 +74,7 @@ Each proxy key can access multiple email accounts via `key_email_access`:
 | Component | Path |
 |-----------|------|
 | Hosted MCP Server | `src/app/api/mcp/route.ts` |
+| CLI Token Endpoint | `src/app/api/auth/cli-token/route.ts` |
 | OpenClaw SKILL.md | `docs/skills/gmail-fgac/SKILL.md` |
 | OpenClaw scripts | `docs/skills/gmail-fgac/scripts/` |
 | Claude Code MCP SKILL.md | `public/skills/claude-code/SKILL.md` |
