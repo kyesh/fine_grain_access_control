@@ -210,25 +210,28 @@ async function gmailFetch(token: string, email: string, path: string, method = '
 
 type AuthInfo = { extra?: { userId?: string }; clientId?: string };
 
-async function requireApproval(authInfo: AuthInfo | undefined): Promise<ConnectionApproved | { content: Array<{ type: string; text: string }> }> {
+async function requireApproval(authInfo: AuthInfo | undefined): Promise<ConnectionApproved | { content: Array<{ type: 'text'; text: string }> }> {
   const userId = authInfo?.extra?.userId as string | undefined;
   const clientId = authInfo?.clientId;
 
   if (!userId) {
-    return { content: [{ type: 'text', text: '❌ Authentication failed.' }] };
+    return { content: [{ type: 'text' as const, text: '❌ Authentication failed.' }] };
   }
 
   const result = await resolveConnection(userId, clientId);
   if (!result.authorized) {
-    return { content: [{ type: 'text', text: pendingMessage(result) }] };
+    return { content: [{ type: 'text' as const, text: pendingMessage(result) }] };
   }
   return result;
 }
 
+type ResolvedAccount = { targetEmail: string; token: string; proxyKeyId: string };
+type ResolvedError = { error: string };
+
 async function resolveAccountAndToken(
   conn: ConnectionApproved,
   account?: string,
-) {
+): Promise<ResolvedAccount | ResolvedError> {
   if (!conn.proxyKeyId) {
     return { error: '❌ No proxy key assigned to this connection. Ask the user to update it in the dashboard.' };
   }
@@ -266,12 +269,12 @@ const handler = createMcpHandler(
         const conn = await requireApproval(authInfo);
         if ('content' in conn) return conn;
         if (!conn.proxyKeyId) {
-          return { content: [{ type: 'text', text: '❌ No proxy key assigned.' }] };
+          return { content: [{ type: 'text' as const, text: '❌ No proxy key assigned.' }] };
         }
         const emails = await getAccessibleEmails(conn.proxyKeyId);
         return {
           content: [{
-            type: 'text',
+            type: 'text' as const,
             text: JSON.stringify({
               accounts: emails.map(e => e.targetEmail),
               default: conn.user.email,
@@ -296,14 +299,14 @@ const handler = createMcpHandler(
         if ('content' in conn) return conn;
 
         const resolved = await resolveAccountAndToken(conn, account);
-        if ('error' in resolved) return { content: [{ type: 'text', text: resolved.error }] };
+        if ('error' in resolved) return { content: [{ type: 'text' as const, text: resolved.error }] };
 
         const params = new URLSearchParams();
         if (query) params.set('q', query);
         params.set('maxResults', String(max || 10));
 
         const data = await gmailFetch(resolved.token, resolved.targetEmail, `messages?${params}`);
-        return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
+        return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
       }
     );
 
@@ -321,7 +324,7 @@ const handler = createMcpHandler(
         if ('content' in conn) return conn;
 
         const resolved = await resolveAccountAndToken(conn, account);
-        if ('error' in resolved) return { content: [{ type: 'text', text: resolved.error }] };
+        if ('error' in resolved) return { content: [{ type: 'text' as const, text: resolved.error }] };
 
         // Check read blacklist rules
         const rules = await loadApplicableRules(conn.user.id, resolved.proxyKeyId, resolved.targetEmail);
@@ -334,11 +337,11 @@ const handler = createMcpHandler(
           const regexStr = rule.regexPattern.replace(/\*/g, '.*');
           if (!safeRegex(regexStr)) continue;
           if (new RegExp(regexStr, 'i').test(bodyStr)) {
-            return { content: [{ type: 'text', text: `🚫 Access restricted: Content blocked by rule '${rule.ruleName}'.` }] };
+            return { content: [{ type: 'text' as const, text: `🚫 Access restricted: Content blocked by rule '${rule.ruleName}'.` }] };
           }
         }
 
-        return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
+        return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
       }
     );
 
@@ -357,14 +360,14 @@ const handler = createMcpHandler(
         if ('content' in conn) return conn;
 
         const resolved = await resolveAccountAndToken(conn, account);
-        if ('error' in resolved) return { content: [{ type: 'text', text: resolved.error }] };
+        if ('error' in resolved) return { content: [{ type: 'text' as const, text: resolved.error }] };
 
         // Enforce send whitelist
         const rules = await loadApplicableRules(conn.user.id, resolved.proxyKeyId, resolved.targetEmail);
         const sendRules = rules.filter(r => r.service === 'gmail' && r.actionType === 'send_whitelist');
 
         if (sendRules.length === 0) {
-          return { content: [{ type: 'text', text: `🚫 No send whitelist rules configured. Ask the user to add '${to}' to the sending whitelist.` }] };
+          return { content: [{ type: 'text' as const, text: `🚫 No send whitelist rules configured. Ask the user to add '${to}' to the sending whitelist.` }] };
         }
 
         let isWhitelisted = false;
@@ -375,7 +378,7 @@ const handler = createMcpHandler(
         }
 
         if (!isWhitelisted) {
-          return { content: [{ type: 'text', text: `🚫 Unauthorized recipient. '${to}' is not in the send whitelist. Ask the user to add it.` }] };
+          return { content: [{ type: 'text' as const, text: `🚫 Unauthorized recipient. '${to}' is not in the send whitelist. Ask the user to add it.` }] };
         }
 
         // Build RFC 2822 message
@@ -384,7 +387,7 @@ const handler = createMcpHandler(
         ).toString('base64url');
 
         const data = await gmailFetch(resolved.token, resolved.targetEmail, 'messages/send', 'POST', JSON.stringify({ raw }));
-        return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
+        return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
       }
     );
 
@@ -398,10 +401,10 @@ const handler = createMcpHandler(
         if ('content' in conn) return conn;
 
         const resolved = await resolveAccountAndToken(conn, account);
-        if ('error' in resolved) return { content: [{ type: 'text', text: resolved.error }] };
+        if ('error' in resolved) return { content: [{ type: 'text' as const, text: resolved.error }] };
 
         const data = await gmailFetch(resolved.token, resolved.targetEmail, 'labels');
-        return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
+        return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
       }
     );
 
@@ -414,7 +417,7 @@ const handler = createMcpHandler(
         const conn = await requireApproval(authInfo);
         if ('content' in conn) return conn;
         if (!conn.proxyKeyId) {
-          return { content: [{ type: 'text', text: '❌ No proxy key assigned.' }] };
+          return { content: [{ type: 'text' as const, text: '❌ No proxy key assigned.' }] };
         }
 
         const emails = await getAccessibleEmails(conn.proxyKeyId);
@@ -427,7 +430,7 @@ const handler = createMcpHandler(
 
         return {
           content: [{
-            type: 'text',
+            type: 'text' as const,
             text: JSON.stringify({
               connection: { id: conn.connectionId, nickname: conn.nickname },
               proxyKey: { id: key?.id, label: key?.label },

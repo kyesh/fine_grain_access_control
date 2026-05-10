@@ -137,14 +137,15 @@ const handler = createMcpHandler(
           return { content: [{ type: 'text', text: message }] };
         }
 
+        const approved = connectionResult as { connectionId: string; nickname: string | null; proxyKeyId: string | null };
         return {
           content: [{
-            type: 'text',
+            type: 'text' as const,
             text: JSON.stringify({
               status: 'approved',
-              connection_id: connectionResult.connectionId,
-              nickname: connectionResult.nickname,
-              proxy_key_id: connectionResult.proxyKeyId,
+              connection_id: approved.connectionId,
+              nickname: approved.nickname,
+              proxy_key_id: approved.proxyKeyId,
               user_id: userId,
               client_id: clientId,
             }, null, 2),

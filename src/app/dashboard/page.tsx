@@ -10,6 +10,7 @@ import { KeyControls } from './KeyControls';
 import { DelegateAccessButton } from './DelegateAccessButton';
 import { RevokeDelegationButton } from './RevokeDelegationButton';
 import { ConnectGoogleWarning } from './ConnectGoogleWarning';
+import { ConnectionsPanel } from './ConnectionsPanel';
 
 export default async function DashboardPage() {
   const user = await currentUser();
@@ -142,6 +143,9 @@ export default async function DashboardPage() {
         <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 mt-8 space-y-8">
           
           {!hasCompleteGoogleAccess && <ConnectGoogleWarning />}
+
+          {/* ─── Agent Connections ─────────────────────────────────── */}
+          <ConnectionsPanel />
 
           {/* ─── Your Email & Delegated Emails ─────────────────────── */}
           <div className="bg-white overflow-hidden shadow rounded-lg border border-gray-200">
