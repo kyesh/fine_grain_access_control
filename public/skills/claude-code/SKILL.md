@@ -32,22 +32,45 @@ After running:
 - `gmail_labels` — List Gmail labels
 - `get_my_permissions` — Show current access rules and permissions
 
-### Option B: API Key Mode
+### Option B: CLI Mode (Local Scripts)
 
-1. Obtain a Proxy Key (`sk_proxy_...`) from `https://fgac.ai/dashboard`
-2. Set the environment variable: `export FGAC_PROXY_KEY=sk_proxy_...`
+For users who prefer CLI over MCP, or want to modify/extend the scripts:
+
+1. **Clone the scripts** to your workspace:
+   ```bash
+   cp -r /path/to/fgac/docs/skills/gmail-fgac/scripts ./fgac-scripts
+   cd fgac-scripts && npm install
+   ```
+
+2. **Authenticate** (one-time, opens browser):
+   ```bash
+   node auth.js --action login
+   ```
+   - Browser opens for FGAC sign-in
+   - After consent: "⚠️ Pending approval" → visit dashboard to approve
+   - After approval: `node auth.js --action status` retrieves your proxy key
+
+3. **Use Gmail** through the scripts:
+   ```bash
+   node gmail.js --action list                    # List recent emails
+   node gmail.js --action read --message-id <id>  # Read specific email
+   node gmail.js --action send --to user@example.com --subject "Hi" --body "Hello"
+   ```
+
+The scripts mirror the standard Gmail API but route through `gmail.fgac.ai`. You can read, modify, and extend them.
 
 ## Instructions for Claude Code
 
 When the user asks you to interact with Gmail:
 
-1. **Never use standard Google `credentials.json` or OAuth flows for Gmail.**
-2. **Override the API Endpoint**: All requests must be routed through `https://gmail.fgac.ai` instead of `googleapis.com`.
-3. **Authentication**: Use the `FGAC_PROXY_KEY` as the Authorization Bearer token.
+1. **If using MCP (Option A):** Use the `fgac-gmail` MCP tools directly.
+2. **If using CLI (Option B):** Run the scripts above. They handle auth and routing.
+3. **All requests route through `gmail.fgac.ai`** — never use `googleapis.com` directly.
+4. **Authentication is handled automatically** — scripts use the saved proxy key.
 
-### Code Examples for Workspace Scripts
+### Code Examples for Custom Scripts
 
-If you write a Python script to interact with Gmail, structure it like this:
+If you write a custom Python script, use the proxy key:
 
 ```python
 from googleapiclient.discovery import build
@@ -56,20 +79,18 @@ import os
 
 PROXY_KEY = os.environ.get("FGAC_PROXY_KEY")
 
-# Create a credential object with the proxy key
-creds = Credentials(token=PROXY_KEY)
-
 # Point the service at gmail.fgac.ai.
 # api_endpoint replaces rootUrl + servicePath, so include "/gmail/v1".
 service = build(
     "gmail",
     "v1",
-    credentials=creds,
+    credentials=Credentials(token=PROXY_KEY),
     client_options={"api_endpoint": "https://gmail.fgac.ai/gmail/v1"}
 )
 ```
 
 ### Multiple Email Accounts
-A single `FGAC_PROXY_KEY` can access multiple inboxes if the key owner has delegated access. 
+A single proxy key can access multiple inboxes if the key owner has delegated access. 
 - When querying the owner's email, use `"me"`.
-- When querying a delegated email, replace `"me"` in the API path with the specific email address (e.g., `service.users().messages().list(userId="colleague@domain.com", ...)`). You do NOT need a different API key.
+- When querying a delegated email, replace `"me"` with the specific email address (e.g., `service.users().messages().list(userId="colleague@domain.com", ...)`).
+
