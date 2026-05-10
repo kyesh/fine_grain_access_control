@@ -36,6 +36,7 @@ Local Scripts (#2, #4):
   Agent → runs auth.js → FGAC OAuth (browser opens for consent)
     → Token saved locally → scripts use token + REST proxy
     → Proxy key resolved server-side from OAuth identity
+    → Scripts mirror the standard Gmail API but route through gmail.fgac.ai
 ```
 
 ## Permission Chain
