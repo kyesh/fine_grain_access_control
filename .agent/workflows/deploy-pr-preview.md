@@ -49,13 +49,13 @@ description: Deploys changes to a new PR, waits for the Vercel Preview to build,
     ```
     After cleaning up, fix any other code issues, push again, and return to step 4.
 
-7.  Once the Vercel Preview URL is `Ready`, you MUST launch a `browser_subagent` mission to validate the frontend.
-    a. Provide the subagent the specific Vercel URL (e.g., `https://project-branch.vercel.app`).
-    b. Instruct the subagent to log in with a test user context if necessary.
-    c. Wait for the page to fully load and instruct the subagent to take a screenshot confirming the specific features you built are visible and functional.
+7.  Once the Vercel Preview URL is `Ready`, you MUST validate the frontend yourself by following the `/browser-agent` workflow (`.agent/workflows/browser-agent.md`).
+    a. Use the Playwright CLI to attach to the browser and navigate to the specific Vercel URL (e.g., `https://project-branch.vercel.app`).
+    b. Interact with the page to log in with a test user context if necessary.
+    c. Wait for the page to fully load and use the snapshot/screenshot commands to confirm the specific features you built are visible and functional.
 
 8.  Only AFTER the browser validation proves successful, notify the user.
-    - If the browser subagent fails due to `user did not add URL to allowlist` or similar access issues, stop and immediately inform the user.
+    - If you encounter errors accessing the URL or interacting with the page via the Playwright CLI, stop and immediately inform the user.
     - Fetch the GitHub PR URL explicitly to ensure you have it in context:
       ```bash
       gh pr view --json url -q .url
@@ -64,6 +64,6 @@ description: Deploys changes to a new PR, waits for the Vercel Preview to build,
     - Provide a short summary of the validation you performed.
     - Ask the user to manually verify the application state using the provided Preview URL.
 
-> **Failure Reflection**: In the past, agents failed this workflow by providing ONLY the Vercel URL and hiding the PR URL. Also, agents failed to notice when the `browser_subagent` encountered a URL allowlist error, resulting in a silent failure. Always verify the subagent successfully loaded the page and successfully gathered visual proof, and ALWAYS provide both URLs to the user.
+> **Failure Reflection**: In the past, agents failed this workflow by providing ONLY the Vercel URL and hiding the PR URL. Also, agents failed to execute the `/browser-agent` workflow successfully by either skipping it entirely or ignoring errors when the Playwright CLI failed to attach to the Chrome instance, resulting in a silent failure. Always verify you successfully attached, loaded the page, and successfully gathered visual proof via screenshot, and ALWAYS provide both URLs to the user.
 
 > **CRITICAL RULE**: Do not automate or invoke the `/deploy-prod` command at the end of this workflow. Only the user is authorized to merge to production after they are satisfied with the Preview URL.

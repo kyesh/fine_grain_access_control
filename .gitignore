@@ -48,3 +48,5 @@ next-env.d.ts
 /.clerk/
 .vercel_bypass
 .clerk_session
+spike-clients.json
+spike-token-*.json

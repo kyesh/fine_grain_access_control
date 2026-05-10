@@ -15,18 +15,18 @@ export default async function LandingPage() {
         
         <div className="flex gap-4 justify-center pt-8">
           <Show when="signed-out">
-            <Link href="/waitlist">
+            <SignUpButton mode="modal">
               <button className="rounded-full bg-brand-purple px-8 py-3.5 text-sm font-semibold text-white shadow-sm hover:opacity-90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-purple transition-all">
-                Join Beta Waitlist
+                Get Started
               </button>
-            </Link>
+            </SignUpButton>
           </Show>
           <Show when="signed-in">
             <Link
-              href="/waitlist"
+              href="/dashboard"
               className="rounded-full bg-brand-purple px-8 py-3.5 text-sm font-semibold text-white shadow-sm hover:opacity-90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-purple transition-all"
             >
-              Join Beta Waitlist
+              Go to Dashboard
             </Link>
           </Show>
           <Link href="/setup" className="rounded-full px-8 py-3.5 text-sm font-semibold text-gray-900 ring-1 ring-inset ring-brand-purple/20 hover:ring-brand-purple/40">
