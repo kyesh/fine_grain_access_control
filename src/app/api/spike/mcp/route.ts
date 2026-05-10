@@ -107,7 +107,7 @@ const handler = createMcpHandler(
           ? await resolveConnection(userId, clientId)
           : { authorized: false, reason: 'no_auth' as const };
 
-        if (!connectionResult.authorized) {
+        if (connectionResult.reason !== 'approved') {
           let message = '';
           switch (connectionResult.reason) {
             case 'pending_approval':
