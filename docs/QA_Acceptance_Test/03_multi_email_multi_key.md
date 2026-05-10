@@ -196,3 +196,73 @@ When executing the mock AI agent scripts against a **Vercel Preview URL**, Verce
    - **Validation**: The proxy authenticates the key but it belongs to the first user — the request proceeds under the first user's permissions. This confirms keys are opaque bearer tokens tied to the issuing user, as designed.
 
 **Expected Outcome**: Complete tenant isolation. A user cannot see or modify another user's configuration. Keys are cryptographically opaque — knowing a key does not grant access to modify the associated rules.
+
+---
+
+## Package Matrix — Multi-Email Across Distributions
+
+> These tests verify that multi-email scoping and the `account` parameter work correctly regardless of which distribution package the agent uses. Prerequisites: Tests 1-9 must pass first.
+
+### §10: Hosted MCP Server
+
+**Auth:** Approved MCP connection with a multi-email proxy key (2+ emails mapped via `key_email_access`).
+
+**Steps:**
+1. Call `list_accounts`:
+   ```bash
+   curl -s $BASE_URL/api/mcp -X POST \
+     -H "Authorization: Bearer $MCP_TOKEN" \
+     -H "Content-Type: application/json" \
+     -d '{"jsonrpc":"2.0","method":"tools/call","params":{"name":"list_accounts","arguments":{}},"id":1}'
+   ```
+   - [ ] Returns exactly the emails mapped to this proxy key
+   - [ ] Does NOT show emails from other keys
+
+2. Call `gmail_list` with `account: "<second-email>"`:
+   - [ ] Returns emails from the second account
+
+3. Call `gmail_list` with `account: "<unmapped-email>"`:
+   - [ ] Returns error: email not accessible
+
+### §11: Claude Code MCP
+
+**Auth:** `claude mcp add` with approved connection.
+
+**Steps:**
+1. "List my email accounts" → `list_accounts`
+   - [ ] Shows correct multi-email set
+
+2. "List emails from my work account" → `gmail_list` with account param
+   - [ ] Returns work inbox emails
+
+3. "List emails from unauthorized@other.com"
+   - [ ] Rejected: email not in key's access list
+
+### §12: Claude Code CLI (Local Scripts)
+
+**Auth:** `node auth.js --action login` completed.
+
+**Steps:**
+1. List emails (default account):
+   ```bash
+   node gmail.js --action list
+   ```
+   - [ ] Returns emails from primary account
+
+2. List emails from second account:
+   ```bash
+   FGAC_ACCOUNT=second@example.com node gmail.js --action list
+   ```
+   - [ ] Returns emails from second account (if supported by scripts)
+
+### §13: OpenClaw Skill
+
+**Auth:** FGAC OAuth via `auth.js --action login`.
+
+**Steps:**
+1. Agent invokes: "List my email accounts"
+   - [ ] Script returns accessible accounts
+
+2. Agent invokes: "Read emails from my second account"
+   - [ ] Script targets second account via proxy
+
