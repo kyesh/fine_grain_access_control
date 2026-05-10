@@ -2,7 +2,7 @@
 
 # Context Window Management
 
-Antigravity does NOT have built-in context compaction. Every tool result stays in the conversation verbatim, forever. Follow these rules to prevent context exhaustion crashes:
+Antigravity DOES have built-in context compaction (verified via ls-main.log showing message count resets: 147→90, 207→169, 259→198). However, compaction has limits and long sessions still degrade quality. Additionally, quota exhaustion (RESOURCE_EXHAUSTED 429) and TS server OOM (SIGABRT with `--max-old-space-size=3072`) have caused real crashes. Follow these rules to prevent session loss:
 
 ## Hard Limits
 
