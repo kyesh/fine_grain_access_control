@@ -42,7 +42,7 @@ export async function POST(request: NextRequest) {
     const clerkAuth = await auth({ acceptsToken: 'oauth_token' });
     const authInfo = verifyClerkToken(clerkAuth, bearerToken);
     userId = authInfo?.extra?.userId as string | undefined;
-    clientId = authInfo?.extra?.clientId as string | undefined;
+    clientId = (authInfo as Record<string, unknown>)?.clientId as string | undefined;
   } catch {
     return NextResponse.json(
       { status: 'error', message: 'Invalid or expired token. Re-run auth.' },
