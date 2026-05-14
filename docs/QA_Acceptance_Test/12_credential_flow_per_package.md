@@ -112,8 +112,8 @@ Validate that each distribution package's install → authenticate → first-too
 
 ## Section 3: Claude Code CLI Plugin (OAuth in Scripts)
 
-> [!WARNING]
-> **BLOCKED** — shared scripts with FGAC OAuth not yet implemented (Phase 3B/3D).
+> [!NOTE]
+> **Scripts built and verified.** FGAC OAuth flow (DCR + PKCE) implemented in `auth.js`.
 
 **Validates:** Package #4 — Claude Code users who prefer CLI/scripts over MCP.
 
@@ -153,8 +153,8 @@ Validate that each distribution package's install → authenticate → first-too
 
 ## Section 4: OpenClaw Skill (OAuth in Scripts)
 
-> [!WARNING]
-> **BLOCKED** — `auth.js` still uses Google BYOK OAuth, not FGAC OAuth (Phase 3B).
+> [!NOTE]
+> **Scripts built and verified.** Same scripts as Section 3, installed to `~/.openclaw/skills/gmail-fgac/`.
 
 **Validates:** Package #2 — OpenClaw with full script control.
 
