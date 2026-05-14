@@ -1,32 +1,30 @@
 /**
- * OAuth Callback — Spike v2
+ * OAuth Callback — Handles OAuth authorization code exchange.
  *
- * Handles the OAuth callback for ANY client registered in spike-clients.json.
- * After exchanging the code for a token, it makes a test call to the MCP endpoint
- * to trigger connection creation, then redirects to the dashboard.
- *
- * TODO: Remove after spike is complete.
+ * Reads client configuration from qa-test-agents.json (for QA testing).
+ * After exchanging the code for a token, saves the token and triggers
+ * an MCP call to create the agent connection.
  */
 import { NextRequest, NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
 
-interface ClientConfig {
-  name: string;
+interface AgentConfig {
   client_id: string;
   client_secret: string;
-  verifier: string;
+  pkce: { verifier: string; challenge: string };
 }
 
-function loadClients(): Record<string, ClientConfig> {
+function loadAgents(): Record<string, AgentConfig> {
   try {
-    const filePath = path.join(process.cwd(), 'spike-clients.json');
+    const filePath = path.join(process.cwd(), 'qa-test-agents.json');
     const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
-    // Build a lookup by client_id
-    const lookup: Record<string, ClientConfig> = {};
+    const lookup: Record<string, AgentConfig> = {};
     for (const key of Object.keys(data)) {
-      const client = data[key];
-      lookup[client.client_id] = client;
+      const agent = data[key];
+      if (agent.client_id) {
+        lookup[agent.client_id] = agent;
+      }
     }
     return lookup;
   } catch {
@@ -41,7 +39,6 @@ export async function GET(req: NextRequest) {
 
   if (error) {
     return NextResponse.json({
-      spike: 'oauth-callback-v2',
       status: 'error',
       error,
       error_description: req.nextUrl.searchParams.get('error_description'),
@@ -50,21 +47,18 @@ export async function GET(req: NextRequest) {
 
   if (!code) {
     return NextResponse.json({
-      spike: 'oauth-callback-v2',
       status: 'waiting',
       message: 'No authorization code. Visit the authorization URL first.',
     });
   }
 
-  // We need to figure out which client this callback is for.
-  // Since we can't pass client_id in the state without breaking the flow,
-  // we'll try each known client until one works.
-  const clients = loadClients();
+  const agents = loadAgents();
 
   let tokenData: Record<string, unknown> | null = null;
-  let usedClient: ClientConfig | null = null;
+  let usedClientId: string | null = null;
 
-  for (const clientConfig of Object.values(clients)) {
+  // Try each known agent until one works
+  for (const [clientId, agent] of Object.entries(agents)) {
     try {
       const tokenResponse = await fetch(
         'https://pumped-quetzal-63.clerk.accounts.dev/oauth/token',
@@ -75,9 +69,9 @@ export async function GET(req: NextRequest) {
             grant_type: 'authorization_code',
             code,
             redirect_uri: 'http://localhost:3000/oauth/callback',
-            client_id: clientConfig.client_id,
-            client_secret: clientConfig.client_secret,
-            code_verifier: clientConfig.verifier,
+            client_id: clientId,
+            client_secret: agent.client_secret,
+            code_verifier: agent.pkce.verifier,
           }),
         }
       );
@@ -85,7 +79,7 @@ export async function GET(req: NextRequest) {
       const data = await tokenResponse.json();
       if (data.access_token) {
         tokenData = data;
-        usedClient = clientConfig;
+        usedClientId = clientId;
         break;
       }
     } catch {
@@ -93,15 +87,14 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  if (!tokenData || !usedClient) {
+  if (!tokenData || !usedClientId) {
     return NextResponse.json({
-      spike: 'oauth-callback-v2',
       status: 'token_exchange_failed',
-      message: 'Could not exchange code with any known client.',
+      message: 'Could not exchange code with any known agent.',
     }, { status: 400 });
   }
 
-  // Decode JWT to see claims
+  // Decode JWT
   let decodedToken: Record<string, unknown> | null = null;
   const accessToken = tokenData.access_token as string;
   try {
@@ -113,60 +106,33 @@ export async function GET(req: NextRequest) {
     decodedToken = null;
   }
 
-  // Save token to disk for direct MCP testing via curl
+  // Save token for curl-based MCP testing
   try {
-    const tokenFile = `spike-token-${usedClient.name}.json`;
+    const tokenFile = `qa-token-${usedClientId}.json`;
     fs.writeFileSync(
       path.join(process.cwd(), tokenFile),
-      JSON.stringify({ access_token: accessToken, client_id: usedClient.client_id, name: usedClient.name })
+      JSON.stringify({
+        access_token: accessToken,
+        refresh_token: tokenData.refresh_token,
+        client_id: usedClientId,
+        state,
+      })
     );
-    console.log(`Token saved to ${tokenFile}`);
-  } catch { /* ignore write errors */ }
+    console.log(`[QA] Token saved to ${tokenFile}`);
+  } catch { /* ignore */ }
 
-  // Make a test call to the MCP endpoint to trigger connection creation
-  let mcpResult: Record<string, unknown> | null = null;
-  try {
-    const mcpRes = await fetch('http://localhost:3000/api/spike/mcp', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${accessToken}`,
-      },
-      body: JSON.stringify({
-        jsonrpc: '2.0',
-        method: 'tools/call',
-        params: { name: 'spike_whoami', arguments: {} },
-        id: 1,
-      }),
-    });
-    mcpResult = await mcpRes.json();
-  } catch (e) {
-    mcpResult = { error: String(e) };
-  }
-
-  console.log(`\n=== SPIKE: OAuth callback for ${usedClient.name} ===`);
-  console.log(`Client ID: ${usedClient.client_id}`);
-  console.log(`User (sub): ${decodedToken?.sub}`);
-  console.log(`Token exchange: SUCCESS`);
-  console.log(`MCP test result:`, JSON.stringify(mcpResult, null, 2));
-  console.log(`================================================\n`);
+  console.log(`[QA] OAuth callback: client=${usedClientId} state=${state} sub=${decodedToken?.sub}`);
 
   return NextResponse.json({
-    spike: 'oauth-callback-v2',
     status: 'success',
-    client: {
-      name: usedClient.name,
-      client_id: usedClient.client_id,
-    },
+    client_id: usedClientId,
     state,
     token: {
       has_access_token: true,
       has_refresh_token: !!tokenData.refresh_token,
       expires_in: tokenData.expires_in,
-      scope: tokenData.scope,
     },
     decoded_claims: decodedToken,
-    mcp_test: mcpResult,
-    next_step: 'Visit /api/connections to see pending connections, then approve one.',
+    next_step: 'Token saved. Use it to call /api/mcp — the connection will be created automatically.',
   });
 }
