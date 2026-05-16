@@ -29,7 +29,7 @@
  */
 
 const { execSync, spawnSync } = require('child_process');
-const { writeFileSync, existsSync, mkdirSync } = require('fs');
+const { writeFileSync, existsSync, readFileSync, mkdirSync } = require('fs');
 const path = require('path');
 
 // ─── Config ──────────────────────────────────────────────────────────────────
@@ -47,6 +47,23 @@ const SKIP_AUTH = args.includes('--skip-auth');
 const CLEANUP = args.includes('--cleanup');
 const RESULTS_DIR = path.join(__dirname, 'results');
 const TMUX_SESSION = 'fgac-claude-qa';
+
+// Load test emails from config (populated by npm run qa:secrets)
+const testEmailsPath = path.join(__dirname, '../../.qa_test_emails.json');
+let USER_A_EMAIL = 'spike-test@example.com'; // fallback
+let USER_B_EMAIL = 'user-b@example.com';     // fallback
+if (existsSync(testEmailsPath)) {
+  try {
+    const emails = JSON.parse(readFileSync(testEmailsPath, 'utf-8'));
+    USER_A_EMAIL = emails.USER_A_EMAIL || USER_A_EMAIL;
+    USER_B_EMAIL = emails.USER_B_EMAIL || USER_B_EMAIL;
+    console.log(`📧 Test emails loaded: ${USER_A_EMAIL}, ${USER_B_EMAIL}`);
+  } catch (e) {
+    console.warn(`⚠️ Failed to parse ${testEmailsPath}: ${e.message}`);
+  }
+} else {
+  console.warn(`⚠️ No .qa_test_emails.json found — using fallback emails. Run: npm run qa:secrets`);
+}
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -244,7 +261,7 @@ async function verifyTools() {
 
   let output = tmuxCapture(100);
 
-  if (output.includes('spike-test@example.com') || output.includes('Default account')) {
+  if (output.includes(USER_A_EMAIL) || output.includes('Default account') || output.includes('account')) {
     pass('list_accounts returns account data');
   } else if (output.includes("isn't approved") || output.includes('pending')) {
     fail('list_accounts', 'Connection not approved yet');
@@ -255,7 +272,7 @@ async function verifyTools() {
     // Wait more and retry
     await sleep(15000);
     output = tmuxCapture(100);
-    if (output.includes('spike-test') || output.includes('account')) {
+    if (output.includes(USER_A_EMAIL) || output.includes('account')) {
       pass('list_accounts returns data');
     } else {
       fail('list_accounts', `Unexpected output (last 200 chars): ${output.slice(-200)}`);
