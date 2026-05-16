@@ -23,3 +23,12 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+@keyframes pulse-subtle {
+  0%, 100% { border-color: rgb(252 211 77); }
+  50% { border-color: rgb(253 230 138); }
+}
+
+.animate-pulse-subtle {
+  animation: pulse-subtle 2s ease-in-out infinite;
+}

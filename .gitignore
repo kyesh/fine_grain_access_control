@@ -48,3 +48,33 @@ next-env.d.ts
 /.clerk/
 .vercel_bypass
 .clerk_session
+spike-clients.json
+spike-token-*.json
+.playwright_user_data/
+
+# QA test artifacts (screenshots, tokens, agent configs)
+qa_proof_*.png
+qa-test-agents.json
+qa-token-*.json
+dashboard.png
+.playwright-cli/
+
+# nested node_modules from spike scripts (not managed by root package.json)
+docs/skills/*/scripts/node_modules/
+scripts/*/node_modules/
+
+# security scan artifacts
+*.pdf
+*_results.txt
+fluidattacks-config.yaml
+zap.yaml
+semgrep_results.txt
+
+# misc dev artifacts
+local_*.txt
+local_*.log
+vercel_run_logs*.txt
+dashboard_fetch.html
+verify-ui.ts
+test-clerk-token.ts
+*.png

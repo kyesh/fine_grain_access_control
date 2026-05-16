@@ -52,5 +52,44 @@ To balance developer experience (DX) and perfect security across our target mark
 *   **Support Overhead**: Debugging Enterprise TLS/SSL issues is notoriously expensive. A rock-solid diagnostic tool must be built into the proxy to prove "It's your firewall, not us."
 *   **Latency & Compliance (SOC2/HIPAA)**: Decrypting, inspecting, and re-encrypting every payload adds latency. Furthermore, the proxy will temporarily hold highly sensitive corporate data (emails) in its memory. Enterprise customers will demand strict SOC2/HIPAA compliance proving the proxy doesn't log decrypted payloads.
 
-## 4. Alternate Considerations: Model Context Protocol (MCP)
-If developers shift toward utilizing MCP servers (like Google's newly released `gws` workspace CLI), the architecture simplifies dramatically. Instead of an HTTP proxy handling REST payloads and TLS, we can build an **MCP Middleware Proxy**. The agent communicates via standard JSON-RPC over `stdio` to our proxy, which filters allowed tools, and then forwards the safe JSON payloads to the real MCP server holding the actual Google credentials. This approach eliminates all network routing complexities mentioned above.
+## 4. MCP Server — Agent Connection & Pending Approval
+
+### Overview
+In addition to the REST proxy (Prong 1), we now operate a production MCP server at `/api/mcp`. This enables native integration with MCP-compatible clients (Claude Code, OpenClaw via remote MCP).
+
+### Architecture
+```
+Agent (Claude Code) → OAuth via Clerk → MCP Server → Pending Approval → Proxy Key → Gmail API
+```
+
+**Key components:**
+- **`/api/mcp/route.ts`** — Production MCP handler with Gmail tools
+- **`agent_connections` table** — Tracks OAuth client connections per user
+- **`/.well-known/oauth-*`** — RFC 9728 discovery endpoints (via Clerk)
+
+### Pending Approval Flow
+1. Agent authenticates via OAuth (Clerk handles DCR + consent)
+2. MCP server creates a `pending` connection record
+3. All tool calls return "pending approval" with a dashboard link
+4. User approves in dashboard, assigns a proxy key (agent profile)
+5. Subsequent tool calls use that key's email access and rules
+
+### Permission Chain
+```
+OAuth Token → userId + clientId → agent_connections → proxy_key →
+  key_email_access → Clerk Google Token → Gmail API
+```
+
+### Multi-Email Support
+Each proxy key can access multiple email accounts (via `key_email_access`):
+- Own email: always accessible if mapped to the key
+- Delegated emails: resolved via `email_delegations` table
+- Google tokens: fetched from Clerk for the email owner
+
+### Distribution Channels
+| Channel | Method | Best For |
+|---------|--------|----------|
+| Claude Code | Remote MCP server (`claude mcp add`) | Native MCP clients |
+| OpenClaw | Local scripts + REST proxy API | Code flexibility, full API surface |
+| CLI | `npx fgac auth login` (separate npm package) | Power users, headless flows |
+| Direct API | `Bearer sk_proxy_...` to `gmail.fgac.ai` | Custom integrations |

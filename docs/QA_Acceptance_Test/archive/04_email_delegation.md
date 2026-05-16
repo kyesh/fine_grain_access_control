@@ -204,3 +204,76 @@ When executing the mock AI agent scripts against a **Vercel Preview URL**, Verce
    - **Validation**: Error or no-op — prevent duplicate active delegations.
 
 **Expected Outcome**: The system handles edge cases gracefully with clear error messages.
+
+---
+
+## Package Matrix — Delegation Across Distributions
+
+> These tests verify that delegated email access (reading/sending on behalf of another user) works correctly regardless of distribution package. Prerequisites: Tests 1-10 must pass. An active delegation from `user-b` → `user-a` must exist, with `user-b`'s email mapped to `user-a`'s proxy key via `key_email_access`.
+
+### §11: Hosted MCP Server
+
+**Auth:** Approved MCP connection with proxy key that includes a delegated email.
+
+**Steps:**
+1. Call `list_accounts`:
+   - [ ] Returns both own email AND delegated email
+
+2. Call `gmail_list` with `account: "user-b@gmail.com"` (delegated):
+   ```bash
+   curl -s $BASE_URL/api/mcp -X POST \
+     -H "Authorization: Bearer $MCP_TOKEN" \
+     -H "Content-Type: application/json" \
+     -d '{"jsonrpc":"2.0","method":"tools/call","params":{"name":"gmail_list","arguments":{"account":"user-b@gmail.com"}},"id":1}'
+   ```
+   - [ ] Returns user-b's emails (using user-b's Google token, resolved server-side)
+
+3. Call `gmail_send` from delegated account:
+   - [ ] Send succeeds with From: user-b@gmail.com (subject to send whitelist)
+
+4. Call `gmail_list` with `account: "not-delegated@gmail.com"`:
+   - [ ] Rejected: email not in key's access list
+
+### §12: Claude Code MCP
+
+**Auth:** `claude mcp add` with approved connection.
+
+**Steps:**
+1. "What email accounts can I access?"
+   - [ ] Shows both own and delegated email
+
+2. "Read the latest email from user-b's inbox"
+   - [ ] Returns user-b's email content
+
+3. "Send an email as user-b to test@example.com"
+   - [ ] Sent from user-b (if send whitelist allows)
+
+### §13: Claude Code CLI (Local Scripts)
+
+**Auth:** `node auth.js --action login` completed and approved.
+
+**Steps:**
+1. List with delegated account:
+   ```bash
+   FGAC_ACCOUNT=user-b@gmail.com node gmail.js --action list
+   ```
+   - [ ] Returns user-b's emails through proxy
+
+2. Read delegated email:
+   ```bash
+   FGAC_ACCOUNT=user-b@gmail.com node gmail.js --action read --message-id <id>
+   ```
+   - [ ] Returns full email content
+
+### §14: OpenClaw Skill
+
+**Auth:** FGAC OAuth via `auth.js --action login`.
+
+**Steps:**
+1. Agent invokes: "Read emails from my delegated account user-b@gmail.com"
+   - [ ] Script uses proxy key to read user-b's inbox
+   - [ ] Google token for user-b resolved server-side
+
+2. Agent invokes: "Send an email as user-b to test@example.com"
+   - [ ] Send goes through with user-b as sender (if whitelisted)
+

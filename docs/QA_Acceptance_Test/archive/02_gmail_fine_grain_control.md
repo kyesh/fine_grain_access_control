@@ -75,3 +75,70 @@ When executing the mock AI agent scripts against a **Vercel Preview URL**, Verce
    - **Validation**: The proxy intercepts and blocks the deletion because it is not on the whitelist.
 6. Run the AI agent script to delete an email from `daily@spam-newsletter.com`.
    - **Validation**: The proxy allows the request to pass to Google, successfully deleting the whitelisted email.
+
+---
+
+## Package Matrix — Cross-Distribution Validation
+
+> These tests verify that the same send whitelist / read blacklist rules are enforced regardless of which distribution package the agent uses. Prerequisites: Tests 1-4 must pass via REST proxy first.
+
+### §5: Hosted MCP Server
+
+**Auth:** Use an approved MCP connection with a proxy key that has send whitelist and read blacklist rules.
+
+**Steps:**
+1. Call `gmail_send` via MCP with `to: "allowed@example.com"`:
+   ```bash
+   curl -s $BASE_URL/api/mcp -X POST \
+     -H "Authorization: Bearer $MCP_TOKEN" \
+     -H "Content-Type: application/json" \
+     -d '{"jsonrpc":"2.0","method":"tools/call","params":{"name":"gmail_send","arguments":{"to":"allowed@example.com","subject":"MCP Test","body":"Hello"}},"id":1}'
+   ```
+   - [ ] Send succeeds
+
+2. Call `gmail_send` with `to: "blocked@untrusted.com"`:
+   - [ ] Returns error: "Unauthorized email address"
+
+3. Call `gmail_read` on a blacklisted email:
+   - [ ] Returns error: "Access restricted"
+
+4. Call `get_my_permissions`:
+   - [ ] Shows send whitelist and read blacklist rules
+
+### §6: Claude Code MCP
+
+**Auth:** `claude mcp add` pointed at the MCP server.
+
+**Steps:**
+1. In Claude Code: "Send an email to allowed@example.com saying 'CC MCP Test'"
+   - [ ] Email sent successfully
+
+2. "Send an email to blocked@untrusted.com"
+   - [ ] Rejected with whitelist error
+
+3. "Read the email from sales@competitor.com"
+   - [ ] Rejected with blacklist error
+
+### §7: Claude Code CLI (Local Scripts)
+
+**Auth:** `node auth.js --action login` completed and approved.
+
+**Steps:**
+1. Send to whitelisted address:
+   ```bash
+   node gmail.js --action send --to "allowed@example.com" --subject "CLI Test" --body "Hello"
+   ```
+   - [ ] Send succeeds
+
+2. Send to blocked address:
+   ```bash
+   node gmail.js --action send --to "blocked@untrusted.com" --subject "Blocked" --body "Test"
+   ```
+   - [ ] Returns error: "Unauthorized email address" or HTTP 403
+
+3. Read blacklisted email:
+   ```bash
+   node gmail.js --action read --message-id <blacklisted_id>
+   ```
+   - [ ] Returns error: "Access restricted"
+

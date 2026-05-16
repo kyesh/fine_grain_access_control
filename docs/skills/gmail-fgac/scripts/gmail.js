@@ -31,12 +31,14 @@
 const fs = require('fs');
 const path = require('path');
 const { google } = require('googleapis');
-const { getAuthClient, parseArgs, loadToken } = require('./shared');
+const { getAuthClient, parseArgs, loadToken, getFgacProxyAuth, hasFgacConfig } = require('./shared');
 
 const args = parseArgs(process.argv);
 
-if (!args.account) {
+// FGAC OAuth mode doesn't require --account (uses fgac-credentials.json)
+if (!args.account && !hasFgacConfig()) {
   console.error('Usage: node gmail.js --account <label> --action <action>');
+  console.error('  OR run "node auth.js --action login" first for FGAC OAuth mode');
   process.exit(1);
 }
 
@@ -109,6 +111,33 @@ function getHeader(headers, name) {
 }
 
 async function run() {
+  // --- Mode 1: FGAC OAuth (recommended) ---
+  // If fgac-credentials.json exists with a proxy key, use it.
+  // No --account needed. The proxy key authenticates to gmail.fgac.ai.
+  const fgacAuth = getFgacProxyAuth();
+  if (fgacAuth && !args.account) {
+    const rootUrl = process.env.FGAC_ROOT_URL || fgacAuth.proxyEndpoint || 'https://gmail.fgac.ai';
+    const auth = new google.auth.OAuth2();
+    auth.setCredentials({ access_token: fgacAuth.proxyKey });
+
+    const gmail = google.gmail({
+      version: 'v1',
+      auth,
+      rootUrl: rootUrl + '/',
+    });
+
+    console.error(`[FGAC] Using proxy key "${fgacAuth.keyLabel}" → ${rootUrl}`);
+    await executeAction(gmail);
+    return;
+  }
+
+  // --- Mode 2 & 3: Legacy (--account required) ---
+  if (!args.account) {
+    console.error('No FGAC credentials found and no --account specified.');
+    console.error('Run "node auth.js --action login" or use "--account <label>"');
+    process.exit(1);
+  }
+
   const token = loadToken(args.account);
 
   // Override the root URL to route all requests through the FGAC.AI proxy.

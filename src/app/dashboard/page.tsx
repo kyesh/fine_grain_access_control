@@ -10,6 +10,7 @@ import { KeyControls } from './KeyControls';
 import { DelegateAccessButton } from './DelegateAccessButton';
 import { RevokeDelegationButton } from './RevokeDelegationButton';
 import { ConnectGoogleWarning } from './ConnectGoogleWarning';
+import { ConnectionsPanel } from './ConnectionsPanel';
 
 export default async function DashboardPage() {
   const user = await currentUser();
@@ -21,12 +22,21 @@ export default async function DashboardPage() {
   // Ensure user exists in our DB
   let dbUser = await db.select().from(users).where(eq(users.clerkUserId, user.id)).limit(1).then(res => res[0]);
 
+  const currentEmail = user.emailAddresses[0]?.emailAddress ?? 'unknown';
+
   if (!dbUser) {
     const rawKeys = await db.insert(users).values({
       clerkUserId: user.id,
-      email: user.emailAddresses[0]?.emailAddress ?? 'unknown',
+      email: currentEmail,
     }).returning();
     dbUser = rawKeys[0];
+  } else if (dbUser.email !== currentEmail) {
+    // Sync email if Clerk's email has changed since first signup
+    const updated = await db.update(users)
+      .set({ email: currentEmail })
+      .where(eq(users.id, dbUser.id))
+      .returning();
+    dbUser = updated[0];
   }
 
   // ─── Fetch emails the user can access ─────────────────────────────────────
@@ -142,6 +152,9 @@ export default async function DashboardPage() {
         <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 mt-8 space-y-8">
           
           {!hasCompleteGoogleAccess && <ConnectGoogleWarning />}
+
+          {/* ─── Agent Connections ─────────────────────────────────── */}
+          <ConnectionsPanel />
 
           {/* ─── Your Email & Delegated Emails ─────────────────────── */}
           <div className="bg-white overflow-hidden shadow rounded-lg border border-gray-200">
