@@ -77,3 +77,4 @@ vercel_run_logs*.txt
 dashboard_fetch.html
 verify-ui.ts
 test-clerk-token.ts
+*.png
