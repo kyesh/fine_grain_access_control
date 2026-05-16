@@ -1,0 +1,28 @@
+{
+  "timestamp": "2026-05-16T18:53:44.852Z",
+  "results": [
+    {
+      "test": "MCP auth URL generated",
+      "pass": true
+    },
+    {
+      "test": "Auto-consent completed",
+      "pass": true
+    },
+    {
+      "test": "MCP OAuth completion",
+      "pass": false,
+      "detail": "Timed out after 120s — consent not completed"
+    },
+    {
+      "test": "list_accounts",
+      "pass": false,
+      "detail": "MCP server not authenticated — run without --skip-auth first"
+    }
+  ],
+  "config": {
+    "timeout": 120,
+    "autoConsent": true,
+    "skipAuth": false
+  }
+}
