@@ -78,3 +78,19 @@ dashboard_fetch.html
 verify-ui.ts
 test-clerk-token.ts
 *.png
+
+# one-off QA helper scripts (may contain DB queries or tokens)
+approve-connection.ts
+query-db.ts
+
+# QA env runtime state (credentials, docker configs, auth tokens)
+test/qa-envs/cc-mcp/
+test/qa-envs/cc-cli/
+test/qa-envs/openclaw/credentials/
+test/qa-envs/openclaw/data/
+test/qa-envs/openclaw/docker-compose.yml
+test/qa-envs/openclaw/Dockerfile
+test/qa-envs/openclaw/run-qa.sh
+test/qa-envs/hosted-mcp/state.json
+test/qa-envs/hosted-mcp/auth-server.js
+test/qa-envs/hosted-mcp/playwright-auth.js

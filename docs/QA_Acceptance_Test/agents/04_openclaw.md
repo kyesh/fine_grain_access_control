@@ -3,32 +3,28 @@
 > Runs ALL capabilities via a genuine OpenClaw instance in Docker.
 > Package #2 from distribution_architecture.md.
 
-## Prerequisites
-- `/qa-setup` completed (keys, rules, emails configured)
-- Dev server running at `http://localhost:3000`
-- Docker installed
-- `openclaw:local` image built (from demoClaw or OpenClaw repo)
+## Environment Setup
 
-## Auth Setup
-
-1. Start TestClaw container:
+1. **Run reset**: `bash test/qa-envs/openclaw/reset.sh`
+2. Ensure base image exists: `docker image inspect openclaw:local`
+3. Build & Start:
    ```bash
-   cd test/testclaw
-   docker compose up -d
+   cd test/qa-envs/openclaw && docker compose build
+   FGAC_ROOT_URL=http://localhost:3000 docker compose up -d
    ```
-2. Wait for OpenClaw gateway:
+4. Wait for OpenClaw gateway:
    ```bash
-   until curl -sf http://localhost:18789/health; do sleep 2; done
+   until curl -sf http://localhost:18790/health; do sleep 2; done
    ```
-3. Run OAuth via the gateway (or pre-provision credentials):
+5. Authenticate via docker exec:
    ```bash
-   # If using pre-provisioned credentials:
-   docker exec testclaw-testclaw-1 \
+   docker exec qa-envs-testclaw-1 \
      FGAC_ROOT_URL=http://localhost:3000 \
      node /home/node/.openclaw/skills/gmail-fgac/scripts/auth.js --action login
    ```
-4. Complete OAuth flow via browser agent
-5. Approve connection in dashboard
+   *(Complete OAuth flow via `/browser-agent`, then approve connection in dashboard:*
+   *Navigate to `http://localhost:3000/dashboard?tab=connections`, find the pending connection, select a proxy key and click **Approve**.*
+   *⚠️ NEVER approve connections via direct DB writes — always use the Web UI)*
 
 ## Proof of Authenticity
 
@@ -37,7 +33,7 @@
 - [ ] Docker container logs show gateway receiving the chat prompt:
       `docker logs testclaw-testclaw-1 2>&1 | grep -i "gmail-fgac"`
 - [ ] Logs show skill discovery and invocation (not direct script execution)
-- [ ] Prompts sent to `http://localhost:18789/api/chat` (gateway API), NOT to `node gmail.js`
+- [ ] Prompts sent to `http://localhost:18790/api/chat` (gateway API), NOT to `node gmail.js`
 
 ---
 
@@ -45,7 +41,7 @@
 
 ### A1: Send to whitelisted address
 ```bash
-curl -X POST http://localhost:18789/api/chat \
+curl -X POST http://localhost:18790/api/chat \
   -H "Authorization: Bearer $OPENCLAW_GATEWAY_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"message": "Send an email to '$USER_B_EMAIL' with subject QA OpenClaw - Send Whitelist A1 and body Test from OpenClaw using the gmail-fgac skill"}'
@@ -55,7 +51,7 @@ curl -X POST http://localhost:18789/api/chat \
 
 ### A2: Send to blocked address
 ```bash
-curl -X POST http://localhost:18789/api/chat \
+curl -X POST http://localhost:18790/api/chat \
   -H "Authorization: Bearer $OPENCLAW_GATEWAY_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"message": "Send an email to blocked@untrusted.com with subject Blocked using gmail-fgac"}'
@@ -69,7 +65,7 @@ curl -X POST http://localhost:18789/api/chat \
 
 ### A4: Read normal email
 ```bash
-curl -X POST http://localhost:18789/api/chat \
+curl -X POST http://localhost:18790/api/chat \
   -H "Authorization: Bearer $OPENCLAW_GATEWAY_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"message": "List my recent emails using gmail-fgac"}'
@@ -82,7 +78,7 @@ curl -X POST http://localhost:18789/api/chat \
 
 ### A1: List accounts
 ```bash
-curl -X POST http://localhost:18789/api/chat \
+curl -X POST http://localhost:18790/api/chat \
   -H "Authorization: Bearer $OPENCLAW_GATEWAY_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"message": "What email accounts can I access via gmail-fgac?"}'
@@ -128,5 +124,5 @@ curl -X POST http://localhost:18789/api/chat \
 ## Cleanup
 
 ```bash
-docker compose -f test/testclaw/docker-compose.yml down
+docker compose -f test/qa-envs/openclaw/docker-compose.yml down
 ```

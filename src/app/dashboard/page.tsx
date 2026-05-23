@@ -248,6 +248,7 @@ export default async function DashboardPage() {
             <RuleControls
               accessibleEmails={accessibleEmailsWithGoogleStatus.map(e => e.email)}
               activeKeys={activeKeys.map(k => ({ id: k.id, label: k.label }))}
+              hasBlacklistRules={userRules.some(r => r.actionType === 'read_blacklist')}
             />
           </div>
 

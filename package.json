@@ -3,7 +3,8 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "NODE_OPTIONS='--max-old-space-size=8192' next dev",
+    "dev:qa": "rm -rf .next/dev && NODE_OPTIONS='--max-old-space-size=8192' next dev --turbopack=false",
     "build": "tsx src/db/migrate.ts && next build",
     "start": "next start",
     "lint": "eslint .",
@@ -26,6 +27,7 @@
     "mcp-handler": "^1.1.0",
     "next": "^16.1.6",
     "pg": "^8.20.0",
+    "playwright": "^1.60.0",
     "posthog-js": "^1.360.2",
     "react": "^19.2.3",
     "react-dom": "19.2.3",

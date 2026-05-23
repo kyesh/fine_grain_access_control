@@ -3,10 +3,12 @@
 > Runs ALL capabilities via curl against the MCP endpoint.
 > Package #1 from distribution_architecture.md.
 
-## Prerequisites
-- `/qa-setup` completed (keys, rules, emails configured)
-- Dev server running at `$BASE_URL` (default: `http://localhost:3000`)
-- Fresh DCR client registered and approved in dashboard
+## Environment Setup
+
+1. **Run reset**: `bash test/qa-envs/hosted-mcp/reset.sh`
+2. Ensure dev server is running at `$BASE_URL` (default: `http://localhost:3000`)
+3. Ensure `/qa-setup` is completed (keys, rules, emails configured)
+4. Proceed to Auth flow (DCR registration via curl, saving tokens to `test/qa-envs/hosted-mcp/state.json`)
 
 ## Auth Setup
 
@@ -17,8 +19,12 @@
      -d '{"client_name":"QA Hosted MCP Test","redirect_uris":["http://localhost:9999/callback"],"grant_types":["authorization_code","refresh_token"],"response_types":["code"],"token_endpoint_auth_method":"none"}')
    CLIENT_ID=$(echo $DCR | jq -r '.client_id')
    ```
-2. Complete OAuth flow (via browser agent) to get access token
-3. Approve connection in dashboard — assign proxy key
+2. Complete OAuth flow (via `/browser-agent`) to get access token
+3. Approve connection via `/browser-agent`:
+   - Navigate to `$BASE_URL/dashboard?tab=connections`
+   - Find the pending connection for this client
+   - Select a proxy key from the dropdown and click **Approve**
+   - ⚠️ **NEVER approve connections via direct DB writes — always use the Web UI**
 
 ## Proof of Authenticity
 

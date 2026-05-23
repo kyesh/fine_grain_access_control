@@ -3,25 +3,32 @@
 > Runs ALL capabilities via Claude Code MCP in a tmux session.
 > Package #3 from distribution_architecture.md.
 
-## Prerequisites
-- `/qa-setup` completed (keys, rules, emails configured)
-- Dev server running at `http://localhost:3000`
-- `fgac-gmail` configured in `.claude.json` pointing to `http://localhost:3000/api/mcp`
-- `tmux` installed
-- Chrome running with remote debugging at `localhost:9222` (for auto-consent)
+## Environment Setup
+
+1. **Run reset**: `bash test/qa-envs/cc-mcp/reset.sh`
+2. Configure MCP Server using the Claude CLI:
+   ```bash
+   cd test/qa-envs/cc-mcp && claude mcp add --transport http fgac-gmail http://localhost:3000/api/mcp
+   ```
+3. Launch Claude Code IN the workspace:
+   ```bash
+   tmux new-session -d -s fgac-qa -x 200 -y 50 "cd test/qa-envs/cc-mcp && claude --dangerously-skip-permissions"
+   ```
+4. Verify Discovery: Enter `/mcp` in Claude Code and confirm `fgac-gmail` is listed.
 
 ## Auth Setup
 
-1. Start Claude Code in tmux:
-   ```bash
-   tmux new-session -d -s fgac-qa -x 200 -y 50 "claude --dangerously-skip-permissions"
-   ```
-2. Wait for Claude Code prompt:
-   ```bash
-   # Poll until ready
-   until tmux capture-pane -t fgac-qa -p | grep -q '❯'; do sleep 2; done
-   ```
-3. Start MCP auth:
+> **⚠️ Existing Connection Re-use**: Claude Code's MCP transport uses a stable
+> client ID. If a previous QA cycle already created and approved a connection
+> for this client, new OAuth flows will auto-match to the existing connection
+> and its bound proxy key — which may be the wrong key (e.g., "Restricted Agent"
+> with no email access instead of "QA-Agent-A"). **Before running tests:**
+> 1. Navigate to `http://localhost:3000/dashboard?tab=connections`
+> 2. Find any existing approved connection for this Claude Code client
+> 3. Verify it is bound to `QA-Agent-A` (or the intended test key)
+> 4. If bound to the wrong key: **Block** it, then re-approve with the correct key
+
+1. Start MCP auth:
    ```bash
    tmux send-keys -t fgac-qa "/mcp" Enter
    # Select fgac-gmail → Authenticate
@@ -39,7 +46,11 @@
    ```bash
    tmux capture-pane -t fgac-qa -p | grep "Authentication successful"
    ```
-7. Approve connection in dashboard via `/browser-agent`
+7. Approve connection via `/browser-agent`:
+   - Navigate to `http://localhost:3000/dashboard?tab=connections`
+   - Find the pending connection for this client
+   - Select a proxy key from the dropdown and click **Approve**
+   - ⚠️ **NEVER approve connections via direct DB writes — always use the Web UI**
 
 ## Proof of Authenticity
 

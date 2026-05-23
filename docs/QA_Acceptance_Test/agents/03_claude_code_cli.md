@@ -3,29 +3,25 @@
 > Runs ALL capabilities via Claude Code invoking local scripts (auth.js, gmail.js).
 > Package #4 from distribution_architecture.md — shares scripts with OpenClaw skill.
 
-## Prerequisites
-- `/qa-setup` completed (keys, rules, emails configured)
-- Dev server running at `http://localhost:3000`
-- FGAC skill scripts installed locally (from `docs/skills/gmail-fgac/scripts/`)
-- `tmux` installed
-- Chrome running with remote debugging at `localhost:9222` (for OAuth consent)
+## Environment Setup
 
-## Auth Setup
-
-1. Start Claude Code in tmux:
+1. **Run reset**: `bash test/qa-envs/cc-cli/reset.sh`
+2. Authenticate the local skill: 
    ```bash
-   tmux new-session -d -s fgac-cli-qa -x 200 -y 50 "claude --dangerously-skip-permissions"
+   FGAC_ROOT_URL=http://localhost:3000 node docs/skills/gmail-fgac/scripts/auth.js --action login
    ```
-2. Wait for prompt, then instruct Claude to authenticate:
+   *(Complete OAuth in browser via `/browser-agent`, then approve connection in dashboard:*
+   *Navigate to `http://localhost:3000/dashboard?tab=connections`, find the pending connection, select a proxy key and click **Approve**.*
+   *⚠️ NEVER approve connections via direct DB writes — always use the Web UI)*
+3. Launch Claude Code IN the workspace using the `--plugin-dir` flag:
    ```bash
-   tmux send-keys -t fgac-cli-qa "Run: FGAC_ROOT_URL=http://localhost:3000 node docs/skills/gmail-fgac/scripts/auth.js --action login" Enter
+   tmux new-session -d -s fgac-cli-qa -x 200 -y 50 "cd test/qa-envs/cc-cli && claude --dangerously-skip-permissions --plugin-dir ../../../docs/skills/gmail-fgac"
    ```
-3. OAuth flow opens in browser — auto-consent via playwright
-4. Approve connection in dashboard
-5. Verify auth status:
+4. Verify Discovery: 
    ```bash
-   tmux send-keys -t fgac-cli-qa "Run: FGAC_ROOT_URL=http://localhost:3000 node docs/skills/gmail-fgac/scripts/auth.js --action status" Enter
+   tmux send-keys -t fgac-cli-qa "What skills do you have available?" Enter
    ```
+   *(Confirm `gmail-fgac` is listed)*
 
 ## Proof of Authenticity
 

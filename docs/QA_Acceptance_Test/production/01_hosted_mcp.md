@@ -24,10 +24,14 @@ BASE_URL=https://fgac.ai
 
 ## Run ALL Capabilities
 
-Follow `agents/01_hosted_mcp.md` but with `BASE_URL=https://fgac.ai` (no override needed).
+> **CRITICAL**: Production testing MUST validate full end-to-end plumbing. Do not just verify installation.
 
-- [ ] Send whitelist: allowed send, blocked send
-- [ ] Read blacklist: blocked content, normal read
-- [ ] Multi-email scoping: mapped/unmapped access
-- [ ] Connection lifecycle: pending → approve → tools work
-- [ ] get_my_permissions: correct data
+Run the *exact same capability checklists* as the local tests, but against the production `fgac.ai` endpoints. Follow the steps in `agents/01_hosted_mcp.md` using `BASE_URL=https://fgac.ai`:
+
+- `[ ]` Execute **Send Whitelist** checklist (→ `capabilities/01_send_whitelist.md`)
+- `[ ]` Execute **Read Blacklist** checklist (→ `capabilities/02_read_blacklist.md`)
+- `[ ]` Execute **Multi-Email Scoping** checklist (→ `capabilities/03_multi_email_scoping.md`)
+- `[ ]` Execute **Delegation** checklist (→ `capabilities/04_delegation.md`)
+- `[ ]` Execute **Connection Lifecycle** checklist (→ `capabilities/06_connection_lifecycle.md`)
+- `[ ]` Execute **Key Lifecycle** checklist (→ `capabilities/07_key_lifecycle.md`)
+- `[ ]` Execute **Label Access** checklist (→ `capabilities/05_label_access.md`)

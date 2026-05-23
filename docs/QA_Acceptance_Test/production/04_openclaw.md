@@ -38,10 +38,14 @@ curl -X POST http://localhost:18789/api/chat \
   -d '{"message": "List my recent emails using gmail-fgac"}'
 ```
 
-Follow `agents/04_openclaw.md` — skill already points to production URLs.
+> **CRITICAL**: Production testing MUST validate full end-to-end plumbing. Do not just verify installation.
 
-- [ ] OpenClaw discovers skill installed from ClawHub
-- [ ] Send whitelist: allowed send, blocked send
-- [ ] Read blacklist: normal read
-- [ ] Multi-email scoping: accounts.js shows correct emails
-- [ ] Connection lifecycle: auth → approve → tools work
+Run the *exact same capability checklists* as the local tests, but against the production endpoints. Follow the steps in `agents/04_openclaw.md` (no URL override needed, skill already points to production URLs):
+
+- `[ ]` Execute **Send Whitelist** checklist (→ `capabilities/01_send_whitelist.md`)
+- `[ ]` Execute **Read Blacklist** checklist (→ `capabilities/02_read_blacklist.md`)
+- `[ ]` Execute **Multi-Email Scoping** checklist (→ `capabilities/03_multi_email_scoping.md`)
+- `[ ]` Execute **Delegation** checklist (→ `capabilities/04_delegation.md`)
+- `[ ]` Execute **Connection Lifecycle** checklist (→ `capabilities/06_connection_lifecycle.md`)
+- `[ ]` Execute **Key Lifecycle** checklist (→ `capabilities/07_key_lifecycle.md`)
+- `[ ]` Execute **Label Access** checklist (→ `capabilities/05_label_access.md`)

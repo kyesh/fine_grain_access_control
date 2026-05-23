@@ -327,6 +327,18 @@ export async function deleteRule(id: string) {
 export async function applyRecommendedSecurityRules() {
   const dbUser = await getDbUser();
 
+  // Guard: skip if user already has read_blacklist rules (prevents duplicates
+  // when the "Quick Add 2FA Block" button is clicked multiple times)
+  const existing = await db.select().from(accessRules)
+    .where(and(
+      eq(accessRules.userId, dbUser.id),
+      eq(accessRules.actionType, 'read_blacklist'),
+    ));
+  if (existing.length > 0) {
+    revalidatePath("/dashboard");
+    return;
+  }
+
   const rulesToInsert = [
     {
       userId: dbUser.id,
