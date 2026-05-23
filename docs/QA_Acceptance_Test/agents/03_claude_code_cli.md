@@ -3,39 +3,57 @@
 > Runs ALL capabilities via Claude Code invoking local scripts (auth.js, gmail.js).
 > Package #4 from distribution_architecture.md — shares scripts with OpenClaw skill.
 
-## Environment Setup
+## Testing Model: Two-Phase Hybrid
+
+This agent uses a **two-phase hybrid testing approach** based on Anthropic's best practices
+for skill testing. Phase 1 handles interactive auth, Phase 2 uses `claude -p` headless mode.
+
+### Phase 1: Auth Setup (Interactive, One-Time)
 
 1. **Run reset**: `bash test/qa-envs/cc-cli/reset.sh`
-   - This copies the plugin into `.claude/skills/gmail-fgac/` (mimics marketplace install)
-   - Installs npm dependencies in the scripts directory
-2. Authenticate the local skill: 
+   - Copies plugin into `.claude/skills/gmail-fgac/` (mimics marketplace install)
+   - Installs npm dependencies
+2. **Authenticate**:
    ```bash
    FGAC_ROOT_URL=http://localhost:3000 node test/qa-envs/cc-cli/.claude/skills/gmail-fgac/scripts/auth.js --action login
    ```
-   *(Complete OAuth in browser via `/browser-agent`, then approve connection in dashboard:*
-   *Navigate to `http://localhost:3000/dashboard?tab=connections`, find the pending connection, select a proxy key and click **Approve**.*
-   *⚠️ NEVER approve connections via direct DB writes — always use the Web UI)*
-3. Retrieve proxy key after approval:
+   Complete OAuth in browser via `/browser-agent`, then approve connection in dashboard:
+   Navigate to `http://localhost:3000/dashboard?tab=connections`, find the pending connection,
+   select a proxy key and click **Approve**.
+   ⚠️ NEVER approve connections via direct DB writes — always use the Web UI.
+3. **Retrieve proxy key**:
    ```bash
    FGAC_ROOT_URL=http://localhost:3000 node test/qa-envs/cc-cli/.claude/skills/gmail-fgac/scripts/auth.js --action status
    ```
-4. Launch Claude Code FROM the workspace directory:
+4. **Verify credentials exist**:
    ```bash
-   tmux new-session -d -s fgac-cli-qa -x 200 -y 50 "cd test/qa-envs/cc-cli && claude --dangerously-skip-permissions"
+   test -f ~/.openclaw/gmail-fgac/fgac-credentials.json && echo "✅ Auth ready" || echo "❌ Auth needed"
    ```
-5. Verify Skill Discovery: 
-   ```bash
-   tmux send-keys -t fgac-cli-qa "What skills do you have available?" Enter
-   ```
-   *(Confirm `gmail-fgac` is listed)*
+
+### Phase 2: Headless Capability Eval (`claude -p`)
+
+Once auth is pre-seeded, run the eval suite:
+```bash
+cd test/qa-envs/cc-cli && bash evals/run_evals.sh
+```
+
+This runs each test case via `claude -p` (non-interactive mode) with:
+- `--output-format json` — structured results with tool calls, cost, turns
+- `--allowedTools "Bash(node:*)"` — restricted to skill scripts
+- `--max-turns 5` — prevents runaway execution
+- `--dangerously-skip-permissions` — unattended execution
+
+> **Key insight**: Slash commands (`/gmail-fgac`) are interactive-only. In `-p` mode,
+> prompts reference the skill by its trigger description in natural language
+> (e.g., "Using the gmail-fgac skill, ...").
 
 ## Proof of Authenticity
 
-> The following evidence proves Claude Code is invoking the scripts (not the test harness):
+> Evidence that Claude Code discovers and invokes the skill (not a test harness):
 
-- [ ] `tmux capture-pane` shows Claude Code's TUI rendering the script command + output
-- [ ] Claude decides which script to invoke based on the prompt (not hardcoded)
-- [ ] Output passes through Claude's reasoning, not just raw stdout
+- [ ] `claude -p` JSON output contains `num_turns > 1` (Claude made tool calls)
+- [ ] Result JSON shows Bash tool invocations in the `usage.iterations` array
+- [ ] Output references specific script behavior (FGAC proxy, Message IDs)
 
 ---
 
@@ -43,35 +61,39 @@
 
 ### A1: Send to whitelisted address
 ```bash
-tmux send-keys -t fgac-cli-qa "Send an email to $USER_B_EMAIL with subject 'QA CC CLI - Send Whitelist A1' using the gmail-fgac skill" Enter
+claude -p "Using the gmail-fgac skill, send an email to \$USER_B_EMAIL with subject 'QA CC CLI - Send Whitelist A1' and body 'Test'" \
+  --allowedTools "Bash(node:*)" --output-format json --max-turns 5 --dangerously-skip-permissions
 ```
-- [ ] Claude invokes `gmail.js --action send`, email sent
+- [ ] Result contains "sent successfully" or "Message ID"
 
 ### A2: Send to blocked address
 ```bash
-tmux send-keys -t fgac-cli-qa "Send an email to blocked@untrusted.com with subject 'Blocked' using gmail-fgac" Enter
+claude -p "Using the gmail-fgac skill, send an email to blocked@untrusted.com with subject 'Should Block' and body 'Test'" \
+  --allowedTools "Bash(node:*)" --output-format json --max-turns 5 --dangerously-skip-permissions
 ```
-- [ ] Claude reports whitelist error from script output
+- [ ] Result contains "blocked", "403", "Unauthorized", or "whitelist"
 
 ---
 
 ## Capability: Read Blacklist (→ capabilities/02_read_blacklist.md)
 
-### A4: Read normal email
+### A3: Read normal email
 ```bash
-tmux send-keys -t fgac-cli-qa "List my recent emails using gmail-fgac" Enter
+claude -p "Using the gmail-fgac skill, list my 5 most recent emails" \
+  --allowedTools "Bash(node:*)" --output-format json --max-turns 5 --dangerously-skip-permissions
 ```
-- [ ] Claude invokes `gmail.js --action list`, returns emails
+- [ ] Result contains email subjects/senders or appropriate rule-based block message
 
 ---
 
 ## Capability: Multi-Email Scoping (→ capabilities/03_multi_email_scoping.md)
 
-### A1: List accounts
+### A4: List accounts
 ```bash
-tmux send-keys -t fgac-cli-qa "What email accounts can I access via gmail-fgac?" Enter
+claude -p "Using the gmail-fgac skill, what email accounts can I access?" \
+  --allowedTools "Bash(node:*)" --output-format json --max-turns 5 --dangerously-skip-permissions
 ```
-- [ ] Claude invokes `accounts.js --action list`, shows mapped emails
+- [ ] Result shows mapped email addresses
 
 ---
 
@@ -84,7 +106,7 @@ tmux send-keys -t fgac-cli-qa "What email accounts can I access via gmail-fgac?"
 
 ## Capability: Connection Lifecycle (→ capabilities/06_connection_lifecycle.md)
 
-### A3-A5: Tested during auth setup
+### A3-A5: Tested during Phase 1 auth setup
 - [ ] OAuth → pending → approved → tools work
 
 ---
@@ -108,8 +130,21 @@ tmux send-keys -t fgac-cli-qa "What email accounts can I access via gmail-fgac?"
 
 ---
 
+## Automated vs Manual Test Coverage
+
+| Test | Method | Automated? |
+|------|--------|------------|
+| A1: Send whitelist | `claude -p` eval suite | ✅ |
+| A2: Send blocked | `claude -p` eval suite | ✅ |
+| A3: Read emails | `claude -p` eval suite | ✅ |
+| A4: List accounts | `claude -p` eval suite | ✅ |
+| A5: Connection lifecycle | Phase 1 (interactive) | Manual |
+| A6: Delegation | `claude -p` eval suite | ✅ |
+| A7: Key revocation | `claude -p` eval suite | ✅ |
+| A8: Light mode | Browser agent | Manual |
+
+---
+
 ## Cleanup
 
-```bash
-tmux kill-session -t fgac-cli-qa
-```
+No tmux sessions to clean up. Results are saved to `test/qa-envs/cc-cli/evals/results/`.
