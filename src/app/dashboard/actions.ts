@@ -2,7 +2,7 @@
 
 import { db } from "@/db";
 import { users, proxyKeys, emailDelegations, keyEmailAccess, accessRules, keyRuleAssignments } from "@/db/schema";
-import { eq, and } from "drizzle-orm";
+import { eq, and, desc } from "drizzle-orm";
 import { currentUser } from "@clerk/nextjs/server";
 import { revalidatePath } from "next/cache";
 import safeRegex from "safe-regex";
@@ -44,8 +44,11 @@ export async function createDelegation(formData: FormData) {
   }
 
   // Find the delegate user in our DB
+  // Order by createdAt DESC to get the most recently created user record
+  // when duplicate email rows exist (from Clerk session re-creations)
   const delegateUser = await db.select().from(users)
     .where(eq(users.email, delegateEmail))
+    .orderBy(desc(users.createdAt))
     .limit(1).then(res => res[0]);
 
   if (!delegateUser) {
