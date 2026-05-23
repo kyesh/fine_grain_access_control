@@ -94,3 +94,5 @@ test/qa-envs/openclaw/run-qa.sh
 test/qa-envs/hosted-mcp/state.json
 test/qa-envs/hosted-mcp/auth-server.js
 test/qa-envs/hosted-mcp/playwright-auth.js
+.qa_test_keys.json
+.qa_test_keys.json
