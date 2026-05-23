@@ -1,0 +1,11 @@
+{
+  "name": "fgac-gmail",
+  "version": "2.0.0",
+  "description": "Secure Gmail access for Claude Code via FGAC.ai — fine-grained access control for AI agents",
+  "author": {
+    "name": "fgac-ai",
+    "email": "support@fgac.ai"
+  },
+  "license": "MIT-0",
+  "keywords": ["gmail", "email", "security", "fgac"]
+}
