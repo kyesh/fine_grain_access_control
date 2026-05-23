@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "NODE_OPTIONS='--max-old-space-size=8192' next dev",
-    "dev:qa": "rm -rf .next/dev && NODE_OPTIONS='--max-old-space-size=8192' next dev --turbopack=false",
+    "dev:qa": "rm -rf .next/dev && NODE_OPTIONS='--max-old-space-size=8192' next dev --webpack",
     "build": "tsx src/db/migrate.ts && next build",
     "start": "next start",
     "lint": "eslint .",

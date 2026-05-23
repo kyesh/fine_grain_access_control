@@ -11,7 +11,7 @@ description: Bootstrap QA environment via browser agent
 2. Read `.qa_test_emails.json` for USER_A and USER_B
 3. Clear Turbopack cache and start dev server for QA:
    ```bash
-   npm run dev:qa  # Clears .next/dev cache, disables Turbopack, 8GB heap
+   npm run dev:qa  # Clears .next/dev cache, uses Webpack (not Turbopack) to prevent memory leaks, 8GB heap
    ```
 4. Verify dev server running: `curl -sf http://localhost:3000`
 5. Discover and execute ALL setup docs **in order**:
