@@ -6,18 +6,24 @@
 ## Environment Setup
 
 1. **Run reset**: `bash test/qa-envs/cc-cli/reset.sh`
+   - This copies the plugin into `.claude/skills/gmail-fgac/` (mimics marketplace install)
+   - Installs npm dependencies in the scripts directory
 2. Authenticate the local skill: 
    ```bash
-   FGAC_ROOT_URL=http://localhost:3000 node docs/skills/gmail-fgac/scripts/auth.js --action login
+   FGAC_ROOT_URL=http://localhost:3000 node test/qa-envs/cc-cli/.claude/skills/gmail-fgac/scripts/auth.js --action login
    ```
    *(Complete OAuth in browser via `/browser-agent`, then approve connection in dashboard:*
    *Navigate to `http://localhost:3000/dashboard?tab=connections`, find the pending connection, select a proxy key and click **Approve**.*
    *⚠️ NEVER approve connections via direct DB writes — always use the Web UI)*
-3. Launch Claude Code IN the workspace using the `--plugin-dir` flag:
+3. Retrieve proxy key after approval:
    ```bash
-   tmux new-session -d -s fgac-cli-qa -x 200 -y 50 "cd test/qa-envs/cc-cli && claude --dangerously-skip-permissions --plugin-dir ../../../docs/skills/gmail-fgac"
+   FGAC_ROOT_URL=http://localhost:3000 node test/qa-envs/cc-cli/.claude/skills/gmail-fgac/scripts/auth.js --action status
    ```
-4. Verify Discovery: 
+4. Launch Claude Code FROM the workspace directory:
+   ```bash
+   tmux new-session -d -s fgac-cli-qa -x 200 -y 50 "cd test/qa-envs/cc-cli && claude --dangerously-skip-permissions"
+   ```
+5. Verify Skill Discovery: 
    ```bash
    tmux send-keys -t fgac-cli-qa "What skills do you have available?" Enter
    ```

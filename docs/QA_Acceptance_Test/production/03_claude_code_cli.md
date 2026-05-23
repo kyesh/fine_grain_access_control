@@ -1,17 +1,29 @@
-# Production: Claude Code CLI (Marketplace Bundle)
+# Production: Claude Code CLI (Marketplace Install)
 
 > Install: Via Claude Code plugin marketplace
 > Runs ALL capabilities against `https://gmail.fgac.ai`
 
-> **Note**: This production channel is currently blocked pending the availability of the skill bundle in the marketplace.
-
 ## Install from Distribution Channel
 
-Install the skill bundle from the Claude Code marketplace (simulated or real).
-Once installed, the `SKILL.md` and scripts should be present in the local `.claude/skills/gmail-fgac` directory.
+1. Add the FGAC marketplace:
+   ```
+   /plugin marketplace add kyesh/fine_grain_access_control
+   ```
+
+2. Install the Gmail skill:
+   ```
+   /plugin install fgac-gmail@fine_grain_access_control
+   ```
+
+3. Verify install:
+   ```
+   /plugin list
+   ```
 
 ### Verify Install
-- `[ ]` `node .claude/skills/gmail-fgac/scripts/gmail.js --help` works
+- `[ ]` `fgac-gmail` appears in `/plugin list`
+- `[ ]` `.claude/skills/gmail-fgac/SKILL.md` exists
+- `[ ]` `node .claude/skills/gmail-fgac/scripts/gmail.js --help` works (exits 0)
 
 ## Auth
 
@@ -20,7 +32,8 @@ node .claude/skills/gmail-fgac/scripts/auth.js --action login
 ```
 - `[ ]` Browser opens to `https://fgac.ai` OAuth consent
 - `[ ]` Token saved locally after consent
-- `[ ]` Connection approved in production dashboard
+- `[ ]` Connection approved in production dashboard (`https://fgac.ai/dashboard?tab=connections`)
+- `[ ]` `node .claude/skills/gmail-fgac/scripts/auth.js --action status` returns proxy key
 
 ## Run ALL Capabilities
 
