@@ -10,10 +10,12 @@ This workflow drives the user's real Chrome browser via `@playwright/cli attach 
 
 ## Prerequisites
 
-The user must have Chrome running with remote debugging enabled and their persistent profile:
+The user must have Chrome running with remote debugging enabled using the **project testing profile**:
 ```bash
-google-chrome-stable --remote-debugging-port=9222 --user-data-dir="$(pwd)/.playwright_user_data"
+google-chrome --user-data-dir=/home/kyesh/GitRepos/fine_grain_access_control/.playwright_user_data --remote-debugging-port=9222
 ```
+
+> **CRITICAL**: Always use the exact `--user-data-dir` path above. This profile preserves Google sign-in sessions and cookies needed for testing. Do NOT launch Chrome without `--user-data-dir`, do NOT use a different profile path, and do NOT run `pkill chrome` — it will kill the user's real browser session. If Chrome isn't running on port 9222, ask the user to start it with the command above.
 
 ## Workflow Execution Steps
 
@@ -26,7 +28,7 @@ google-chrome-stable --remote-debugging-port=9222 --user-data-dir="$(pwd)/.playw
    - If this succeeds (returns JSON), proceed to step 2.
    - If this fails (connection refused), STOP and ask the user to run:
      ```
-     google-chrome-stable --remote-debugging-port=9222 --user-data-dir="$(pwd)/.playwright_user_data"
+     google-chrome --user-data-dir=/home/kyesh/GitRepos/fine_grain_access_control/.playwright_user_data --remote-debugging-port=9222
      ```
 
 2. **Attach to the running browser**
