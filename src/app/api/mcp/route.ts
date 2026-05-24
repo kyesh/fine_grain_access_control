@@ -20,7 +20,9 @@ import { eq, and } from 'drizzle-orm';
 import { clerkClient } from '@clerk/nextjs/server';
 import safeRegex from 'safe-regex';
 
-const DASHBOARD_URL = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
+const DASHBOARD_URL = process.env.NEXT_PUBLIC_APP_URL
+  || (process.env.VERCEL_PROJECT_PRODUCTION_URL ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}` : null)
+  || 'http://localhost:3000';
 
 // ─── Connection Resolution ──────────────────────────────────────────────────
 
@@ -493,22 +495,37 @@ async function verifyClerkJwtDirect(token: string) {
 export const POST = experimental_withMcpAuth(
   handler,
   async (_req, bearerToken) => {
+    let authInfo: ReturnType<typeof verifyClerkToken> | Awaited<ReturnType<typeof verifyClerkJwtDirect>> | undefined;
+
     // Strategy 1: Try Clerk's built-in auth() + verifyClerkToken
     try {
       const clerkAuth = await auth({ acceptsToken: 'oauth_token' });
-      const authInfo = verifyClerkToken(clerkAuth, bearerToken);
-      if (authInfo?.extra?.userId) return authInfo;
+      const result = verifyClerkToken(clerkAuth, bearerToken);
+      if (result?.extra?.userId) authInfo = result;
     } catch (error) {
       console.warn('[MCP] Clerk auth() failed, will try direct JWT:', error);
     }
 
     // Strategy 2: Direct JWT verification (fallback for CLI/non-browser contexts)
-    if (bearerToken) {
+    if (!authInfo && bearerToken) {
       console.log('[MCP] Falling back to direct JWT verification');
-      return await verifyClerkJwtDirect(bearerToken);
+      authInfo = await verifyClerkJwtDirect(bearerToken);
     }
 
-    return undefined;
+    // Eagerly create/touch agent_connection on ANY authenticated request
+    // (including initialize), so connections appear in the dashboard immediately.
+    // Tool handlers still call requireApproval() as a fallback safety net.
+    if (authInfo) {
+      const userId = authInfo.extra?.userId as string | undefined;
+      const clientId = (authInfo as Record<string, unknown>).clientId as string | undefined;
+      if (userId && clientId) {
+        resolveConnection(userId, clientId).catch((err) =>
+          console.error('[MCP] Eager connection creation failed:', err)
+        );
+      }
+    }
+
+    return authInfo;
   },
   {
     required: true,

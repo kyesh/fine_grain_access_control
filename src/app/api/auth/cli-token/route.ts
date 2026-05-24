@@ -23,7 +23,9 @@ import {
 import { eq, and } from 'drizzle-orm';
 import { NextRequest, NextResponse } from 'next/server';
 
-const DASHBOARD_URL = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
+const DASHBOARD_URL = process.env.NEXT_PUBLIC_APP_URL
+  || (process.env.VERCEL_PROJECT_PRODUCTION_URL ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}` : null)
+  || 'http://localhost:3000';
 
 /**
  * Decode and verify a Clerk OAuth JWT directly against the Clerk JWKS endpoint.
