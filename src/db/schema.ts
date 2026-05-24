@@ -102,3 +102,24 @@ export const keyRuleAssignments = pgTable('key_rule_assignments', {
 }, (table) => [
   uniqueIndex('key_rule_unique').on(table.proxyKeyId, table.accessRuleId),
 ]);
+
+// ─── Agent Connections ──────────────────────────────────────────────────────
+// Tracks OAuth client connections from MCP agents/apps.
+// Each unique (userId, clientId) pair is one "connection".
+// Connections start as 'pending' — the user must approve them in the dashboard
+// and bind them to a proxy key (agent profile) before they can access anything.
+// Once approved, reconnections with the same clientId auto-inherit permissions.
+export const agentConnections = pgTable('agent_connections', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  userId: uuid('user_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
+  clientId: text('client_id').notNull(),          // From DCR registration
+  clientName: text('client_name'),                 // From DCR metadata (e.g., "claude-desktop")
+  nickname: text('nickname'),                      // User-assigned label (e.g., "My Work Agent")
+  proxyKeyId: uuid('proxy_key_id').references(() => proxyKeys.id, { onDelete: 'set null' }), // NULL = pending
+  status: text('status').notNull().default('pending'), // 'pending', 'approved', 'blocked'
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  approvedAt: timestamp('approved_at'),
+  lastUsedAt: timestamp('last_used_at'),
+}, (table) => [
+  uniqueIndex('connection_user_client_unique').on(table.userId, table.clientId),
+]);

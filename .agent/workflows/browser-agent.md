@@ -1,3 +1,7 @@
+---
+description: Instructions for how to test with the browser tool/playwright
+---
+
 # Browser Agent Workflow (/browser-agent)
 
 This workflow drives the user's real Chrome browser via `@playwright/cli attach --cdp`, preserving all Google sign-in sessions and cookies.

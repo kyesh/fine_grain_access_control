@@ -1,0 +1,11 @@
+# Runtime state — never commit
+cc-mcp/
+cc-cli/
+openclaw/credentials/
+openclaw/data/
+openclaw/docker-compose.yml
+openclaw/Dockerfile
+openclaw/run-qa.sh
+openclaw/skills/
+hosted-mcp/state.json
+!*/reset.sh

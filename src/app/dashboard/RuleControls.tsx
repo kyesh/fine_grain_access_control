@@ -17,9 +17,11 @@ interface ProxyKeyInfo {
 export function RuleControls({
   accessibleEmails = [],
   activeKeys = [],
+  hasBlacklistRules = false,
 }: {
   accessibleEmails?: string[];
   activeKeys?: ProxyKeyInfo[];
+  hasBlacklistRules?: boolean;
 }) {
   const [isPending, startTransition] = useTransition();
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -65,10 +67,11 @@ export function RuleControls({
           onClick={() =>
             startTransition(() => applyRecommendedSecurityRules())
           }
-          disabled={isPending}
+          disabled={isPending || hasBlacklistRules}
+          title={hasBlacklistRules ? "Security rules already applied" : undefined}
           className="bg-indigo-50 text-indigo-700 hover:bg-indigo-100 px-4 py-2 text-sm font-medium rounded-md disabled:opacity-50 transition-all border border-indigo-200"
         >
-          {isPending ? "Applying..." : "+ Quick Add 2FA Block"}
+          {hasBlacklistRules ? "✓ 2FA Block Applied" : isPending ? "Applying..." : "+ Quick Add 2FA Block"}
         </button>
         <button
           onClick={() => setIsModalOpen(true)}

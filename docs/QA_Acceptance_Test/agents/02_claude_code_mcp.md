@@ -1,0 +1,161 @@
+# Agent: Claude Code MCP
+
+> Runs ALL capabilities via Claude Code MCP in a tmux session.
+> Package #3 from distribution_architecture.md.
+
+## Environment Setup
+
+1. **Run reset**: `bash test/qa-envs/cc-mcp/reset.sh`
+2. Configure MCP Server using the Claude CLI:
+   ```bash
+   cd test/qa-envs/cc-mcp && claude mcp add --transport http fgac-gmail http://localhost:3000/api/mcp
+   ```
+3. Launch Claude Code IN the workspace:
+   ```bash
+   tmux new-session -d -s fgac-qa -x 200 -y 50 "cd test/qa-envs/cc-mcp && claude --dangerously-skip-permissions"
+   ```
+4. Verify Discovery: Enter `/mcp` in Claude Code and confirm `fgac-gmail` is listed.
+
+## Auth Setup
+
+> **⚠️ Existing Connection Re-use**: Claude Code's MCP transport uses a stable
+> client ID. If a previous QA cycle already created and approved a connection
+> for this client, new OAuth flows will auto-match to the existing connection
+> and its bound proxy key — which may be the wrong key (e.g., "Restricted Agent"
+> with no email access instead of "QA-Agent-A"). **Before running tests:**
+> 1. Navigate to `http://localhost:3000/dashboard?tab=connections`
+> 2. Find any existing approved connection for this Claude Code client
+> 3. Verify it is bound to `QA-Agent-A` (or the intended test key)
+> 4. If bound to the wrong key: **Block** it, then re-approve with the correct key
+
+1. Start MCP auth:
+   ```bash
+   tmux send-keys -t fgac-qa "/mcp" Enter
+   # Select fgac-gmail → Authenticate
+   ```
+4. Extract auth URL from tmux output:
+   ```bash
+   AUTH_URL=$(tmux capture-pane -t fgac-qa -p -S -50 | grep -o 'http[s]*://[^ ]*auth[^ ]*')
+   ```
+5. Auto-consent via playwright:
+   ```bash
+   npx @playwright/cli -s=antigravity_ui goto "$AUTH_URL"
+   # Wait for and click "Allow" button
+   ```
+6. Verify authentication:
+   ```bash
+   tmux capture-pane -t fgac-qa -p | grep "Authentication successful"
+   ```
+7. Approve connection via `/browser-agent`:
+   - Navigate to `http://localhost:3000/dashboard?tab=connections`
+   - Find the pending connection for this client
+   - Select a proxy key from the dropdown and click **Approve**
+   - ⚠️ **NEVER approve connections via direct DB writes — always use the Web UI**
+
+## Proof of Authenticity
+
+> The following evidence proves Claude Code (not a script) processes requests:
+
+- [ ] `tmux capture-pane` output shows Claude Code's TUI rendering the tool call
+- [ ] Screenshot of Claude Code session showing `fgac-gmail` tool invocation
+- [ ] Output is from Claude's natural language processing, not a raw `node gmail.js` call
+
+---
+
+## Capability: Send Whitelist (→ capabilities/01_send_whitelist.md)
+
+### A1: Send to whitelisted address
+```bash
+tmux send-keys -t fgac-qa "Send an email to $USER_B_EMAIL with subject 'QA CC MCP - Send Whitelist A1' and body 'Test from Claude Code MCP'" Enter
+```
+- [ ] Claude Code invokes `gmail_send`, email sent successfully
+
+### A2: Send to blocked address
+```bash
+tmux send-keys -t fgac-qa "Send an email to blocked@untrusted.com with subject 'Blocked'" Enter
+```
+- [ ] Claude Code reports whitelist error from fgac-gmail
+
+---
+
+## Capability: Read Blacklist (→ capabilities/02_read_blacklist.md)
+
+### A1: Read blacklisted email
+```bash
+tmux send-keys -t fgac-qa "Read the email from sales@competitor.com" Enter
+```
+- [ ] Claude Code reports "Access restricted" error
+
+### A4: Read normal email
+```bash
+tmux send-keys -t fgac-qa "List my recent emails" Enter
+```
+- [ ] Claude Code returns email list via `gmail_list`
+
+---
+
+## Capability: Multi-Email Scoping (→ capabilities/03_multi_email_scoping.md)
+
+### A1: List accounts
+```bash
+tmux send-keys -t fgac-qa "What email accounts can I access?" Enter
+```
+- [ ] Shows correct email accounts for this proxy key
+
+---
+
+## Capability: Delegation (→ capabilities/04_delegation.md)
+
+### A6: List accounts shows delegated
+```bash
+tmux send-keys -t fgac-qa "List my email accounts" Enter
+```
+- [ ] Shows both own and delegated emails (if delegation configured)
+
+---
+
+## Capability: Connection Lifecycle (→ capabilities/06_connection_lifecycle.md)
+
+### A3-A5: Tested during auth setup above
+- [ ] Pending connection created during OAuth
+- [ ] Approved in dashboard
+- [ ] Tools work after approval
+
+### A6: get_my_permissions
+```bash
+tmux send-keys -t fgac-qa "What are my permissions?" Enter
+```
+- [ ] Shows connection, key, emails, rules
+
+---
+
+## Capability: Label Access (→ capabilities/05_label_access.md)
+
+```bash
+tmux send-keys -t fgac-qa "Read the email labeled Highly-Confidential" Enter
+```
+- [ ] Blocked by label blacklist (if configured)
+
+---
+
+## Capability: Key Lifecycle (→ capabilities/07_key_lifecycle.md)
+
+> Key revocation tested by revoking key in dashboard, then retrying:
+```bash
+tmux send-keys -t fgac-qa "List my emails" Enter
+```
+- [ ] Returns error after key revocation
+
+---
+
+## Capability: Light Mode (→ capabilities/08_strict_light_mode.md)
+
+> Tested via browser agent — same for all agents. See capability doc.
+
+---
+
+## Cleanup
+
+```bash
+tmux kill-session -t fgac-qa
+```

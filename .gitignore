@@ -48,3 +48,51 @@ next-env.d.ts
 /.clerk/
 .vercel_bypass
 .clerk_session
+spike-clients.json
+spike-token-*.json
+.playwright_user_data/
+
+# QA test artifacts (screenshots, tokens, agent configs)
+qa_proof_*.png
+qa-test-agents.json
+qa-token-*.json
+dashboard.png
+.playwright-cli/
+
+# nested node_modules from spike scripts (not managed by root package.json)
+docs/skills/*/scripts/node_modules/
+scripts/*/node_modules/
+
+# security scan artifacts
+*.pdf
+*_results.txt
+fluidattacks-config.yaml
+zap.yaml
+semgrep_results.txt
+
+# misc dev artifacts
+local_*.txt
+local_*.log
+vercel_run_logs*.txt
+dashboard_fetch.html
+verify-ui.ts
+test-clerk-token.ts
+*.png
+
+# one-off QA helper scripts (may contain DB queries or tokens)
+approve-connection.ts
+query-db.ts
+
+# QA env runtime state (credentials, docker configs, auth tokens)
+test/qa-envs/cc-mcp/
+test/qa-envs/cc-cli/
+test/qa-envs/openclaw/credentials/
+test/qa-envs/openclaw/data/
+test/qa-envs/openclaw/docker-compose.yml
+test/qa-envs/openclaw/Dockerfile
+test/qa-envs/openclaw/run-qa.sh
+test/qa-envs/hosted-mcp/state.json
+test/qa-envs/hosted-mcp/auth-server.js
+test/qa-envs/hosted-mcp/playwright-auth.js
+.qa_test_keys.json
+.qa_test_keys.json

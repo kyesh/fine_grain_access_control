@@ -1,0 +1,24 @@
+# TestClaw — FGAC QA Testing Container
+# Simplified from DemoClaw: no Tailscale, no GOG CLI
+
+services:
+  testclaw:
+    build: .
+    hostname: test-claw
+    environment:
+      HOME: /home/node
+      TERM: xterm-256color
+      OPENCLAW_PORT: "18789"
+      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-test-token}
+      # Point at local dev server or Vercel preview
+      FGAC_ROOT_URL: ${FGAC_ROOT_URL:-http://localhost:3000}
+    volumes:
+      # OpenClaw state (persist between runs)
+      - ./data:/home/node/.openclaw
+      # gmail-fgac skill (from repo)
+      - ../../docs/skills/gmail-fgac:/home/node/.openclaw/skills/gmail-fgac
+      # FGAC credentials (pre-provisioned)
+      - ./credentials:/home/node/.openclaw/gmail-fgac
+    # Use host network so container can reach localhost:3000
+    network_mode: host
+    init: true

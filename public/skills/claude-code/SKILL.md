@@ -1,50 +1,54 @@
 ---
 name: fgac.ai Gmail Proxy
-description: Replaces direct Google API calls with the secure fgac.ai proxy for Claude Code workspace operations.
+description: Secure Gmail access for Claude Code via FGAC.ai proxy — MCP server mode.
 ---
 
-# Claude Code: fgac.ai configuration
+# Claude Code: fgac.ai Gmail via MCP
 
-This skill ensures Claude Code operates securely via the fgac.ai proxy when managing Gmail tasks within the workspace.
+This skill enables Claude Code to interact with Gmail securely via the fgac.ai MCP server, enforcing fine-grained access control rules defined by the user.
 
-## Setup Instructions for the User
+## Setup
 
-1. Obtain a Proxy Key (`sk_proxy_...`) from `https://fgac.ai/dashboard`.
-2. Ensure this proxy key is available in your environment, typically as `FGAC_PROXY_KEY`.
+Add the FGAC.ai MCP server to Claude Code:
+
+```bash
+claude mcp add --transport http fgac-gmail https://gmail.fgac.ai/api/mcp
+```
+
+After running:
+1. Claude Code will discover OAuth endpoints automatically
+2. A browser window opens for you to sign in with your Google account
+3. After consent, the first tool call shows: **"⚠️ Pending approval"**
+4. Visit the linked dashboard URL to approve this agent and assign it a proxy key (agent profile)
+5. Once approved, all Gmail tools work with the permissions you configured
+
+## Available MCP Tools
+
+- `list_accounts` — See which email accounts this agent can access
+- `gmail_list` — List emails with optional search query
+- `gmail_read` — Read a specific email by message ID
+- `gmail_send` — Send email (subject to send whitelist rules)
+- `gmail_labels` — List Gmail labels
+- `get_my_permissions` — Show current access rules and permissions
 
 ## Instructions for Claude Code
 
-When the user asks you to interact with Gmail (e.g., via a Python script or direct API calls within the workspace), you must adhere to the following constraints:
-
-1. **Never use standard Google `credentials.json` or OAuth flows for Gmail.**
-2. **Override the API Endpoint**: All requests must be routed through `https://gmail.fgac.ai` instead of `googleapis.com`.
-3. **Authentication**: Use the `FGAC_PROXY_KEY` as the Authorization Bearer token.
-
-### Code Examples for Workspace Scripts
-
-If you write a Python script to interact with Gmail, structure it like this:
-
-```python
-from googleapiclient.discovery import build
-from google.oauth2.credentials import Credentials
-import os
-
-PROXY_KEY = os.environ.get("FGAC_PROXY_KEY")
-
-# Create a credential object with the proxy key
-creds = Credentials(token=PROXY_KEY)
-
-# Point the service at gmail.fgac.ai.
-# api_endpoint replaces rootUrl + servicePath, so include "/gmail/v1".
-service = build(
-    "gmail",
-    "v1",
-    credentials=creds,
-    client_options={"api_endpoint": "https://gmail.fgac.ai/gmail/v1"}
-)
-```
+When the user asks you to interact with Gmail, use the `fgac-gmail` MCP tools directly.
+All requests route through `gmail.fgac.ai` — never use `googleapis.com` directly.
+Authentication is handled automatically via the MCP OAuth flow.
 
 ### Multiple Email Accounts
-A single `FGAC_PROXY_KEY` can access multiple inboxes if the key owner has delegated access. 
+A single proxy key can access multiple inboxes if the key owner has delegated access. 
 - When querying the owner's email, use `"me"`.
-- When querying a delegated email, replace `"me"` in the API path with the specific email address (e.g., `service.users().messages().list(userId="colleague@domain.com", ...)`). You do NOT need to request a different API key.
+- When querying a delegated email, replace `"me"` with the specific email address.
+
+## Alternative: CLI Mode
+
+For users who prefer local scripts over MCP, install the `fgac-gmail` plugin:
+
+```
+/plugin marketplace add kyesh/fine_grain_access_control
+/plugin install fgac-gmail@fine_grain_access_control
+```
+
+This installs local scripts that Claude can invoke directly, giving you full control over the code.
