@@ -1,5 +1,6 @@
 import { users, proxyKeys, emailDelegations, keyEmailAccess, accessRules, keyRuleAssignments } from '@/db/schema';
 import { eq, and } from 'drizzle-orm';
+import { createDbUser } from '@/db/userHelpers';
 import { currentUser, clerkClient } from '@clerk/nextjs/server';
 import { redirect } from 'next/navigation';
 import { db } from '@/db';
@@ -25,11 +26,7 @@ export default async function DashboardPage() {
   const currentEmail = user.emailAddresses[0]?.emailAddress ?? 'unknown';
 
   if (!dbUser) {
-    const rawKeys = await db.insert(users).values({
-      clerkUserId: user.id,
-      email: currentEmail,
-    }).returning();
-    dbUser = rawKeys[0];
+    dbUser = await createDbUser(user.id, currentEmail);
   } else if (dbUser.email !== currentEmail) {
     // Sync email if Clerk's email has changed since first signup
     const updated = await db.update(users)
