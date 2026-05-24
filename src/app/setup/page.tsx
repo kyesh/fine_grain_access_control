@@ -9,7 +9,6 @@ import {
   ArrowRight,
   Copy,
   Key,
-  Server,
   Box,
 } from "lucide-react";
 
@@ -19,331 +18,271 @@ export const metadata = {
     "Connect your AI agents to fgac.ai in one command. Setup guides for Claude Code, Cursor, Windsurf, and Claude Desktop.",
 };
 
-/* ─── Copy button (client component inlined) ─────────────────────────────── */
-
-function CopyBlock({ command, label }: { command: string; label?: string }) {
-  return (
-    <div className="group relative">
-      {label && (
-        <span className="text-xs text-gray-500 uppercase tracking-wider font-semibold mb-1.5 block">
-          {label}
-        </span>
-      )}
-      <div className="bg-gray-950 text-gray-100 rounded-xl p-4 font-mono text-sm flex items-center justify-between gap-4 border border-gray-800 shadow-inner overflow-x-auto">
-        <code className="whitespace-nowrap">{command}</code>
-        <button
-          className="shrink-0 p-1.5 rounded-lg bg-white/10 text-gray-400 hover:text-white hover:bg-white/20 transition-colors"
-          title="Copy to clipboard"
-          aria-label="Copy command"
-        >
-          <Copy className="w-4 h-4" />
-        </button>
-      </div>
-    </div>
-  );
-}
-
-/* ─── Agent card ─────────────────────────────────────────────────────────── */
-
-interface AgentSetupProps {
-  name: string;
-  icon: string;
-  command: string;
-  note?: string;
-  color: string;
-  bgColor: string;
-  borderColor: string;
-}
-
-function AgentCard({
-  name,
-  icon,
-  command,
-  note,
-  color,
-  bgColor,
-  borderColor,
-}: AgentSetupProps) {
-  return (
-    <div
-      className={`bg-white border ${borderColor} p-6 rounded-2xl hover:shadow-lg transition-all duration-300 hover:-translate-y-0.5`}
-    >
-      <div className="flex items-center gap-3 mb-4">
-        <div
-          className={`w-10 h-10 ${bgColor} rounded-xl flex items-center justify-center text-xl`}
-        >
-          {icon}
-        </div>
-        <h3 className={`text-lg font-bold text-gray-900`}>{name}</h3>
-      </div>
-      <div className="bg-gray-950 text-gray-100 rounded-xl p-3.5 font-mono text-xs flex items-center justify-between gap-3 border border-gray-800 shadow-inner overflow-x-auto">
-        <code className="whitespace-nowrap">{command}</code>
-        <button
-          className="shrink-0 p-1 rounded-lg bg-white/10 text-gray-400 hover:text-white hover:bg-white/20 transition-colors"
-          title="Copy to clipboard"
-          aria-label={`Copy ${name} command`}
-        >
-          <Copy className="w-3.5 h-3.5" />
-        </button>
-      </div>
-      {note && <p className="text-xs text-gray-500 mt-2.5 leading-relaxed">{note}</p>}
-    </div>
-  );
-}
-
 /* ─── Page ───────────────────────────────────────────────────────────────── */
 
 export default function SetupPage() {
   return (
     <div className="min-h-screen bg-slate-50 text-gray-600 selection:bg-indigo-500/30 font-sans pb-24">
       {/* ── Hero ──────────────────────────────────────────────────────── */}
-      <div className="relative border-b border-gray-200 bg-white/80 backdrop-blur-xl overflow-hidden py-20 sm:py-28">
+      <div className="relative border-b border-gray-200 bg-white/80 backdrop-blur-xl overflow-hidden py-16 sm:py-24">
         <div className="absolute inset-x-0 -top-40 -z-10 transform-gpu overflow-hidden blur-3xl sm:-top-80">
           <div className="relative left-[calc(50%-11rem)] aspect-[1155/678] w-[36.125rem] -translate-x-1/2 rotate-[30deg] bg-gradient-to-tr from-[#ff80b5] to-[#9089fc] opacity-20 sm:left-[calc(50%-30rem)] sm:w-[72.1875rem]"></div>
         </div>
-        <div className="max-w-4xl mx-auto px-6 lg:px-8 text-center">
+        <div className="max-w-3xl mx-auto px-6 lg:px-8 text-center">
           <div className="inline-flex items-center gap-2 bg-indigo-50 text-indigo-700 text-sm font-medium px-4 py-1.5 rounded-full border border-indigo-100 mb-6">
             <Zap className="w-4 h-4" />
-            One Command Setup
+            Works with any MCP client
           </div>
-          <h1 className="text-4xl sm:text-6xl font-extrabold tracking-tight text-gray-900 mb-6">
-            Connect Your Agents
+          <h1 className="text-3xl sm:text-5xl font-extrabold tracking-tight text-gray-900 mb-4">
+            Secure Gmail access for your AI agents
           </h1>
-          <p className="text-lg text-gray-600 mb-10 max-w-2xl mx-auto leading-relaxed">
-            Add FGAC as an MCP server in your favorite AI tool.
-            Your agent authenticates via OAuth — no API keys to copy or rotate.
+          <p className="text-base sm:text-lg text-gray-600 max-w-xl mx-auto leading-relaxed">
+            Add FGAC as an MCP server, sign in with Google, and control exactly
+            what your agents can read, send, and delete.
           </p>
         </div>
       </div>
 
-      <main className="max-w-4xl mx-auto px-6 lg:px-8 mt-16 space-y-20">
+      <main className="max-w-3xl mx-auto px-6 lg:px-8 mt-12 sm:mt-16 space-y-16 sm:space-y-20">
         {/* ────────────────────────────────────────────────────────────── */}
-        {/* STEP 1: Connect Your Agent                                    */}
+        {/* STEP 1                                                        */}
         {/* ────────────────────────────────────────────────────────────── */}
         <section className="space-y-8">
-          <div className="flex items-center gap-4">
-            <span className="bg-indigo-600 text-white w-10 h-10 rounded-full flex items-center justify-center text-lg font-bold shadow-md">
+          <div className="flex items-start gap-4">
+            <span className="bg-indigo-600 text-white w-9 h-9 rounded-full flex items-center justify-center text-base font-bold shadow-md shrink-0 mt-0.5">
               1
             </span>
             <div>
-              <h2 className="text-2xl font-bold text-gray-900">
-                Add the MCP Server
+              <h2 className="text-xl sm:text-2xl font-bold text-gray-900">
+                Add the MCP server
               </h2>
-              <p className="text-gray-500 text-sm">
-                Run the command for your tool — that&apos;s it.
+              <p className="text-gray-500 text-sm mt-1">
+                Every tool uses the same URL:{" "}
+                <code className="bg-gray-100 px-1.5 py-0.5 rounded text-gray-800 text-xs font-mono">
+                  https://fgac.ai/api/mcp
+                </code>
               </p>
             </div>
           </div>
 
-          {/* Agent grid */}
-          <div className="grid sm:grid-cols-2 gap-5">
-            <AgentCard
-              name="Claude Code"
-              icon="⌨️"
-              command="claude mcp add --transport http fgac https://fgac.ai/api/mcp"
-              note="Works in any project directory. The server persists across sessions."
-              color="text-orange-600"
-              bgColor="bg-orange-50"
-              borderColor="border-orange-200/60"
-            />
-            <AgentCard
-              name="Cursor"
-              icon="🖱️"
-              command='Add to .cursor/mcp.json: {"fgac": {"url": "https://fgac.ai/api/mcp"}}'
-              note="Settings → MCP Servers → Add new HTTP server with the URL above."
-              color="text-blue-600"
-              bgColor="bg-blue-50"
-              borderColor="border-blue-200/60"
-            />
-            <AgentCard
-              name="Windsurf"
-              icon="🏄"
-              command='Add to mcp_config.json: {"fgac": {"serverUrl": "https://fgac.ai/api/mcp"}}'
-              note="Settings → MCP → Add server. Use Streamable HTTP transport."
-              color="text-teal-600"
-              bgColor="bg-teal-50"
-              borderColor="border-teal-200/60"
-            />
-            <AgentCard
-              name="Claude Desktop"
-              icon="🖥️"
-              command='Add to claude_desktop_config.json under "mcpServers"'
-              note='Add {"fgac": {"type": "url", "url": "https://fgac.ai/api/mcp"}} to your config.'
-              color="text-purple-600"
-              bgColor="bg-purple-50"
-              borderColor="border-purple-200/60"
-            />
+          {/* Claude Code — hero command */}
+          <div className="bg-white border border-orange-200 rounded-2xl p-5 sm:p-6 shadow-sm">
+            <div className="flex items-center gap-2.5 mb-4">
+              <div className="w-8 h-8 bg-orange-50 rounded-lg flex items-center justify-center border border-orange-100">
+                <Terminal className="w-4 h-4 text-orange-600" />
+              </div>
+              <h3 className="font-semibold text-gray-900">Claude Code</h3>
+            </div>
+            <div className="bg-gray-950 text-gray-100 rounded-xl p-4 font-mono text-sm border border-gray-800 overflow-x-auto">
+              <div className="flex items-center justify-between gap-4 min-w-0">
+                <code className="text-emerald-400 whitespace-pre">
+                  {`claude mcp add \\
+  --transport http \\
+  fgac https://fgac.ai/api/mcp`}
+                </code>
+                <button
+                  className="shrink-0 p-1.5 rounded-lg bg-white/10 text-gray-400 hover:text-white hover:bg-white/20 transition-colors"
+                  title="Copy to clipboard"
+                  aria-label="Copy Claude Code command"
+                >
+                  <Copy className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+            <p className="text-xs text-gray-500 mt-3">
+              Run this in any project directory. The server persists across sessions.
+            </p>
           </div>
 
-          {/* Generic MCP URL callout */}
-          <div className="bg-gray-50 border border-gray-200 rounded-2xl p-6">
-            <p className="text-sm text-gray-700 mb-3">
-              <strong>Any MCP-compatible client</strong> — use this URL:
-            </p>
-            <CopyBlock command="https://fgac.ai/api/mcp" />
-            <p className="text-xs text-gray-500 mt-3">
-              FGAC supports the <strong>MCP Streamable HTTP</strong> transport with OAuth 2.1 (DCR + PKCE).
-              Your client will be guided through authentication automatically.
-            </p>
+          {/* Other tools — text instructions, no fake command blocks */}
+          <div className="grid sm:grid-cols-3 gap-4">
+            <div className="bg-white border border-gray-200 rounded-xl p-5 shadow-sm">
+              <h4 className="font-semibold text-gray-900 text-sm mb-2">
+                Cursor
+              </h4>
+              <p className="text-xs text-gray-600 leading-relaxed">
+                Open <strong>Settings → MCP Servers</strong>. Click{" "}
+                <strong>Add new HTTP server</strong>. Paste the URL above.
+              </p>
+            </div>
+            <div className="bg-white border border-gray-200 rounded-xl p-5 shadow-sm">
+              <h4 className="font-semibold text-gray-900 text-sm mb-2">
+                Windsurf
+              </h4>
+              <p className="text-xs text-gray-600 leading-relaxed">
+                Open <strong>Settings → MCP</strong>. Click{" "}
+                <strong>Add Server</strong>. Choose Streamable HTTP and paste
+                the URL above.
+              </p>
+            </div>
+            <div className="bg-white border border-gray-200 rounded-xl p-5 shadow-sm">
+              <h4 className="font-semibold text-gray-900 text-sm mb-2">
+                Claude Desktop
+              </h4>
+              <p className="text-xs text-gray-600 leading-relaxed">
+                Open <strong>Settings → Developer → MCP Servers</strong>. Add a
+                new server with type <strong>&quot;url&quot;</strong> and paste the URL above.
+              </p>
+            </div>
           </div>
+
+          <p className="text-xs text-gray-500 text-center">
+            FGAC uses <strong>MCP Streamable HTTP</strong> with OAuth 2.1 (DCR + PKCE).
+            Your client handles authentication automatically.
+          </p>
         </section>
 
-        {/* ── Connector arrow ────────────────────────────────────────── */}
+        {/* ── Connector ─────────────────────────────────────────────── */}
         <div className="flex justify-center">
-          <div className="w-px h-12 bg-gradient-to-b from-gray-200 to-gray-300 relative">
-            <ArrowRight className="w-5 h-5 text-gray-400 absolute -bottom-2 left-1/2 -translate-x-1/2 rotate-90" />
+          <div className="w-px h-10 bg-gradient-to-b from-gray-200 to-gray-300 relative">
+            <ArrowRight className="w-4 h-4 text-gray-400 absolute -bottom-1.5 left-1/2 -translate-x-1/2 rotate-90" />
           </div>
         </div>
 
         {/* ────────────────────────────────────────────────────────────── */}
-        {/* STEP 2: Authorize in the browser                              */}
+        {/* STEP 2                                                        */}
         {/* ────────────────────────────────────────────────────────────── */}
-        <section className="space-y-8">
-          <div className="flex items-center gap-4">
-            <span className="bg-emerald-600 text-white w-10 h-10 rounded-full flex items-center justify-center text-lg font-bold shadow-md">
+        <section className="space-y-6">
+          <div className="flex items-start gap-4">
+            <span className="bg-emerald-600 text-white w-9 h-9 rounded-full flex items-center justify-center text-base font-bold shadow-md shrink-0 mt-0.5">
               2
             </span>
             <div>
-              <h2 className="text-2xl font-bold text-gray-900">
-                Authorize &amp; Approve
+              <h2 className="text-xl sm:text-2xl font-bold text-gray-900">
+                Sign in &amp; approve the connection
               </h2>
-              <p className="text-gray-500 text-sm">
-                Sign in, then approve the connection in your dashboard.
+              <p className="text-gray-500 text-sm mt-1">
+                Your agent triggers an OAuth flow. Then approve it in your dashboard.
               </p>
             </div>
           </div>
 
-          <div className="grid sm:grid-cols-2 gap-6">
-            {/* OAuth step */}
-            <div className="bg-white border border-gray-200 p-6 rounded-2xl shadow-sm">
-              <div className="flex items-center gap-3 mb-4">
-                <div className="w-8 h-8 bg-emerald-50 rounded-lg flex items-center justify-center border border-emerald-100">
-                  <span className="text-emerald-700 font-bold text-sm">A</span>
+          {/* Flow diagram */}
+          <div className="bg-white border border-gray-200 rounded-2xl p-5 sm:p-6 shadow-sm">
+            <ol className="space-y-4 text-sm text-gray-700">
+              <li className="flex items-start gap-3">
+                <span className="bg-emerald-50 text-emerald-700 w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold shrink-0 mt-0.5 border border-emerald-100">
+                  A
+                </span>
+                <div>
+                  <strong className="text-gray-900">
+                    Your agent tries to use a tool
+                  </strong>
+                  <span className="text-gray-500">
+                    {" "}— a browser window opens asking you to sign in with Google.
+                    This links your agent to your FGAC account. No API keys needed.
+                  </span>
                 </div>
-                <h3 className="font-semibold text-gray-900">OAuth Sign-In</h3>
-              </div>
-              <p className="text-sm text-gray-600 leading-relaxed">
-                When you first use an FGAC tool, a browser window opens asking you to sign in with Google.
-                This links your agent to your FGAC account — <strong>no API keys needed</strong>.
-              </p>
-            </div>
-
-            {/* Dashboard approval step */}
-            <div className="bg-white border border-gray-200 p-6 rounded-2xl shadow-sm">
-              <div className="flex items-center gap-3 mb-4">
-                <div className="w-8 h-8 bg-emerald-50 rounded-lg flex items-center justify-center border border-emerald-100">
-                  <span className="text-emerald-700 font-bold text-sm">B</span>
+              </li>
+              <li className="flex items-start gap-3">
+                <span className="bg-emerald-50 text-emerald-700 w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold shrink-0 mt-0.5 border border-emerald-100">
+                  B
+                </span>
+                <div>
+                  <strong className="text-gray-900">
+                    Approve in your{" "}
+                    <Link
+                      href="/dashboard"
+                      className="text-indigo-600 hover:text-indigo-700 underline underline-offset-2 decoration-indigo-300"
+                    >
+                      FGAC Dashboard
+                    </Link>
+                  </strong>
+                  <span className="text-gray-500">
+                    {" "}— new connections appear as <strong className="text-amber-600">⏳&nbsp;Pending</strong>.
+                    Click Approve and assign a Key Profile to grant access.
+                  </span>
                 </div>
-                <h3 className="font-semibold text-gray-900">
-                  Approve in Dashboard
-                </h3>
-              </div>
-              <p className="text-sm text-gray-600 leading-relaxed">
-                New connections appear as <strong>&quot;⏳ Pending Approval&quot;</strong> in your{" "}
-                <Link
-                  href="/dashboard"
-                  className="text-indigo-600 hover:text-indigo-700 font-medium underline underline-offset-2 decoration-indigo-300"
-                >
-                  FGAC Dashboard
-                </Link>
-                . Click <strong>✓ Approve</strong> and assign a <strong>Key Profile</strong>{" "}
-                to grant access.
-              </p>
-            </div>
+              </li>
+            </ol>
           </div>
 
-          {/* Visual flow */}
-          <div className="bg-gradient-to-r from-emerald-50 via-white to-indigo-50 border border-emerald-100 rounded-2xl p-6 sm:p-8">
-            <div className="flex items-center justify-center gap-2 sm:gap-4 flex-wrap text-sm font-medium">
-              <span className="bg-white border border-gray-200 px-4 py-2 rounded-xl text-gray-700 shadow-sm">
+          {/* Compact visual flow */}
+          <div className="bg-gradient-to-r from-emerald-50 via-white to-indigo-50 border border-emerald-100 rounded-xl px-4 py-3">
+            <div className="flex items-center justify-center gap-2 flex-wrap text-xs font-medium">
+              <span className="bg-white border border-gray-200 px-3 py-1.5 rounded-lg text-gray-600 shadow-sm">
                 Agent connects
               </span>
-              <ChevronRight className="w-4 h-4 text-gray-400 shrink-0" />
-              <span className="bg-white border border-gray-200 px-4 py-2 rounded-xl text-gray-700 shadow-sm">
+              <ChevronRight className="w-3 h-3 text-gray-400 shrink-0" />
+              <span className="bg-white border border-gray-200 px-3 py-1.5 rounded-lg text-gray-600 shadow-sm">
                 OAuth sign-in
               </span>
-              <ChevronRight className="w-4 h-4 text-gray-400 shrink-0" />
-              <span className="bg-amber-50 border border-amber-200 px-4 py-2 rounded-xl text-amber-700 shadow-sm">
+              <ChevronRight className="w-3 h-3 text-gray-400 shrink-0" />
+              <span className="bg-amber-50 border border-amber-200 px-3 py-1.5 rounded-lg text-amber-700 shadow-sm">
                 ⏳ Pending
               </span>
-              <ChevronRight className="w-4 h-4 text-gray-400 shrink-0" />
-              <span className="bg-emerald-50 border border-emerald-200 px-4 py-2 rounded-xl text-emerald-700 shadow-sm">
+              <ChevronRight className="w-3 h-3 text-gray-400 shrink-0" />
+              <span className="bg-emerald-50 border border-emerald-200 px-3 py-1.5 rounded-lg text-emerald-700 shadow-sm">
                 ✓ Approved
               </span>
             </div>
           </div>
         </section>
 
-        {/* ── Connector arrow ────────────────────────────────────────── */}
+        {/* ── Connector ─────────────────────────────────────────────── */}
         <div className="flex justify-center">
-          <div className="w-px h-12 bg-gradient-to-b from-gray-200 to-gray-300 relative">
-            <ArrowRight className="w-5 h-5 text-gray-400 absolute -bottom-2 left-1/2 -translate-x-1/2 rotate-90" />
+          <div className="w-px h-10 bg-gradient-to-b from-gray-200 to-gray-300 relative">
+            <ArrowRight className="w-4 h-4 text-gray-400 absolute -bottom-1.5 left-1/2 -translate-x-1/2 rotate-90" />
           </div>
         </div>
 
         {/* ────────────────────────────────────────────────────────────── */}
-        {/* STEP 3: Configure Access Rules                                */}
+        {/* STEP 3                                                        */}
         {/* ────────────────────────────────────────────────────────────── */}
-        <section className="space-y-8">
-          <div className="flex items-center gap-4">
-            <span className="bg-brand-purple text-white w-10 h-10 rounded-full flex items-center justify-center text-lg font-bold shadow-md">
+        <section className="space-y-6">
+          <div className="flex items-start gap-4">
+            <span className="bg-brand-purple text-white w-9 h-9 rounded-full flex items-center justify-center text-base font-bold shadow-md shrink-0 mt-0.5">
               3
             </span>
             <div>
-              <h2 className="text-2xl font-bold text-gray-900">
-                Configure Access Rules
+              <h2 className="text-xl sm:text-2xl font-bold text-gray-900">
+                Set access rules
               </h2>
-              <p className="text-gray-500 text-sm">
-                Control exactly what your agent can read, send, and access.
+              <p className="text-gray-500 text-sm mt-1">
+                Control exactly what each agent can read, send, and delete.
               </p>
             </div>
           </div>
 
-          <div className="grid sm:grid-cols-3 gap-5">
-            <div className="bg-white border border-gray-200 p-6 rounded-2xl shadow-sm hover:shadow-md transition-shadow">
-              <div className="w-10 h-10 bg-red-50 rounded-xl flex items-center justify-center mb-4 border border-red-100">
-                <Shield className="w-5 h-5 text-red-500" />
+          <div className="bg-white border border-gray-200 rounded-2xl p-5 sm:p-6 shadow-sm space-y-4">
+            <div className="flex items-start gap-3">
+              <Shield className="w-5 h-5 text-red-500 shrink-0 mt-0.5" />
+              <div>
+                <strong className="text-gray-900 text-sm">Read Blocklist</strong>
+                <p className="text-xs text-gray-500 mt-0.5">
+                  Block sensitive emails — 2FA codes, password resets, financial alerts.
+                  Uses regex pattern matching on subjects and senders.
+                </p>
               </div>
-              <h3 className="font-semibold text-gray-900 mb-2">
-                Read Blocklist
-              </h3>
-              <p className="text-sm text-gray-600 leading-relaxed">
-                Block agents from reading sensitive emails — 2FA codes, password resets, financial alerts.
-                Uses regex pattern matching.
-              </p>
             </div>
-
-            <div className="bg-white border border-gray-200 p-6 rounded-2xl shadow-sm hover:shadow-md transition-shadow">
-              <div className="w-10 h-10 bg-emerald-50 rounded-xl flex items-center justify-center mb-4 border border-emerald-100">
-                <CheckCircle className="w-5 h-5 text-emerald-500" />
+            <hr className="border-gray-100" />
+            <div className="flex items-start gap-3">
+              <CheckCircle className="w-5 h-5 text-emerald-500 shrink-0 mt-0.5" />
+              <div>
+                <strong className="text-gray-900 text-sm">Send Whitelist</strong>
+                <p className="text-xs text-gray-500 mt-0.5">
+                  Only allow sending to approved domains or specific email addresses.
+                  Everything else is rejected.
+                </p>
               </div>
-              <h3 className="font-semibold text-gray-900 mb-2">
-                Send Whitelist
-              </h3>
-              <p className="text-sm text-gray-600 leading-relaxed">
-                Only allow sending to approved recipients.
-                Whitelist specific domains or email addresses.
-              </p>
             </div>
-
-            <div className="bg-white border border-gray-200 p-6 rounded-2xl shadow-sm hover:shadow-md transition-shadow">
-              <div className="w-10 h-10 bg-indigo-50 rounded-xl flex items-center justify-center mb-4 border border-indigo-100">
-                <Key className="w-5 h-5 text-indigo-500" />
+            <hr className="border-gray-100" />
+            <div className="flex items-start gap-3">
+              <Key className="w-5 h-5 text-indigo-500 shrink-0 mt-0.5" />
+              <div>
+                <strong className="text-gray-900 text-sm">Per-Agent Profiles</strong>
+                <p className="text-xs text-gray-500 mt-0.5">
+                  Create separate profiles with different permissions.
+                  Assign each agent connection to the right one.
+                </p>
               </div>
-              <h3 className="font-semibold text-gray-900 mb-2">
-                Per-Agent Profiles
-              </h3>
-              <p className="text-sm text-gray-600 leading-relaxed">
-                Create separate key profiles with different permissions.
-                Assign each agent connection to the right profile.
-              </p>
             </div>
           </div>
 
           <div className="text-center">
             <Link
               href="/dashboard"
-              className="inline-flex items-center gap-2 bg-brand-purple text-white px-6 py-3 rounded-full font-medium hover:opacity-90 transition-all shadow-md hover:shadow-lg"
+              className="inline-flex items-center gap-2 bg-brand-purple text-white px-5 py-2.5 rounded-full text-sm font-medium hover:opacity-90 transition-all shadow-md"
             >
               Open Dashboard
               <ArrowRight className="w-4 h-4" />
@@ -352,125 +291,80 @@ export default function SetupPage() {
         </section>
 
         {/* ────────────────────────────────────────────────────────────── */}
-        {/* Multiple Accounts Info                                        */}
+        {/* Multiple accounts — collapsible info                          */}
         {/* ────────────────────────────────────────────────────────────── */}
-        <section className="bg-gradient-to-br from-indigo-50 via-white to-purple-50 border border-indigo-100 rounded-3xl p-8 sm:p-12 relative overflow-hidden shadow-sm">
-          <div className="absolute top-0 right-0 w-64 h-64 bg-indigo-100 blur-3xl rounded-full translate-x-1/2 -translate-y-1/2"></div>
+        <section className="bg-gradient-to-br from-indigo-50 via-white to-purple-50 border border-indigo-100 rounded-2xl p-6 sm:p-8 relative overflow-hidden shadow-sm">
+          <div className="absolute top-0 right-0 w-48 h-48 bg-indigo-100 blur-3xl rounded-full translate-x-1/2 -translate-y-1/2"></div>
           <div className="relative z-10">
-            <div className="flex items-center gap-4 mb-6">
-              <div className="p-3 bg-indigo-100 rounded-xl">
-                <Box className="w-6 h-6 text-indigo-600" />
+            <div className="flex items-center gap-3 mb-4">
+              <div className="p-2.5 bg-indigo-100 rounded-xl">
+                <Box className="w-5 h-5 text-indigo-600" />
               </div>
-              <h2 className="text-2xl font-bold text-gray-900">
-                Multiple Email Accounts
+              <h2 className="text-lg sm:text-xl font-bold text-gray-900">
+                Multiple email accounts
               </h2>
             </div>
-            <p className="text-gray-700 mb-6 leading-relaxed text-lg max-w-2xl">
-              A single agent connection can access multiple Gmail inboxes.
-              Use the <code className="bg-indigo-100 px-1.5 py-0.5 rounded text-indigo-700 text-sm font-mono">account</code>{" "}
-              parameter on any tool to specify which inbox to use.
+            <p className="text-sm text-gray-700 mb-4 leading-relaxed max-w-xl">
+              One agent connection can access multiple Gmail inboxes.
+              Other users delegate access from their own FGAC dashboard, then your agent
+              uses the <code className="bg-indigo-100 px-1.5 py-0.5 rounded text-indigo-700 text-xs font-mono">account</code> parameter
+              to specify which inbox.
             </p>
 
-            <div className="bg-white/80 border border-gray-200 rounded-2xl p-6 shadow-sm backdrop-blur-sm">
-              <h4 className="text-gray-900 font-medium mb-3">
-                Delegated account access:
-              </h4>
-              <p className="text-gray-600 mb-4 text-sm">
-                Other users can delegate their inbox to you from their FGAC dashboard.
-                Once delegated, your agent can access their emails through the same connection.
-              </p>
-              <div className="space-y-3">
-                <div className="bg-gray-50 rounded-xl p-4 border border-gray-200 font-mono text-sm shadow-inner">
-                  <span className="text-gray-500 block mb-1 text-xs uppercase tracking-wider font-semibold">
-                    Your inbox (default)
-                  </span>
-                  <span className="text-emerald-600 font-semibold">
-                    gmail_list
-                  </span>{" "}
-                  <span className="text-gray-500">→ returns your emails</span>
-                </div>
-                <div className="bg-gray-50 rounded-xl p-4 border border-gray-200 font-mono text-sm shadow-inner">
-                  <span className="text-gray-500 block mb-1 text-xs uppercase tracking-wider font-semibold">
-                    Delegated inbox
-                  </span>
-                  <span className="text-emerald-600 font-semibold">
-                    gmail_list
-                  </span>{" "}
-                  <span className="text-gray-500">account=</span>
-                  <span className="text-indigo-600 font-semibold">
-                    boss@company.com
-                  </span>
-                </div>
+            <div className="bg-white/80 border border-gray-200 rounded-xl p-4 backdrop-blur-sm space-y-2.5">
+              <div className="bg-gray-50 rounded-lg p-3 border border-gray-200 font-mono text-sm">
+                <span className="text-gray-400 text-xs block mb-0.5">Your inbox</span>
+                <span className="text-emerald-600 font-semibold">gmail_list</span>
+                <span className="text-gray-400"> → returns your emails</span>
+              </div>
+              <div className="bg-gray-50 rounded-lg p-3 border border-gray-200 font-mono text-sm">
+                <span className="text-gray-400 text-xs block mb-0.5">Delegated inbox</span>
+                <span className="text-emerald-600 font-semibold">gmail_list</span>{" "}
+                <span className="text-gray-400">account=</span>
+                <span className="text-indigo-600 font-semibold">boss@company.com</span>
               </div>
             </div>
           </div>
         </section>
 
         {/* ────────────────────────────────────────────────────────────── */}
-        {/* Advanced: Proxy Key Skills (collapsed)                        */}
+        {/* Advanced: Proxy Key                                           */}
         {/* ────────────────────────────────────────────────────────────── */}
-        <section className="space-y-6">
+        <section className="border-t border-gray-200 pt-12 space-y-5">
           <div className="text-center">
-            <h2 className="text-xl font-bold tracking-tight text-gray-900 mb-2">
-              Advanced: Direct Proxy Key Setup
+            <h2 className="text-base font-bold text-gray-900 mb-1">
+              Alternative: Direct Proxy Key
             </h2>
-            <p className="text-gray-500 text-sm max-w-xl mx-auto">
-              For agents that don&apos;t support MCP, you can create a proxy API key
-              and use our downloadable skills to configure the connection manually.
+            <p className="text-xs text-gray-500 max-w-md mx-auto">
+              For agents that don&apos;t support MCP, create a proxy API key and
+              use our downloadable skill files.
             </p>
           </div>
 
-          <div className="grid sm:grid-cols-2 gap-6">
-            <div className="bg-white border border-gray-200 p-6 rounded-2xl shadow-sm">
-              <div className="flex items-center gap-3 mb-3">
-                <div className="w-8 h-8 bg-gray-100 rounded-lg flex items-center justify-center border border-gray-200">
-                  <Server className="w-4 h-4 text-gray-500" />
-                </div>
-                <h3 className="font-semibold text-gray-900 text-sm">
-                  Step 1: Create Account &amp; Key
-                </h3>
-              </div>
-              <p className="text-sm text-gray-600 mb-4">
-                Sign up, then create a Proxy Key in the dashboard.
-                Select which email inboxes this key can access.
-              </p>
-              <Link
-                href="/dashboard"
-                className="inline-flex items-center text-indigo-600 hover:text-indigo-700 font-medium text-sm transition-colors"
-              >
-                Open Dashboard <ChevronRight className="w-4 h-4 ml-1" />
-              </Link>
-            </div>
-
-            <div className="bg-white border border-gray-200 p-6 rounded-2xl shadow-sm">
-              <div className="flex items-center gap-3 mb-3">
-                <div className="w-8 h-8 bg-gray-100 rounded-lg flex items-center justify-center border border-gray-200">
-                  <Terminal className="w-4 h-4 text-gray-500" />
-                </div>
-                <h3 className="font-semibold text-gray-900 text-sm">
-                  Step 2: Install Skill
-                </h3>
-              </div>
-              <p className="text-sm text-gray-600 mb-4">
-                Download the skill file for your agent and place it in the workspace.
-              </p>
-              <div className="space-y-2">
-                <a
-                  href="/skills/claude-code/SKILL.md"
-                  target="_blank"
-                  className="block text-center py-2 bg-gray-50 text-gray-700 rounded-lg hover:bg-gray-100 text-sm font-medium transition-colors border border-gray-200"
-                >
-                  Claude Code SKILL.md
-                </a>
-                <a
-                  href="/skills/open-claw/SKILL.md"
-                  target="_blank"
-                  className="block text-center py-2 bg-gray-50 text-gray-700 rounded-lg hover:bg-gray-100 text-sm font-medium transition-colors border border-gray-200"
-                >
-                  Open Claw SKILL.md
-                </a>
-              </div>
-            </div>
+          <div className="flex flex-col sm:flex-row gap-3 justify-center">
+            <Link
+              href="/dashboard"
+              className="inline-flex items-center justify-center gap-1.5 text-sm text-gray-700 bg-white border border-gray-200 px-4 py-2 rounded-lg hover:bg-gray-50 transition-colors"
+            >
+              Create Key in Dashboard
+              <ChevronRight className="w-3.5 h-3.5" />
+            </Link>
+            <a
+              href="/skills/claude-code/SKILL.md"
+              target="_blank"
+              className="inline-flex items-center justify-center gap-1.5 text-sm text-gray-700 bg-white border border-gray-200 px-4 py-2 rounded-lg hover:bg-gray-50 transition-colors"
+            >
+              Claude Code SKILL.md
+              <Terminal className="w-3.5 h-3.5" />
+            </a>
+            <a
+              href="/skills/open-claw/SKILL.md"
+              target="_blank"
+              className="inline-flex items-center justify-center gap-1.5 text-sm text-gray-700 bg-white border border-gray-200 px-4 py-2 rounded-lg hover:bg-gray-50 transition-colors"
+            >
+              Open Claw SKILL.md
+              <Terminal className="w-3.5 h-3.5" />
+            </a>
           </div>
         </section>
       </main>
