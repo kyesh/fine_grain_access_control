@@ -53,15 +53,21 @@ const MIGRATIONS = existsSync(migrationsDir)
   : [];
 
 /**
- * Split a SQL file into individual statements, handling DO $$ ... $$ blocks.
+ * Split a SQL file into individual statements, handling DO $$ ... $$ blocks
+ * and Drizzle's --> statement-breakpoint delimiters.
  * Neon's serverless driver can only execute one statement at a time.
  */
 function splitStatements(sql: string): string[] {
+  // Pre-process: Drizzle uses "--> statement-breakpoint" (with or without
+  // leading "-->" on same line) to delimit statements. Replace with newlines
+  // so each statement gets its own line before parsing.
+  const normalized = sql.replace(/-->\s*statement-breakpoint/g, '\n');
+
   const statements: string[] = [];
   let current = '';
   let inDollarBlock = false;
 
-  const lines = sql.split('\n');
+  const lines = normalized.split('\n');
   for (const line of lines) {
     const trimmed = line.trim();
 
