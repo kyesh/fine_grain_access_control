@@ -58,46 +58,46 @@ async function verifyClerkJwtDirect(token: string): Promise<{ userId: string; cl
 }
 
 export async function POST(request: NextRequest) {
-  // --- Auth: verify Clerk OAuth token ---
-  const authHeader = request.headers.get('Authorization');
-  if (!authHeader?.startsWith('Bearer ')) {
-    return NextResponse.json(
-      { status: 'error', message: 'Missing Authorization header' },
-      { status: 401 }
-    );
-  }
-
-  const bearerToken = authHeader.slice(7);
-  let userId: string | undefined;
-  let clientId: string | undefined;
-
-  // Strategy 1: Try Clerk's built-in auth() + verifyClerkToken
   try {
-    const clerkAuth = await auth({ acceptsToken: 'oauth_token' });
-    const authInfo = verifyClerkToken(clerkAuth, bearerToken);
-    userId = authInfo?.extra?.userId as string | undefined;
-    clientId = (authInfo as unknown as Record<string, unknown>)?.clientId as string | undefined;
-  } catch (err) {
-    console.warn('[CLI-Token] Clerk auth() failed, will try direct JWT:', err);
-  }
+    // --- Auth: verify Clerk OAuth token ---
+    const authHeader = request.headers.get('Authorization');
+    if (!authHeader?.startsWith('Bearer ')) {
+      return NextResponse.json(
+        { status: 'error', message: 'Missing Authorization header' },
+        { status: 401 }
+      );
+    }
 
-  // Strategy 2: Direct JWT verification (fallback for CLI/non-browser contexts)
-  if (!userId || !clientId) {
-    console.log('[CLI-Token] Falling back to direct JWT verification');
+    const bearerToken = authHeader.slice(7);
+    let userId: string | undefined;
+    let clientId: string | undefined;
+
+    // Strategy 1: Direct JWT verification (most reliable for CLI/non-browser OAuth tokens)
     const direct = await verifyClerkJwtDirect(bearerToken);
     if (direct) {
       userId = direct.userId;
       clientId = direct.clientId;
       console.log(`[CLI-Token] Direct JWT verified: userId=${userId} clientId=${clientId}`);
     }
-  }
 
-  if (!userId || !clientId) {
-    return NextResponse.json(
-      { status: 'error', message: 'Invalid or expired token. Re-run: node auth.js --action login' },
-      { status: 401 }
-    );
-  }
+    // Strategy 2: Clerk auth() + verifyClerkToken (fallback for browser/session contexts)
+    if (!userId || !clientId) {
+      try {
+        const clerkAuth = await auth({ acceptsToken: 'oauth_token' });
+        const authInfo = verifyClerkToken(clerkAuth, bearerToken);
+        userId = authInfo?.extra?.userId as string | undefined;
+        clientId = (authInfo as unknown as Record<string, unknown>)?.clientId as string | undefined;
+      } catch (err) {
+        console.warn('[CLI-Token] Clerk auth() also failed:', err);
+      }
+    }
+
+    if (!userId || !clientId) {
+      return NextResponse.json(
+        { status: 'error', message: 'Invalid or expired token. Re-run: node auth.js --action login' },
+        { status: 401 }
+      );
+    }
 
 
   // --- Resolve user ---
@@ -195,6 +195,14 @@ export async function POST(request: NextRequest) {
     emails: emailAccess.map((e) => e.targetEmail),
     proxy_endpoint: DASHBOARD_URL.replace('://fgac.ai', '://gmail.fgac.ai').replace('://localhost:3000', '://localhost:3000'),
   });
+
+  } catch (err) {
+    console.error('[CLI-Token] Unhandled error:', err);
+    return NextResponse.json(
+      { status: 'error', message: 'Internal server error. Check logs.' },
+      { status: 500 }
+    );
+  }
 }
 
 export async function GET() {
