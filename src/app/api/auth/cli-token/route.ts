@@ -15,6 +15,7 @@
  */
 import { verifyClerkToken } from '@clerk/mcp-tools/next';
 import { auth } from '@clerk/nextjs/server';
+import { createRemoteJWKSet, jwtVerify } from 'jose';
 import { db } from '@/db';
 import {
   agentConnections, users, proxyKeys, keyEmailAccess,
@@ -23,6 +24,38 @@ import { eq, and } from 'drizzle-orm';
 import { NextRequest, NextResponse } from 'next/server';
 
 const DASHBOARD_URL = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
+
+/**
+ * Decode and verify a Clerk OAuth JWT directly against the Clerk JWKS endpoint.
+ * This is the fallback when auth()+verifyClerkToken fails (common in CLI/non-browser contexts
+ * where Clerk middleware doesn't intercept the request).
+ */
+async function verifyClerkJwtDirect(token: string): Promise<{ userId: string; clientId: string } | null> {
+  try {
+    // Decode the payload without verification first to get the issuer
+    const [, payloadB64] = token.split('.');
+    if (!payloadB64) return null;
+    const payload = JSON.parse(Buffer.from(payloadB64, 'base64url').toString());
+    const issuer = payload.iss;
+    if (!issuer) return null;
+
+    // Verify signature against Clerk's JWKS
+    const JWKS = createRemoteJWKSet(new URL(`${issuer}/.well-known/jwks.json`));
+    const { payload: verified } = await jwtVerify(token, JWKS, {
+      issuer,
+      clockTolerance: 30,
+    });
+
+    const sub = verified.sub;
+    const cid = (verified as Record<string, unknown>).client_id as string | undefined;
+
+    if (!sub || !cid) return null;
+    return { userId: sub, clientId: cid };
+  } catch (err) {
+    console.error('[CLI-Token] JWT direct verification failed:', err);
+    return null;
+  }
+}
 
 export async function POST(request: NextRequest) {
   // --- Auth: verify Clerk OAuth token ---
@@ -38,31 +71,34 @@ export async function POST(request: NextRequest) {
   let userId: string | undefined;
   let clientId: string | undefined;
 
+  // Strategy 1: Try Clerk's built-in auth() + verifyClerkToken
   try {
     const clerkAuth = await auth({ acceptsToken: 'oauth_token' });
     const authInfo = verifyClerkToken(clerkAuth, bearerToken);
     userId = authInfo?.extra?.userId as string | undefined;
     clientId = (authInfo as unknown as Record<string, unknown>)?.clientId as string | undefined;
-  } catch {
+  } catch (err) {
+    console.warn('[CLI-Token] Clerk auth() failed, will try direct JWT:', err);
+  }
+
+  // Strategy 2: Direct JWT verification (fallback for CLI/non-browser contexts)
+  if (!userId || !clientId) {
+    console.log('[CLI-Token] Falling back to direct JWT verification');
+    const direct = await verifyClerkJwtDirect(bearerToken);
+    if (direct) {
+      userId = direct.userId;
+      clientId = direct.clientId;
+      console.log(`[CLI-Token] Direct JWT verified: userId=${userId} clientId=${clientId}`);
+    }
+  }
+
+  if (!userId || !clientId) {
     return NextResponse.json(
-      { status: 'error', message: 'Invalid or expired token. Re-run auth.' },
+      { status: 'error', message: 'Invalid or expired token. Re-run: node auth.js --action login' },
       { status: 401 }
     );
   }
 
-  if (!userId) {
-    return NextResponse.json(
-      { status: 'error', message: 'Token missing userId claim' },
-      { status: 401 }
-    );
-  }
-
-  if (!clientId) {
-    return NextResponse.json(
-      { status: 'error', message: 'Token missing clientId claim. Use DCR OAuth.' },
-      { status: 400 }
-    );
-  }
 
   // --- Resolve user ---
   const user = await db.query.users.findFirst({
