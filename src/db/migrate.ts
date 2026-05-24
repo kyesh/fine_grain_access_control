@@ -1,5 +1,5 @@
 import { neon } from '@neondatabase/serverless';
-import { readFileSync, existsSync } from 'fs';
+import { readFileSync, existsSync, readdirSync } from 'fs';
 import { join } from 'path';
 import * as dotenv from 'dotenv';
 
@@ -47,23 +47,27 @@ if (!finalConnectionString) {
   process.exit(0);
 }
 
-const MIGRATIONS = [
-  '0000_redundant_night_nurse.sql',
-  '0001_multi_key_multi_email.sql',
-  '0002_email_delegations.sql',
-  '0003_huge_celestials.sql',
-];
+const migrationsDir = join(process.cwd(), 'src', 'db', 'migrations');
+const MIGRATIONS = existsSync(migrationsDir) 
+  ? readdirSync(migrationsDir).filter(file => file.endsWith('.sql')).sort()
+  : [];
 
 /**
- * Split a SQL file into individual statements, handling DO $$ ... $$ blocks.
+ * Split a SQL file into individual statements, handling DO $$ ... $$ blocks
+ * and Drizzle's --> statement-breakpoint delimiters.
  * Neon's serverless driver can only execute one statement at a time.
  */
 function splitStatements(sql: string): string[] {
+  // Pre-process: Drizzle uses "--> statement-breakpoint" (with or without
+  // leading "-->" on same line) to delimit statements. Replace with newlines
+  // so each statement gets its own line before parsing.
+  const normalized = sql.replace(/-->\s*statement-breakpoint/g, '\n');
+
   const statements: string[] = [];
   let current = '';
   let inDollarBlock = false;
 
-  const lines = sql.split('\n');
+  const lines = normalized.split('\n');
   for (const line of lines) {
     const trimmed = line.trim();
 

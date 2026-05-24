@@ -8,11 +8,12 @@ description: Deploys changes to a new PR, waits for the Vercel Preview to build,
     git fetch origin main && git merge origin/main
     ```
 
-2.  If you made any schema/data model changes during this task, ensure you have generated a migration file and added it to the `MIGRATIONS` array in `src/db/migrate.ts` *before* pushing. Without this, your changes will not propagate to the Vercel Preview Database.
+2.  If you made any schema/data model changes during this task, ensure you have generated a migration file *before* pushing. `migrate.ts` dynamically loads all `.sql` files from `src/db/migrations/` — verify your new file exists there and follows the `NNNN_*.sql` naming convention.
     
     ```bash
     npm run db:generate
-    # Manually append the new file name (e.g. 000X_xxx.sql) to src/db/migrate.ts
+    # Verify the new .sql file exists in src/db/migrations/
+    ls -la src/db/migrations/
     ```
 
 3.  Push your current changes to the branch:
@@ -42,12 +43,30 @@ description: Deploys changes to a new PR, waits for the Vercel Preview to build,
     npx vercel ls googleapis-fine-grain-access-control | grep -w "Ready" | grep -w "Preview" | head -n 1 | awk '{print $2}'
     ```
 
-6.  If the deployment fails with an error (for example, if you hit your Neon Database Branch Limit), run the script to find and delete stale Neon branches:
+6.  If the deployment fails with `● Error`, you MUST read the build logs BEFORE taking any corrective action. Do NOT blindly delete Neon branches or retry without diagnosing.
 
+    **a. Fetch the build logs using the Vercel API:**
     ```bash
-    npx tsx scripts/cleanup-neon-branches.ts
+    # Get the Vercel auth token
+    VERCEL_TOKEN=$(cat ~/.local/share/com.vercel.cli/auth.json | jq -r '.token')
+    
+    # Get the deployment ID from inspect
+    npx vercel inspect <deployment-url>
+    
+    # Fetch and display build log text
+    curl -s "https://api.vercel.com/v2/deployments/<deployment-id>/events" \
+      -H "Authorization: Bearer $VERCEL_TOKEN" | jq -r '.[].payload.text'
     ```
-    After cleaning up, fix any other code issues, push again, and return to step 4.
+
+    **b. Diagnose the error from the logs.** Common failures include:
+    - **Migration SQL errors** (e.g., `cannot insert multiple commands into a prepared statement`): Fix the migration file or the `splitStatements` parser in `migrate.ts`.
+    - **Neon branch limit exceeded**: Only THEN run `npx tsx scripts/cleanup-neon-branches.ts` to delete stale branches.
+    - **TypeScript/build errors**: Fix the code.
+    - **Missing environment variables**: Check Vercel project settings.
+
+    **c. Fix the root cause**, push again, and return to step 4.
+
+    > **CRITICAL**: Never delete Neon branches as a first response to a build error. Always read the logs first. Deleting branches is destructive and only appropriate when the logs explicitly indicate a branch limit error.
 
 7.  Once the Vercel Preview URL is `Ready`, you MUST validate the frontend yourself by following the `/browser-agent` workflow (`.agent/workflows/browser-agent.md`).
     a. Use the Playwright CLI to attach to the browser and navigate to the specific Vercel URL (e.g., `https://project-branch.vercel.app`).
