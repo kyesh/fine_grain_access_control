@@ -198,9 +198,9 @@ export async function POST(request: NextRequest) {
 
   } catch (err) {
     console.error('[CLI-Token] Unhandled error:', err);
-    const message = err instanceof Error ? err.message : String(err);
+    const detail = err instanceof Error ? err.message : String(err);
     return NextResponse.json(
-      { status: 'error', message: `Internal error: ${message}` },
+      { status: 'error', message: 'Internal server error', detail },
       { status: 500 }
     );
   }
