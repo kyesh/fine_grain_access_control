@@ -459,17 +459,56 @@ const handler = createMcpHandler(
   }
 );
 
+/**
+ * Direct JWT verification fallback for CLI/non-browser OAuth tokens.
+ * Used when Clerk's auth()+verifyClerkToken fails to extract userId/clientId.
+ */
+async function verifyClerkJwtDirect(token: string) {
+  try {
+    const { createRemoteJWKSet, jwtVerify } = await import('jose');
+    const [, payloadB64] = token.split('.');
+    if (!payloadB64) return undefined;
+    const rawPayload = JSON.parse(Buffer.from(payloadB64, 'base64url').toString());
+    const issuer = rawPayload.iss;
+    if (!issuer) return undefined;
+
+    const JWKS = createRemoteJWKSet(new URL(`${issuer}/.well-known/jwks.json`));
+    const { payload: verified } = await jwtVerify(token, JWKS, { issuer, clockTolerance: 30 });
+    const sub = verified.sub;
+    const cid = (verified as Record<string, unknown>).client_id as string | undefined;
+    if (!sub || !cid) return undefined;
+
+    return {
+      token,
+      scopes: ((verified as Record<string, unknown>).scope as string || '').split(' '),
+      clientId: cid,
+      extra: { userId: sub },
+    };
+  } catch (err) {
+    console.error('[MCP] Direct JWT verification failed:', err);
+    return undefined;
+  }
+}
+
 export const POST = experimental_withMcpAuth(
   handler,
   async (_req, bearerToken) => {
+    // Strategy 1: Try Clerk's built-in auth() + verifyClerkToken
     try {
       const clerkAuth = await auth({ acceptsToken: 'oauth_token' });
       const authInfo = verifyClerkToken(clerkAuth, bearerToken);
-      return authInfo;
+      if (authInfo?.extra?.userId) return authInfo;
     } catch (error) {
-      console.error('[MCP] Token verification error:', error);
-      return undefined;
+      console.warn('[MCP] Clerk auth() failed, will try direct JWT:', error);
     }
+
+    // Strategy 2: Direct JWT verification (fallback for CLI/non-browser contexts)
+    if (bearerToken) {
+      console.log('[MCP] Falling back to direct JWT verification');
+      return await verifyClerkJwtDirect(bearerToken);
+    }
+
+    return undefined;
   },
   {
     required: true,
