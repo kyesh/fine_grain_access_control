@@ -62,7 +62,7 @@ export default function RootLayout({
                   </div>
                   <div className="flex items-center">
                     <Show when="signed-out">
-                      <SignUpButton mode="modal">
+                      <SignUpButton mode="modal" fallbackRedirectUrl="/dashboard" signInFallbackRedirectUrl="/dashboard">
                         <button className="text-sm font-medium text-gray-800 hover:text-brand-purple">Sign Up</button>
                       </SignUpButton>
                     </Show>

@@ -19,6 +19,7 @@ import {
 import { eq, and } from 'drizzle-orm';
 import { clerkClient } from '@clerk/nextjs/server';
 import safeRegex from 'safe-regex';
+import { createDbUser } from '@/db/userHelpers';
 
 const DASHBOARD_URL = process.env.NEXT_PUBLIC_APP_URL
   || (process.env.VERCEL_PROJECT_PRODUCTION_URL ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}` : null)
@@ -49,12 +50,26 @@ async function resolveConnection(userId: string, clientId: string | undefined): 
     return { authorized: false, reason: 'no_client_id' };
   }
 
-  const user = await db.query.users.findFirst({
+  let user = await db.query.users.findFirst({
     where: eq(users.clerkUserId, userId),
   });
 
   if (!user) {
-    return { authorized: false, reason: 'user_not_found' };
+    try {
+      const client = await clerkClient();
+      const clerkUser = await client.users.getUser(userId);
+      const email = clerkUser.emailAddresses[0]?.emailAddress;
+      
+      if (!email) {
+        return { authorized: false, reason: 'user_not_found' };
+      }
+      
+      user = await createDbUser(userId, email);
+      console.log(`[MCP] Auto-created DB user for ${email}`);
+    } catch (err) {
+      console.error('[MCP] Failed to auto-create user:', err);
+      return { authorized: false, reason: 'user_not_found' };
+    }
   }
 
   let connection = await db.query.agentConnections.findFirst({
@@ -109,14 +124,9 @@ function pendingMessage(result: ConnectionDenied) {
   switch (result.reason) {
     case 'pending_approval':
       return [
-        '⚠️ This connection has not been approved yet.',
-        '',
-        'To activate this agent, ask the user to:',
-        `1. Visit their FGAC dashboard: ${result.dashboardUrl}`,
-        '2. Find this connection under "Agent Connections"',
-        '3. Assign it to an agent profile (proxy key) with the desired permissions',
-        '',
-        'Once approved, retry your request.',
+        'Please share this exact error message with the user:',
+        `You have not assigned this client ${result.connectionId} to a permission profile please assign a profile by visiting:`,
+        `${result.dashboardUrl}`,
       ].join('\n');
     case 'blocked':
       return '🚫 This connection has been blocked by the user.';

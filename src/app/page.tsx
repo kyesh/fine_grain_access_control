@@ -15,7 +15,7 @@ export default async function LandingPage() {
         
         <div className="flex gap-4 justify-center pt-8">
           <Show when="signed-out">
-            <SignUpButton mode="modal">
+            <SignUpButton mode="modal" fallbackRedirectUrl="/dashboard" signInFallbackRedirectUrl="/dashboard">
               <button className="rounded-full bg-brand-purple px-8 py-3.5 text-sm font-semibold text-white shadow-sm hover:opacity-90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-purple transition-all">
                 Get Started
               </button>
