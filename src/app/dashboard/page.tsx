@@ -12,6 +12,7 @@ import { DelegateAccessButton } from './DelegateAccessButton';
 import { RevokeDelegationButton } from './RevokeDelegationButton';
 import { ConnectGoogleWarning } from './ConnectGoogleWarning';
 import { ConnectionsPanel } from './ConnectionsPanel';
+import { ExposedSheetsManager } from './ExposedSheetsManager';
 
 export default async function DashboardPage() {
   const user = await currentUser();
@@ -157,6 +158,9 @@ export default async function DashboardPage() {
 
           {/* ─── Agent Connections ─────────────────────────────────── */}
           <ConnectionsPanel />
+
+          {/* ─── Google Sheets FGAC ─────────────────────────────────── */}
+          <ExposedSheetsManager activeKeys={activeKeys.map(k => ({ id: k.id, label: k.label }))} />
 
           {/* ─── Your Email & Delegated Emails ─────────────────────── */}
           <div className="bg-white overflow-hidden shadow rounded-lg border border-gray-200">

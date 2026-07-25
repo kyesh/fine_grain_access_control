@@ -29,6 +29,11 @@ function extractGmailUserId(fullPath: string): string {
   return match ? decodeURIComponent(match[1]) : 'me';
 }
 
+function extractSheetsSpreadsheetId(fullPath: string): string | null {
+  const match = fullPath.match(/(?:v4\/spreadsheets|sheets\/v4\/spreadsheets)\/([^/?:#]+)/);
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
 async function handleProxyRequest(request: NextRequest, params: { path: string[] }) {
   try {
     const authHeader = request.headers.get('authorization');
@@ -73,7 +78,100 @@ async function handleProxyRequest(request: NextRequest, params: { path: string[]
       return NextResponse.json({ error: 'User not found.' }, { status: 401 });
     }
 
-    // ─── 2. Resolve Target Email ────────────────────────────────────────────
+    // ─── GOOGLE SHEETS PROXY HANDLER ─────────────────────────────────────────
+    if (fullPath.includes('spreadsheets')) {
+      const spreadsheetId = extractSheetsSpreadsheetId(fullPath);
+      if (!spreadsheetId) {
+        return NextResponse.json({ error: 'Invalid Google Sheets API path' }, { status: 400 });
+      }
+
+      const allUserRules = await db
+        .select()
+        .from(accessRules)
+        .where(eq(accessRules.userId, dbUser.id));
+
+      const keyAssignments = await db
+        .select()
+        .from(keyRuleAssignments)
+        .where(eq(keyRuleAssignments.proxyKeyId, dbKey.id));
+
+      const assignedRuleIds = new Set(keyAssignments.map(a => a.accessRuleId));
+      const allAssignments = await db.select().from(keyRuleAssignments);
+      const rulesWithAssignments = new Set(allAssignments.map(a => a.accessRuleId));
+
+      const applicableSheetsRules = allUserRules.filter(rule => {
+        if (rule.service !== 'sheets') return false;
+        const isGlobal = !rulesWithAssignments.has(rule.id);
+        const isAssignedToThisKey = assignedRuleIds.has(rule.id);
+        const resourceMatches = (rule.targetResourceId === spreadsheetId) || (rule.regexPattern === spreadsheetId);
+        return (isGlobal || isAssignedToThisKey) && resourceMatches;
+      });
+
+      if (applicableSheetsRules.length === 0) {
+        return NextResponse.json({
+          error: `Access Denied: Spreadsheet '${spreadsheetId}' is not exposed in FGAC rules for this API key.`
+        }, { status: 403 });
+      }
+
+      // Check explicit block
+      const hasBlockRule = applicableSheetsRules.some(r => r.actionType === 'sheet_block');
+      if (hasBlockRule) {
+        return NextResponse.json({
+          error: `Access Denied: Access to spreadsheet '${spreadsheetId}' has been explicitly blocked.`
+        }, { status: 403 });
+      }
+
+      // Check write restrictions
+      const isMutatingRequest = request.method !== 'GET' && request.method !== 'HEAD';
+      if (isMutatingRequest) {
+        const hasReadWritePermission = applicableSheetsRules.some(r => r.actionType === 'sheet_read_write');
+        if (!hasReadWritePermission) {
+          return NextResponse.json({
+            error: `Access Denied: Write operations on spreadsheet '${spreadsheetId}' are restricted to Read-Only.`
+          }, { status: 403 });
+        }
+      }
+
+      // Fetch Real Google Token from Clerk
+      const client = await clerkClient();
+      const tokenResponse = await client.users.getUserOauthAccessToken(dbUser.clerkUserId, 'oauth_google');
+      const realGoogleToken = tokenResponse.data?.[0]?.token;
+
+      if (!realGoogleToken) {
+        return NextResponse.json({
+          error: `Could not fetch Google access token for user '${dbUser.email}'. Please reconnect your Google account.`
+        }, { status: 403 });
+      }
+
+      // Forward to Google Sheets API
+      const cleanPath = fullPath.replace(/^sheets\//, '');
+      const googleUrl = `https://sheets.googleapis.com/${cleanPath}${request.nextUrl.search}`;
+      const headers = new Headers(request.headers);
+      headers.set('Authorization', `Bearer ${realGoogleToken}`);
+      headers.delete('host');
+
+      let requestBody: ArrayBuffer | undefined = undefined;
+      if (isMutatingRequest) {
+        requestBody = await request.clone().arrayBuffer();
+      }
+
+      const googleResponse = await fetch(googleUrl, {
+        method: request.method,
+        headers,
+        body: requestBody,
+      });
+
+      const returnBody = await googleResponse.text();
+      const responseHeaders = new Headers(googleResponse.headers);
+      responseHeaders.delete('content-encoding');
+
+      return new NextResponse(returnBody, {
+        status: googleResponse.status,
+        headers: responseHeaders,
+      });
+    }
+
+    // ─── 2. Resolve Target Email (Gmail Proxy Handler) ───────────────────────────
     const gmailUserId = extractGmailUserId(fullPath);
 
     // Resolve 'me' to the key owner's primary email, or use the specific email from the path

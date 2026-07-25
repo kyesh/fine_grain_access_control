@@ -218,6 +218,52 @@ async function gmailFetch(token: string, email: string, path: string, method = '
   return res.json();
 }
 
+async function sheetsFetch(token: string, path: string, method = 'GET', body?: string) {
+  const url = `https://sheets.googleapis.com/v4/spreadsheets/${path}`;
+  const res = await fetch(url, {
+    method,
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body,
+  });
+  return res.json();
+}
+
+async function checkSheetsPermission(userId: string, proxyKeyId: string, spreadsheetId: string, isMutating: boolean) {
+  const allRules = await db.select().from(accessRules).where(eq(accessRules.userId, userId));
+  const keyAssignments = await db.select().from(keyRuleAssignments).where(eq(keyRuleAssignments.proxyKeyId, proxyKeyId));
+  const assignedRuleIds = new Set(keyAssignments.map(a => a.accessRuleId));
+  const allAssignments = await db.select().from(keyRuleAssignments);
+  const rulesWithAssignments = new Set(allAssignments.map(a => a.accessRuleId));
+
+  const sheetsRules = allRules.filter(rule => {
+    if (rule.service !== 'sheets') return false;
+    const isGlobal = !rulesWithAssignments.has(rule.id);
+    const isAssigned = assignedRuleIds.has(rule.id);
+    const matchesId = rule.targetResourceId === spreadsheetId || rule.regexPattern === spreadsheetId;
+    return (isGlobal || isAssigned) && matchesId;
+  });
+
+  if (sheetsRules.length === 0) {
+    return { allowed: false, reason: `🚫 Access Denied: Spreadsheet '${spreadsheetId}' is not exposed in your FGAC rules.` };
+  }
+
+  if (sheetsRules.some(r => r.actionType === 'sheet_block')) {
+    return { allowed: false, reason: `🚫 Access Denied: Access to spreadsheet '${spreadsheetId}' is explicitly blocked.` };
+  }
+
+  if (isMutating) {
+    const hasReadWrite = sheetsRules.some(r => r.actionType === 'sheet_read_write');
+    if (!hasReadWrite) {
+      return { allowed: false, reason: `🚫 Access Denied: Write access to spreadsheet '${spreadsheetId}' is restricted (Read Only).` };
+    }
+  }
+
+  return { allowed: true };
+}
+
 // ─── Require Approval Wrapper ───────────────────────────────────────────────
 
 type AuthInfo = { extra?: { userId?: string }; clientId?: string };
@@ -416,6 +462,108 @@ const handler = createMcpHandler(
         if ('error' in resolved) return { content: [{ type: 'text' as const, text: resolved.error }] };
 
         const data = await gmailFetch(resolved.token, resolved.targetEmail, 'labels');
+        return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
+      }
+    );
+
+    // ── sheets_get_spreadsheet ────────────────────────────────────────
+    server.tool(
+      'sheets_get_spreadsheet',
+      'Get metadata and sheet tabs for an exposed Google Spreadsheet.',
+      {
+        spreadsheetId: z.string().describe('Google Spreadsheet ID (e.g. 1BxiMVs0...)'),
+        account: z.string().optional().describe('Email account to use.'),
+      },
+      async ({ spreadsheetId, account }, { authInfo }) => {
+        const conn = await requireApproval(authInfo);
+        if ('content' in conn) return conn;
+
+        const resolved = await resolveAccountAndToken(conn, account);
+        if ('error' in resolved) return { content: [{ type: 'text' as const, text: resolved.error }] };
+
+        const perm = await checkSheetsPermission(conn.user.id, resolved.proxyKeyId, spreadsheetId, false);
+        if (!perm.allowed) return { content: [{ type: 'text' as const, text: perm.reason! }] };
+
+        const data = await sheetsFetch(resolved.token, `${spreadsheetId}`);
+        return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
+      }
+    );
+
+    // ── sheets_read_range ─────────────────────────────────────────────
+    server.tool(
+      'sheets_read_range',
+      'Read cell values from a specific sheet tab and range in a Google Spreadsheet.',
+      {
+        spreadsheetId: z.string().describe('Google Spreadsheet ID'),
+        range: z.string().describe("Cell range (e.g. 'Sheet1'!A1:D20 or 'Sheet1')"),
+        account: z.string().optional().describe('Email account to use.'),
+      },
+      async ({ spreadsheetId, range, account }, { authInfo }) => {
+        const conn = await requireApproval(authInfo);
+        if ('content' in conn) return conn;
+
+        const resolved = await resolveAccountAndToken(conn, account);
+        if ('error' in resolved) return { content: [{ type: 'text' as const, text: resolved.error }] };
+
+        const perm = await checkSheetsPermission(conn.user.id, resolved.proxyKeyId, spreadsheetId, false);
+        if (!perm.allowed) return { content: [{ type: 'text' as const, text: perm.reason! }] };
+
+        const encodedRange = encodeURIComponent(range);
+        const data = await sheetsFetch(resolved.token, `${spreadsheetId}/values/${encodedRange}`);
+        return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
+      }
+    );
+
+    // ── sheets_update_range ───────────────────────────────────────────
+    server.tool(
+      'sheets_update_range',
+      'Update cell values in a range within a Google Spreadsheet (requires Read & Write permission).',
+      {
+        spreadsheetId: z.string().describe('Google Spreadsheet ID'),
+        range: z.string().describe("Cell range (e.g. 'Sheet1'!A1:B2)"),
+        values: z.array(z.array(z.any())).describe('2D array of cell values'),
+        account: z.string().optional().describe('Email account to use.'),
+      },
+      async ({ spreadsheetId, range, values, account }, { authInfo }) => {
+        const conn = await requireApproval(authInfo);
+        if ('content' in conn) return conn;
+
+        const resolved = await resolveAccountAndToken(conn, account);
+        if ('error' in resolved) return { content: [{ type: 'text' as const, text: resolved.error }] };
+
+        const perm = await checkSheetsPermission(conn.user.id, resolved.proxyKeyId, spreadsheetId, true);
+        if (!perm.allowed) return { content: [{ type: 'text' as const, text: perm.reason! }] };
+
+        const encodedRange = encodeURIComponent(range);
+        const body = JSON.stringify({ values, range });
+        const data = await sheetsFetch(resolved.token, `${spreadsheetId}/values/${encodedRange}?valueInputOption=USER_ENTERED`, 'PUT', body);
+        return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
+      }
+    );
+
+    // ── sheets_append_rows ────────────────────────────────────────────
+    server.tool(
+      'sheets_append_rows',
+      'Append data rows to a sheet in a Google Spreadsheet (requires Read & Write permission).',
+      {
+        spreadsheetId: z.string().describe('Google Spreadsheet ID'),
+        range: z.string().describe("Sheet tab or range to append to (e.g. 'Sheet1')"),
+        values: z.array(z.array(z.any())).describe('2D array of rows to append'),
+        account: z.string().optional().describe('Email account to use.'),
+      },
+      async ({ spreadsheetId, range, values, account }, { authInfo }) => {
+        const conn = await requireApproval(authInfo);
+        if ('content' in conn) return conn;
+
+        const resolved = await resolveAccountAndToken(conn, account);
+        if ('error' in resolved) return { content: [{ type: 'text' as const, text: resolved.error }] };
+
+        const perm = await checkSheetsPermission(conn.user.id, resolved.proxyKeyId, spreadsheetId, true);
+        if (!perm.allowed) return { content: [{ type: 'text' as const, text: perm.reason! }] };
+
+        const encodedRange = encodeURIComponent(range);
+        const body = JSON.stringify({ values });
+        const data = await sheetsFetch(resolved.token, `${spreadsheetId}/values/${encodedRange}:append?valueInputOption=USER_ENTERED`, 'POST', body);
         return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
       }
     );
