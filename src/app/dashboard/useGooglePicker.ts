@@ -39,7 +39,7 @@ export function useGooglePicker(onSheetsPicked: (sheets: PickedSheet[]) => void)
     document.body.appendChild(script);
   }, []);
 
-  const openPickerFlow = async () => {
+  const openPickerFlow = useCallback(async () => {
     if (!user) return;
     setIsLoading(true);
 
@@ -58,11 +58,13 @@ export function useGooglePicker(onSheetsPicked: (sheets: PickedSheet[]) => void)
 
       // 2. If drive.file scope is missing, trigger Clerk reauthorization
       if (!tokenData.hasDriveFileScope) {
+        const autoRedirectUrl = `${window.location.origin}/dashboard?autoOpenPicker=true`;
         let verificationUrl: string | undefined;
+
         if (existingGoogleAccount && existingGoogleAccount.verification?.status === 'verified') {
           const response = await existingGoogleAccount.reauthorize({
             additionalScopes: ['https://www.googleapis.com/auth/drive.file'],
-            redirectUrl: window.location.href,
+            redirectUrl: autoRedirectUrl,
             oidcPrompt: 'consent'
           });
           verificationUrl = response.verification?.externalVerificationRedirectURL?.href;
@@ -72,7 +74,7 @@ export function useGooglePicker(onSheetsPicked: (sheets: PickedSheet[]) => void)
           }
           const response = await user.createExternalAccount({
             strategy: 'oauth_google',
-            redirectUrl: window.location.href,
+            redirectUrl: autoRedirectUrl,
           });
           verificationUrl = response.verification?.externalVerificationRedirectURL?.href;
         }
@@ -115,7 +117,20 @@ export function useGooglePicker(onSheetsPicked: (sheets: PickedSheet[]) => void)
       console.error('Error opening Google Picker:', err);
       setIsLoading(false);
     }
-  };
+  }, [user, onSheetsPicked]);
+
+  // Automatically launch Google Picker if returning from OAuth reauthorization redirect
+  useEffect(() => {
+    if (typeof window === 'undefined' || !user || !gapiLoaded) return;
+    const urlParams = new URLSearchParams(window.location.search);
+    if (urlParams.get('autoOpenPicker') === 'true') {
+      // Clean up URL parameter without page reload
+      const newUrl = window.location.pathname;
+      window.history.replaceState({}, document.title, newUrl);
+      // Auto-launch picker
+      openPickerFlow();
+    }
+  }, [user, gapiLoaded, openPickerFlow]);
 
   const enhancedOpenPicker = useReverification(openPickerFlow);
 
