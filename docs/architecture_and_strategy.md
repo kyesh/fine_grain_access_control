@@ -93,3 +93,16 @@ Each proxy key can access multiple email accounts (via `key_email_access`):
 | OpenClaw | Local scripts + REST proxy API | Code flexibility, full API surface |
 | CLI | `npx fgac auth login` (separate npm package) | Power users, headless flows |
 | Direct API | `Bearer sk_proxy_...` to `gmail.fgac.ai` | Custom integrations |
+
+### Google Sheets Per-File Access Control (`drive.file`)
+In addition to Gmail, FGAC natively supports Google Sheets using Google's **Per-File Access Scope (`https://www.googleapis.com/auth/drive.file`)**.
+
+#### Key Architecture Principles for Sheets:
+1. **Zero CASA Audit Overhead**: Utilizing `drive.file` scope avoids restricted scope audits, requiring only standard Google verification (3-7 days, $0 cost).
+2. **Google Picker Integration**: Users intentionally select specific spreadsheets via the native Google Picker UI. Google's servers bind file permissions directly to the app's scope grant on Google's authorization servers.
+3. **FGAC Per-File Rules**: For each exposed spreadsheet, users can configure per-file permissions in the dashboard:
+   - **`sheet_read` (Read Only)**: Agents can fetch structure and read range data (`GET`), but mutating operations (`POST`, `PUT`, `PATCH`, `DELETE`) return `403 Forbidden`.
+   - **`sheet_read_write` (Read & Write)**: Agents can read cell ranges, update cell values, and append rows.
+   - **`sheet_block` (Blocked)**: Explicitly denies all agent operations for that file ID.
+4. **MCP Tools**: Exposes `sheets_get_spreadsheet`, `sheets_read_range`, `sheets_update_range`, and `sheets_append_rows` tools for MCP clients.
+

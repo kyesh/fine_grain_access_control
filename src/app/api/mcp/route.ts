@@ -218,6 +218,57 @@ async function gmailFetch(token: string, email: string, path: string, method = '
   return res.json();
 }
 
+function extractSheetsSpreadsheetId(path: string): string | null {
+  const match = path.match(/(?:v4\/spreadsheets|sheets\/v4\/spreadsheets|spreadsheets)\/([^/?:#]+)/);
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
+async function sheetsFetch(token: string, path: string, method = 'GET', body?: string) {
+  const url = `https://sheets.googleapis.com/v4/spreadsheets/${path}`;
+  const res = await fetch(url, {
+    method,
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body,
+  });
+  return res.json();
+}
+
+async function checkSheetsPermission(userId: string, proxyKeyId: string, spreadsheetId: string, isMutating: boolean) {
+  const allRules = await db.select().from(accessRules).where(eq(accessRules.userId, userId));
+  const keyAssignments = await db.select().from(keyRuleAssignments).where(eq(keyRuleAssignments.proxyKeyId, proxyKeyId));
+  const assignedRuleIds = new Set(keyAssignments.map(a => a.accessRuleId));
+  const allAssignments = await db.select().from(keyRuleAssignments);
+  const rulesWithAssignments = new Set(allAssignments.map(a => a.accessRuleId));
+
+  const sheetsRules = allRules.filter(rule => {
+    if (rule.service !== 'sheets') return false;
+    const isGlobal = !rulesWithAssignments.has(rule.id);
+    const isAssigned = assignedRuleIds.has(rule.id);
+    const matchesId = rule.targetResourceId === spreadsheetId || rule.regexPattern === spreadsheetId;
+    return (isGlobal || isAssigned) && matchesId;
+  });
+
+  if (sheetsRules.length === 0) {
+    return { allowed: false, reason: `🚫 Access Denied: Spreadsheet '${spreadsheetId}' is not exposed in your FGAC rules.` };
+  }
+
+  if (sheetsRules.some(r => r.actionType === 'sheet_block')) {
+    return { allowed: false, reason: `🚫 Access Denied: Access to spreadsheet '${spreadsheetId}' is explicitly blocked.` };
+  }
+
+  if (isMutating) {
+    const hasReadWrite = sheetsRules.some(r => r.actionType === 'sheet_read_write');
+    if (!hasReadWrite) {
+      return { allowed: false, reason: `🚫 Access Denied: Write access to spreadsheet '${spreadsheetId}' is restricted (Read Only).` };
+    }
+  }
+
+  return { allowed: true };
+}
+
 // ─── Require Approval Wrapper ───────────────────────────────────────────────
 
 type AuthInfo = { extra?: { userId?: string }; clientId?: string };
@@ -346,6 +397,7 @@ const handler = createMcpHandler(
         const readBlacklist = rules.filter(r => r.service === 'gmail' && r.actionType === 'read_blacklist');
         const bodyStr = JSON.stringify(data);
         for (const rule of readBlacklist) {
+          if (!rule.regexPattern) continue;
           const regexStr = rule.regexPattern.replace(/\*/g, '.*');
           if (!safeRegex(regexStr)) continue;
           if (new RegExp(regexStr, 'i').test(bodyStr)) {
@@ -354,6 +406,48 @@ const handler = createMcpHandler(
         }
 
         return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
+      }
+    );
+
+    // ── gmail_get_attachment ──────────────────────────────────────────
+    server.tool(
+      'gmail_get_attachment',
+      'Download and retrieve an email attachment by message ID and attachment ID.',
+      {
+        messageId: z.string().describe('Gmail message ID containing the attachment'),
+        attachmentId: z.string().describe('Attachment ID (found in message details payload.parts)'),
+        account: z.string().optional().describe('Email account to use.'),
+      },
+      async ({ messageId, attachmentId, account }, { authInfo }) => {
+        const conn = await requireApproval(authInfo);
+        if ('content' in conn) return conn;
+
+        const resolved = await resolveAccountAndToken(conn, account);
+        if ('error' in resolved) return { content: [{ type: 'text' as const, text: resolved.error }] };
+
+        // Check read blacklist rules on parent message
+        const rules = await loadApplicableRules(conn.user.id, resolved.proxyKeyId, resolved.targetEmail);
+        const parentMsg = await gmailFetch(resolved.token, resolved.targetEmail, `messages/${messageId}?format=full`);
+
+        const readBlacklist = rules.filter(r => r.service === 'gmail' && r.actionType === 'read_blacklist');
+        const parentBodyStr = JSON.stringify(parentMsg);
+        for (const rule of readBlacklist) {
+          if (!rule.regexPattern) continue;
+          const regexStr = rule.regexPattern.replace(/\*/g, '.*');
+          if (!safeRegex(regexStr)) continue;
+          if (new RegExp(regexStr, 'i').test(parentBodyStr)) {
+            return { content: [{ type: 'text' as const, text: `🚫 Access restricted: Parent email content blocked by rule '${rule.ruleName}'.` }] };
+          }
+        }
+
+        // Fetch attachment body from Gmail API
+        const attachmentData = await gmailFetch(
+          resolved.token,
+          resolved.targetEmail,
+          `messages/${messageId}/attachments/${attachmentId}`
+        );
+
+        return { content: [{ type: 'text' as const, text: JSON.stringify(attachmentData, null, 2) }] };
       }
     );
 
@@ -384,6 +478,7 @@ const handler = createMcpHandler(
 
         let isWhitelisted = false;
         for (const rule of sendRules) {
+          if (!rule.regexPattern) continue;
           const regexStr = rule.regexPattern.replace(/\*/g, '.*');
           if (!safeRegex(regexStr)) continue;
           if (new RegExp(regexStr, 'i').test(to)) { isWhitelisted = true; break; }
@@ -417,6 +512,175 @@ const handler = createMcpHandler(
 
         const data = await gmailFetch(resolved.token, resolved.targetEmail, 'labels');
         return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
+      }
+    );
+
+    // ── sheets_get_spreadsheet ────────────────────────────────────────
+    server.tool(
+      'sheets_get_spreadsheet',
+      'Get metadata and sheet tabs for an exposed Google Spreadsheet.',
+      {
+        spreadsheetId: z.string().describe('Google Spreadsheet ID (e.g. 1BxiMVs0...)'),
+        account: z.string().optional().describe('Email account to use.'),
+      },
+      async ({ spreadsheetId, account }, { authInfo }) => {
+        const conn = await requireApproval(authInfo);
+        if ('content' in conn) return conn;
+
+        const resolved = await resolveAccountAndToken(conn, account);
+        if ('error' in resolved) return { content: [{ type: 'text' as const, text: resolved.error }] };
+
+        const perm = await checkSheetsPermission(conn.user.id, resolved.proxyKeyId, spreadsheetId, false);
+        if (!perm.allowed) return { content: [{ type: 'text' as const, text: perm.reason! }] };
+
+        const data = await sheetsFetch(resolved.token, `${spreadsheetId}`);
+        return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
+      }
+    );
+
+    // ── sheets_read_range ─────────────────────────────────────────────
+    server.tool(
+      'sheets_read_range',
+      'Read cell values from a specific sheet tab and range in a Google Spreadsheet.',
+      {
+        spreadsheetId: z.string().describe('Google Spreadsheet ID'),
+        range: z.string().describe("Cell range (e.g. 'Sheet1'!A1:D20 or 'Sheet1')"),
+        account: z.string().optional().describe('Email account to use.'),
+      },
+      async ({ spreadsheetId, range, account }, { authInfo }) => {
+        const conn = await requireApproval(authInfo);
+        if ('content' in conn) return conn;
+
+        const resolved = await resolveAccountAndToken(conn, account);
+        if ('error' in resolved) return { content: [{ type: 'text' as const, text: resolved.error }] };
+
+        const perm = await checkSheetsPermission(conn.user.id, resolved.proxyKeyId, spreadsheetId, false);
+        if (!perm.allowed) return { content: [{ type: 'text' as const, text: perm.reason! }] };
+
+        const encodedRange = encodeURIComponent(range);
+        const data = await sheetsFetch(resolved.token, `${spreadsheetId}/values/${encodedRange}`);
+        return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
+      }
+    );
+
+    // ── sheets_update_range ───────────────────────────────────────────
+    server.tool(
+      'sheets_update_range',
+      'Update cell values in a range within a Google Spreadsheet (requires Read & Write permission).',
+      {
+        spreadsheetId: z.string().describe('Google Spreadsheet ID'),
+        range: z.string().describe("Cell range (e.g. 'Sheet1'!A1:B2)"),
+        values: z.array(z.array(z.any())).describe('2D array of cell values'),
+        account: z.string().optional().describe('Email account to use.'),
+      },
+      async ({ spreadsheetId, range, values, account }, { authInfo }) => {
+        const conn = await requireApproval(authInfo);
+        if ('content' in conn) return conn;
+
+        const resolved = await resolveAccountAndToken(conn, account);
+        if ('error' in resolved) return { content: [{ type: 'text' as const, text: resolved.error }] };
+
+        const perm = await checkSheetsPermission(conn.user.id, resolved.proxyKeyId, spreadsheetId, true);
+        if (!perm.allowed) return { content: [{ type: 'text' as const, text: perm.reason! }] };
+
+        const encodedRange = encodeURIComponent(range);
+        const body = JSON.stringify({ values, range });
+        const data = await sheetsFetch(resolved.token, `${spreadsheetId}/values/${encodedRange}?valueInputOption=USER_ENTERED`, 'PUT', body);
+        return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
+      }
+    );
+
+    // ── sheets_append_rows ────────────────────────────────────────────
+    server.tool(
+      'sheets_append_rows',
+      'Append data rows to a sheet in a Google Spreadsheet (requires Read & Write permission).',
+      {
+        spreadsheetId: z.string().describe('Google Spreadsheet ID'),
+        range: z.string().describe("Sheet tab or range to append to (e.g. 'Sheet1')"),
+        values: z.array(z.array(z.any())).describe('2D array of rows to append'),
+        account: z.string().optional().describe('Email account to use.'),
+      },
+      async ({ spreadsheetId, range, values, account }, { authInfo }) => {
+        const conn = await requireApproval(authInfo);
+        if ('content' in conn) return conn;
+
+        const resolved = await resolveAccountAndToken(conn, account);
+        if ('error' in resolved) return { content: [{ type: 'text' as const, text: resolved.error }] };
+
+        const perm = await checkSheetsPermission(conn.user.id, resolved.proxyKeyId, spreadsheetId, true);
+        if (!perm.allowed) return { content: [{ type: 'text' as const, text: perm.reason! }] };
+
+        const encodedRange = encodeURIComponent(range);
+        const body = JSON.stringify({ values });
+        const data = await sheetsFetch(resolved.token, `${spreadsheetId}/values/${encodedRange}:append?valueInputOption=USER_ENTERED`, 'POST', body);
+        return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
+      }
+    );
+
+    // ── raw_google_api_call ───────────────────────────────────────────
+    server.tool(
+      'raw_google_api_call',
+      'Execute any raw Google API request (Gmail or Google Sheets) through FGAC access control rules. Guarantees access to any API endpoint even if no dedicated tool exists.',
+      {
+        path: z.string().describe('API path (e.g. "v4/spreadsheets/1BxiM.../values/Sheet1" or "gmail/v1/users/me/messages")'),
+        method: z.enum(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']).optional().describe('HTTP method (default: GET)'),
+        body: z.union([z.string(), z.record(z.string(), z.any())]).optional().describe('Request body (JSON object or string)'),
+        account: z.string().optional().describe('Email account to use.'),
+      },
+      async ({ path, method = 'GET', body, account }, { authInfo }) => {
+        const conn = await requireApproval(authInfo);
+        if ('content' in conn) return conn;
+
+        const resolved = await resolveAccountAndToken(conn, account);
+        if ('error' in resolved) return { content: [{ type: 'text' as const, text: resolved.error }] };
+
+        const isMutating = method !== 'GET';
+        let googleUrl = '';
+
+        // Evaluate FGAC rules based on path
+        if (path.includes('spreadsheets')) {
+          const spreadsheetId = extractSheetsSpreadsheetId(path);
+          if (spreadsheetId) {
+            const perm = await checkSheetsPermission(conn.user.id, resolved.proxyKeyId, spreadsheetId, isMutating);
+            if (!perm.allowed) {
+              return { content: [{ type: 'text' as const, text: perm.reason! }] };
+            }
+          }
+          const cleanPath = path.replace(/^sheets\//, '');
+          googleUrl = `https://sheets.googleapis.com/${cleanPath}`;
+        } else {
+          // Gmail / general Google API
+          const rules = await loadApplicableRules(conn.user.id, resolved.proxyKeyId, resolved.targetEmail);
+
+          if (isMutating && path.includes('messages/send')) {
+            const sendRules = rules.filter(r => r.service === 'gmail' && r.actionType === 'send_whitelist');
+            if (sendRules.length === 0) {
+              return { content: [{ type: 'text' as const, text: '🚫 Access Denied: No send whitelist rules configured.' }] };
+            }
+          }
+
+          if (method === 'DELETE' && (path.includes('messages/trash') || path.includes('emptyTrash'))) {
+            return { content: [{ type: 'text' as const, text: '🚫 Access Denied: Safeguard prevents deletion of emails.' }] };
+          }
+
+          googleUrl = `https://www.googleapis.com/${path}`;
+        }
+
+        const bodyString = typeof body === 'object' ? JSON.stringify(body) : body;
+        const res = await fetch(googleUrl, {
+          method,
+          headers: {
+            'Authorization': `Bearer ${resolved.token}`,
+            'Content-Type': 'application/json',
+          },
+          body: isMutating ? bodyString : undefined,
+        });
+
+        const resText = await res.text();
+        let parsedData: any = resText;
+        try { parsedData = JSON.parse(resText); } catch {}
+
+        return { content: [{ type: 'text' as const, text: typeof parsedData === 'string' ? parsedData : JSON.stringify(parsedData, null, 2) }] };
       }
     );
 

@@ -57,16 +57,18 @@ export const keyEmailAccess = pgTable('key_email_access', {
 ]);
 
 // ─── Access Rules ────────────────────────────────────────────────────────────
-// Fine-grained access control rules. Scoped to a user, optionally to a specific email.
+// Fine-grained access control rules. Scoped to a user, optionally to a specific email or resource.
 // Rules with no key_rule_assignments rows are GLOBAL (apply to all keys).
 export const accessRules = pgTable('access_rules', {
   id: uuid('id').defaultRandom().primaryKey(),
   userId: uuid('user_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
   targetEmail: text('target_email'), // NULL = applies to all emails, or specific email address
-  ruleName: text('rule_name').notNull(), // e.g., "Block Project X"
-  service: text('service').notNull(), // 'gmail'
-  actionType: text('action_type').notNull(), // 'read_blacklist', 'send_whitelist', 'delete_whitelist', 'label_whitelist', 'label_blacklist'
-  regexPattern: text('regex_pattern').notNull(), // e.g., "*@competitor.com" or "CONFIDENTIAL_PROJECT_X"
+  ruleName: text('rule_name').notNull(), // e.g., "Block Project X" or "Q3 Financials Read Only"
+  service: text('service').notNull(), // 'gmail', 'sheets'
+  actionType: text('action_type').notNull(), // Gmail: 'read_blacklist', 'send_whitelist', etc. | Sheets: 'sheet_read', 'sheet_read_write', 'sheet_block'
+  regexPattern: text('regex_pattern'), // Optional: Gmail regex pattern or label ID
+  targetResourceId: text('target_resource_id'), // e.g. spreadsheetId for Google Sheets
+  resourceName: text('resource_name'), // e.g. human-readable document title "Q3 Financials"
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 });

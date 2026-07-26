@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "deny": [
+      "Bash(vercel --prod:*)",
+      "Bash(vercel deploy --prod:*)",
+      "Bash(npx vercel --prod:*)",
+      "Bash(npx vercel deploy --prod:*)",
+      "Bash(vercel promote:*)",
+      "Bash(npx vercel promote:*)",
+      "Bash(vercel alias:*)",
+      "Bash(npx vercel alias:*)",
+      "Bash(git push origin main:*)",
+      "Bash(git push --force:*)",
+      "Bash(git push -f:*)",
+      "Read(./.env)",
+      "Read(./.env.local)",
+      "Read(./.env.production)",
+      "Read(./.qa_test_emails.json)"
+    ],
+    "ask": [
+      "Bash(git push:*)",
+      "Bash(gh pr merge:*)",
+      "Bash(vercel env add:*)",
+      "Bash(vercel env rm:*)",
+      "Bash(npx vercel env add:*)",
+      "Bash(npx vercel env rm:*)",
+      "Bash(npx vercel cancel:*)",
+      "Bash(git commit --no-verify:*)",
+      "Bash(npx tsx scripts/cleanup-neon-branches.ts:*)"
+    ],
+    "allow": [
+      "Bash(git pull:*)",
+      "Bash(git fetch:*)",
+      "Bash(git status:*)",
+      "Bash(git log:*)",
+      "Bash(git diff:*)",
+      "Bash(git branch:*)",
+      "Bash(gh pr view:*)",
+      "Bash(gh pr list:*)",
+      "Bash(npm run lint:*)",
+      "Bash(npm run build:*)",
+      "Bash(npm run db:branch:*)",
+      "Bash(npm run db:generate:*)",
+      "Bash(npx vercel ls:*)",
+      "Bash(npx vercel inspect:*)",
+      "Bash(npx vercel logs:*)",
+      "Bash(npx vercel env ls:*)",
+      "Bash(npx vercel env pull:*)",
+      "Bash(npx @playwright/cli:*)",
+      "Bash(curl -s http://localhost:9222/json/version)",
+      "Bash(curl -sf http://localhost:3000:*)"
+    ]
+  }
+}
