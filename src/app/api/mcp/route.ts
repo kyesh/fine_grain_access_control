@@ -109,6 +109,21 @@ async function resolveConnection(userId: string, clientId: string | undefined): 
     return { authorized: false, reason: 'blocked', connectionId: connection.id };
   }
 
+  // A connection is only as alive as the key behind it. The proxy path checks
+  // revokedAt/expiresAt on every request; without this, a revoked key kept
+  // working through hosted MCP for connections bound before the revocation.
+  if (connection.proxyKeyId) {
+    const boundKey = await db.query.proxyKeys.findFirst({
+      where: eq(proxyKeys.id, connection.proxyKeyId),
+    });
+    if (!boundKey || boundKey.revokedAt) {
+      return { authorized: false, reason: 'blocked', connectionId: connection.id };
+    }
+    if (boundKey.expiresAt && boundKey.expiresAt < new Date()) {
+      return { authorized: false, reason: 'blocked', connectionId: connection.id };
+    }
+  }
+
   return {
     authorized: true,
     reason: 'approved',
@@ -702,9 +717,19 @@ const handler = createMcpHandler(
         const key = await db.select().from(proxyKeys)
           .where(eq(proxyKeys.id, conn.proxyKeyId)).then(r => r[0]);
 
-        // Load rules for the key owner
+        // Only the rules that actually apply to THIS key: global rules
+        // (no assignments) plus rules assigned to it. Returning the owner's
+        // full rule set leaked rules scoped to other keys/profiles.
         const allRules = await db.select().from(accessRules)
           .where(eq(accessRules.userId, conn.user.id));
+        const allAssignments = await db.select().from(keyRuleAssignments);
+        const rulesWithAssignments = new Set(allAssignments.map(a => a.accessRuleId));
+        const assignedToThisKey = new Set(
+          allAssignments.filter(a => a.proxyKeyId === conn.proxyKeyId).map(a => a.accessRuleId),
+        );
+        const applicableRules = allRules.filter(r =>
+          !rulesWithAssignments.has(r.id) || assignedToThisKey.has(r.id),
+        );
 
         return {
           content: [{
@@ -713,11 +738,17 @@ const handler = createMcpHandler(
               connection: { id: conn.connectionId, nickname: conn.nickname },
               proxyKey: { id: key?.id, label: key?.label },
               accessibleEmails: emails.map(e => e.targetEmail),
-              rules: allRules.map(r => ({
+              rules: applicableRules.map(r => ({
                 name: r.ruleName,
                 type: r.actionType,
                 pattern: r.regexPattern,
                 email: r.targetEmail || 'all',
+                scope: rulesWithAssignments.has(r.id) ? 'this-key' : 'global',
+                // Sheets rules are per-file: without the spreadsheet id an
+                // agent cannot locate the file it was granted access to.
+                ...(r.service === 'sheets'
+                  ? { spreadsheetId: r.targetResourceId, resourceName: r.resourceName }
+                  : {}),
               })),
             }, null, 2),
           }],

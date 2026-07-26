@@ -78,6 +78,57 @@ async function handleProxyRequest(request: NextRequest, params: { path: string[]
       return NextResponse.json({ error: 'User not found.' }, { status: 401 });
     }
 
+    // ─── GOOGLE DRIVE FILE LISTING HANDLER ───────────────────────────────────
+    // Agents discover which spreadsheets they can reach by listing Drive files
+    // (the Sheets API has no list endpoint). Google's own listing under the
+    // drive.file scope is unreliable for picker-granted files (visibility is
+    // bound to the OAuth client), so it returns empty and strands the agent
+    // with no path to a spreadsheet id. FGAC is the actual authority on what
+    // this key can reach — answer the listing from the key's sheets rules.
+    if (/^drive\/v[23]\/files\/?$/.test(fullPath) && request.method === 'GET') {
+      const allUserRules = await db
+        .select()
+        .from(accessRules)
+        .where(eq(accessRules.userId, dbUser.id));
+
+      const keyAssignments = await db
+        .select()
+        .from(keyRuleAssignments)
+        .where(eq(keyRuleAssignments.proxyKeyId, dbKey.id));
+
+      const assignedRuleIds = new Set(keyAssignments.map(a => a.accessRuleId));
+      const allAssignments = await db.select().from(keyRuleAssignments);
+      const rulesWithAssignments = new Set(allAssignments.map(a => a.accessRuleId));
+
+      const applies = (rule: typeof allUserRules[number]) =>
+        !rulesWithAssignments.has(rule.id) || assignedRuleIds.has(rule.id);
+
+      const sheetRules = allUserRules.filter(r => r.service === 'sheets' && applies(r));
+      const blockedIds = new Set(
+        sheetRules.filter(r => r.actionType === 'sheet_block').map(r => r.targetResourceId),
+      );
+
+      const files: { kind: string; id: string; name: string; mimeType: string }[] = [];
+      const seen = new Set<string>();
+      for (const rule of sheetRules) {
+        const id = rule.targetResourceId;
+        if (!id || seen.has(id) || blockedIds.has(id) || rule.actionType === 'sheet_block') continue;
+        seen.add(id);
+        files.push({
+          kind: 'drive#file',
+          id,
+          name: rule.resourceName || rule.ruleName,
+          mimeType: 'application/vnd.google-apps.spreadsheet',
+        });
+      }
+
+      return NextResponse.json({
+        kind: 'drive#fileList',
+        incompleteSearch: false,
+        files,
+      });
+    }
+
     // ─── GOOGLE SHEETS PROXY HANDLER ─────────────────────────────────────────
     if (fullPath.includes('spreadsheets')) {
       const spreadsheetId = extractSheetsSpreadsheetId(fullPath);

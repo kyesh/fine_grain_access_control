@@ -356,6 +356,76 @@ const SHEET_ACTION_TYPES = ['sheet_read', 'sheet_read_write', 'sheet_block'] as 
  * access, so a sheet can be suspended and restored without re-running the
  * Google Picker flow.
  */
+/**
+ * Persist sheets picked in the Google Picker as access rules.
+ *
+ * With a profileId the exposure is scoped to that profile; without one it is
+ * global. Existing rules are never narrowed: a global rule stays global, and a
+ * profile-scoped rule gains the new assignment instead of replacing the set.
+ */
+export async function exposeSheetsFromPicker(
+  picked: { id: string; name: string }[],
+  profileId?: string,
+) {
+  const dbUser = await getDbUser();
+
+  if (profileId) {
+    const key = await db.select().from(proxyKeys)
+      .where(and(eq(proxyKeys.id, profileId), eq(proxyKeys.userId, dbUser.id)))
+      .limit(1).then(res => res[0]);
+    if (!key) throw new Error("Unauthorized or profile not found");
+  }
+
+  for (const sheet of picked) {
+    if (!sheet?.id) continue;
+    const name = sheet.name || `Spreadsheet (${sheet.id.slice(0, 8)})`;
+
+    const existing = await db.select().from(accessRules)
+      .where(and(
+        eq(accessRules.userId, dbUser.id),
+        eq(accessRules.service, 'sheets'),
+        eq(accessRules.targetResourceId, sheet.id),
+      ))
+      .limit(1).then(res => res[0]);
+
+    if (existing) {
+      await db.update(accessRules)
+        .set({ ruleName: name, resourceName: name, updatedAt: new Date() })
+        .where(eq(accessRules.id, existing.id));
+
+      if (profileId) {
+        const assignments = await db.select().from(keyRuleAssignments)
+          .where(eq(keyRuleAssignments.accessRuleId, existing.id));
+        const alreadyGlobal = assignments.length === 0;
+        const alreadyAssigned = assignments.some(a => a.proxyKeyId === profileId);
+        if (!alreadyGlobal && !alreadyAssigned) {
+          await db.insert(keyRuleAssignments)
+            .values({ accessRuleId: existing.id, proxyKeyId: profileId });
+        }
+      }
+    } else {
+      const [rule] = await db.insert(accessRules)
+        .values({
+          userId: dbUser.id,
+          ruleName: name,
+          service: 'sheets',
+          actionType: 'sheet_read',
+          targetResourceId: sheet.id,
+          resourceName: name,
+        })
+        .returning();
+
+      if (profileId) {
+        await db.insert(keyRuleAssignments)
+          .values({ accessRuleId: rule.id, proxyKeyId: profileId });
+      }
+    }
+  }
+
+  revalidatePath("/dashboard");
+  revalidatePath("/dashboard/accounts");
+}
+
 export async function setSheetRulePermission(ruleId: string, actionType: string) {
   const dbUser = await getDbUser();
 

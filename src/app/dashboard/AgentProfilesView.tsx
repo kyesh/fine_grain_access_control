@@ -2,8 +2,8 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Card, CardHeader, Badge, EmptyState, buttonPrimary, buttonSecondary, buttonDanger } from '@/components/ui';
-import Link from 'next/link';
-import { assignRulesToKey, unassignRuleFromKey, revokeProxyKey, setSheetRulePermission } from './actions';
+import { assignRulesToKey, unassignRuleFromKey, revokeProxyKey, setSheetRulePermission, exposeSheetsFromPicker } from './actions';
+import { useGooglePicker, PickedSheet } from './useGooglePicker';
 import { EditRuleButton } from './EditRuleButton';
 import { DeleteRuleButton } from './DeleteRuleButton';
 import { RuleControls } from './RuleControls';
@@ -110,6 +110,18 @@ export function AgentProfilesView({
   const active = activeProfiles.find(p => p.id === activeId) ?? null;
   const pending = connections.filter(c => c.status === 'pending');
 
+  // Google Picker for "+ Expose a sheet". One hook instance for the whole
+  // view: it also consumes the ?autoOpenPicker= return leg of the first-time
+  // consent redirect, with the profile id carried through as picker context.
+  const handleSheetsPicked = useCallback(async (sheets: PickedSheet[], context?: string) => {
+    try {
+      await exposeSheetsFromPicker(sheets, context || undefined);
+    } catch (e) {
+      console.error('Failed to save exposed sheets:', e);
+    }
+  }, []);
+  const { triggerAddSheets, isLoading: pickerLoading } = useGooglePicker(handleSheetsPicked);
+
   const { sheetRules, gmailRules } = useMemo(() => {
     if (!active) return { sheetRules: [], gmailRules: [] };
     const forProfile = rules.filter(r => isGlobal(r) || r.assignedKeyIds.includes(active.id));
@@ -157,6 +169,8 @@ export function AgentProfilesView({
                 profileId={active.id}
                 rules={sheetRules}
                 allRules={rules}
+                onExpose={() => triggerAddSheets(active.id)}
+                exposing={pickerLoading}
               />
 
               <GmailRulesCard
@@ -358,16 +372,20 @@ function SheetsRulesCard({
   profileId,
   rules,
   allRules,
+  onExpose,
+  exposing,
 }: {
   profileId: string;
   rules: Rule[];
   allRules: Rule[];
+  onExpose: () => void;
+  exposing: boolean;
 }) {
-  const [popoverOpen, setPopoverOpen] = useState(false);
-
-  const applicable = allRules.filter(
-    r => r.service === 'sheets' && !isGlobal(r) && !r.assignedKeyIds.includes(profileId),
-  );
+  // "+ Expose a sheet" opens the Google Picker directly — picking a sheet is
+  // the whole flow, whether or not it was already exposed elsewhere (the
+  // server action merges assignments instead of narrowing them). No detour
+  // through the Accounts page.
+  void profileId; void allRules;
 
   return (
     <Card tone="sheets">
@@ -375,39 +393,16 @@ function SheetsRulesCard({
         title="Google Sheets Rules"
         subtitle="Spreadsheets this profile can reach"
         action={
-          <div className="relative">
-            <button className={buttonSecondary} onClick={() => setPopoverOpen(v => !v)}>
-              + Expose a sheet
-            </button>
-            {popoverOpen && (
-              <ApplyRulePopover
-                profileId={profileId}
-                candidates={applicable}
-                emptyMessage={
-                  <>
-                    {allRules.some(r => r.service === 'sheets')
-                      ? 'Every exposed sheet already applies to this profile. Grant access to another from '
-                      : 'No sheets have been exposed to FGAC yet. Grant access to a file from '}
-                    <Link href="/dashboard/accounts" className="font-semibold text-primary hover:underline">
-                      Accounts
-                    </Link>
-                    .
-                  </>
-                }
-                onClose={() => setPopoverOpen(false)}
-              />
-            )}
-          </div>
+          <button className={buttonSecondary} onClick={onExpose} disabled={exposing}>
+            {exposing ? 'Opening Google Picker…' : '+ Expose a sheet'}
+          </button>
         }
       />
       <div className="px-5 pb-5 space-y-2">
         {rules.length === 0 ? (
           <EmptyState>
-            No sheets exposed to this profile.{' '}
-            <Link href="/dashboard/accounts" className="font-semibold text-primary hover:underline">
-              Grant access to a file
-            </Link>{' '}
-            to get started.
+            No sheets exposed to this profile. Click &quot;+ Expose a sheet&quot; to pick
+            spreadsheets from Google Drive.
           </EmptyState>
         ) : (
           rules.map(rule => (

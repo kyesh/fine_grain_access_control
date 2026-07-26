@@ -16,7 +16,19 @@ export interface PickedSheet {
   name: string;
 }
 
-export function useGooglePicker(onSheetsPicked: (sheets: PickedSheet[]) => void) {
+/**
+ * Google Picker flow for exposing sheets.
+ *
+ * `context` is an opaque string (e.g. a profile id) carried through the whole
+ * flow — including the OAuth consent redirect — and handed back to
+ * `onSheetsPicked`, so callers know which profile the exposure was for.
+ *
+ * First-time-grant round trip: the consent redirect returns to the SAME page
+ * (`location.pathname`), and the auto-open effect re-launches the picker there.
+ * On that return leg we retry the token fetch while Clerk propagates the new
+ * scope, and never redirect to consent a second time (no loops).
+ */
+export function useGooglePicker(onSheetsPicked: (sheets: PickedSheet[], context?: string) => void) {
   const { user } = useUser();
   const [isLoading, setIsLoading] = useState(false);
   const [gapiLoaded, setGapiLoaded] = useState(false);
@@ -39,26 +51,46 @@ export function useGooglePicker(onSheetsPicked: (sheets: PickedSheet[]) => void)
     document.body.appendChild(script);
   }, []);
 
-  const openPickerFlow = useCallback(async () => {
+  const openPickerFlow = useCallback(async (context?: string, fromOAuthReturn = false) => {
     if (!user) return;
     setIsLoading(true);
 
     try {
-      // 1. Fetch token and scope info from backend token bridge
-      const tokenRes = await fetch('/api/auth/google-picker-token');
-      const tokenData = await tokenRes.json();
+      // 1. Fetch token and scope info from the backend token bridge. When we
+      // just returned from consent, Clerk may not have propagated the new
+      // scope yet — poll briefly instead of concluding it's missing.
+      const fetchToken = async () => {
+        const res = await fetch('/api/auth/google-picker-token');
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Failed to fetch Google OAuth token.');
+        return data;
+      };
 
-      if (!tokenRes.ok) {
-        throw new Error(tokenData.error || 'Failed to fetch Google OAuth token.');
+      let tokenData = await fetchToken();
+      if (fromOAuthReturn && !tokenData.hasDriveFileScope) {
+        for (let attempt = 0; attempt < 4 && !tokenData.hasDriveFileScope; attempt++) {
+          await new Promise(r => setTimeout(r, 1500));
+          tokenData = await fetchToken();
+        }
       }
 
       const existingGoogleAccount = user.externalAccounts.find(
         acc => acc.provider === 'google' || (acc.provider as any) === 'oauth_google'
       );
 
-      // 2. If drive.file scope is missing, trigger Clerk reauthorization
+      // 2. If drive.file scope is missing, trigger Clerk reauthorization.
+      // Never from the OAuth return leg — that would loop.
       if (!tokenData.hasDriveFileScope) {
-        const autoRedirectUrl = `${window.location.origin}/dashboard?autoOpenPicker=true`;
+        if (fromOAuthReturn) {
+          alert('Google did not grant Sheets access. Please try "Add Google Sheet" again.');
+          setIsLoading(false);
+          return;
+        }
+
+        // Return to the page the user is on, and re-open the picker there.
+        const params = new URLSearchParams({ autoOpenPicker: 'true' });
+        if (context) params.set('pickerContext', context);
+        const autoRedirectUrl = `${window.location.origin}${window.location.pathname}?${params.toString()}`;
         let verificationUrl: string | undefined;
 
         if (existingGoogleAccount && existingGoogleAccount.verification?.status === 'verified') {
@@ -98,7 +130,7 @@ export function useGooglePicker(onSheetsPicked: (sheets: PickedSheet[]) => void)
             id: doc.id,
             name: doc.name || `Spreadsheet (${doc.id.slice(0, 6)})`
           }));
-          onSheetsPicked(docs);
+          onSheetsPicked(docs, context);
         }
         setIsLoading(false);
       };
@@ -119,24 +151,28 @@ export function useGooglePicker(onSheetsPicked: (sheets: PickedSheet[]) => void)
     }
   }, [user, onSheetsPicked]);
 
-  // Automatically launch Google Picker if returning from OAuth reauthorization redirect
+  // Automatically launch Google Picker if returning from OAuth reauthorization
+  // redirect. The component consuming this hook must live on the page the
+  // redirect returns to (openPickerFlow redirects to location.pathname, so it
+  // does as long as the triggering component initiated the flow).
   useEffect(() => {
     if (typeof window === 'undefined' || !user || !gapiLoaded) return;
     const urlParams = new URLSearchParams(window.location.search);
     if (urlParams.get('autoOpenPicker') === 'true') {
-      // Clean up URL parameter without page reload
+      const context = urlParams.get('pickerContext') ?? undefined;
+      // Clean up URL parameters without page reload
       const newUrl = window.location.pathname;
       window.history.replaceState({}, document.title, newUrl);
-      // Auto-launch picker
-      openPickerFlow();
+      // Auto-launch picker; fromOAuthReturn tolerates scope-propagation lag
+      openPickerFlow(context, true);
     }
   }, [user, gapiLoaded, openPickerFlow]);
 
   const enhancedOpenPicker = useReverification(openPickerFlow);
 
-  const triggerAddSheets = async () => {
+  const triggerAddSheets = async (context?: string) => {
     try {
-      await enhancedOpenPicker();
+      await enhancedOpenPicker(context);
     } catch (err) {
       if (!isReverificationCancelledError(err)) {
         console.error('Picker error:', err);
