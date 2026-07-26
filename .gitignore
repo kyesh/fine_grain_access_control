@@ -102,3 +102,4 @@ test/qa-envs/hosted-mcp/playwright-auth.js
 # whenever NODE_ENV=production (a local `npm run build && npm start` would pick
 # it up). Nothing auto-loads .secrets/; scripts must read it explicitly.
 .secrets/
+docs/QA_Acceptance_Test/qa-results.json
