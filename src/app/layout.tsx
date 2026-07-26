@@ -48,9 +48,13 @@ export default function RootLayout({
                     </Link>
 
                     <div className="hidden sm:flex items-center gap-7">
+                      {/* Clerk's <Show> takes a single child, so the two links
+                          are wrapped rather than passed as siblings. */}
                       <Show when="signed-in">
-                        <NavLink href="/dashboard">Agent Profiles</NavLink>
-                        <NavLink href="/dashboard/accounts">Accounts</NavLink>
+                        <div className="flex items-center gap-7">
+                          <NavLink href="/dashboard">Agent Profiles</NavLink>
+                          <NavLink href="/dashboard/accounts">Accounts</NavLink>
+                        </div>
                       </Show>
                       <NavLink href="/setup">Setup Guide</NavLink>
                     </div>
@@ -59,9 +63,7 @@ export default function RootLayout({
                   <div className="flex items-center gap-4 shrink-0">
                     <Show when="signed-out">
                       <SignUpButton mode="modal" fallbackRedirectUrl="/dashboard" signInFallbackRedirectUrl="/dashboard">
-                        <button className="rounded-sm bg-primary px-3 py-1.5 text-sm font-semibold text-primary-foreground hover:opacity-90">
-                          Sign Up
-                        </button>
+                        <button className="rounded-sm bg-primary px-3 py-1.5 text-sm font-semibold text-primary-foreground hover:opacity-90">Sign Up</button>
                       </SignUpButton>
                     </Show>
                     <Show when="signed-in">
@@ -80,8 +82,10 @@ export default function RootLayout({
                     disappearing — Accounts is not reachable any other way. */}
                 <div className="sm:hidden flex items-center gap-6 pb-3">
                   <Show when="signed-in">
-                    <NavLink href="/dashboard">Agent Profiles</NavLink>
-                    <NavLink href="/dashboard/accounts">Accounts</NavLink>
+                    <div className="flex items-center gap-6">
+                      <NavLink href="/dashboard">Agent Profiles</NavLink>
+                      <NavLink href="/dashboard/accounts">Accounts</NavLink>
+                    </div>
                   </Show>
                   <NavLink href="/setup">Setup Guide</NavLink>
                 </div>
