@@ -72,8 +72,10 @@ capability scope (e.g. "capabilities 04 and 06 only" for a re-test).
 
 Return ONLY:
 
-1. The coverage matrix table: `| Cap | Assertion | Status | Notes |` — one
-   row per assertion in scope.
+1. The coverage matrix table: `| Capability | Assertion | Status | Notes |` —
+   one row per assertion in scope. Name capabilities by what they test
+   ("send whitelist", "key lifecycle", "sheets management"), with the number
+   in parentheses for file mapping — never the bare number.
 2. A short "Failures" section: for each `fail`, 2-3 sentences of what was
    observed vs expected, with the masked evidence.
 3. A one-line pointer: "Full results in docs/QA_Acceptance_Test/qa-results.json".

@@ -85,13 +85,17 @@ Needed only to exercise signed-in flows (dashboard, rules, Google Picker, per-fi
    ```
    Connection refused → STOP and ask the user to launch Chrome:
 
+   The profile lives at the MAIN clone (not `$CLAUDE_PROJECT_DIR`, which in a worktree
+   session points at a disposable directory) so one signed-in profile serves every
+   worktree.
+
    macOS:
    ```bash
-   "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --user-data-dir="$CLAUDE_PROJECT_DIR/.playwright_user_data" --remote-debugging-port=9222
+   "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --user-data-dir="/Users/kyesh/GitRepos/fine_grain_access_control/.playwright_user_data" --remote-debugging-port=9222
    ```
    Linux:
    ```bash
-   google-chrome --user-data-dir="$CLAUDE_PROJECT_DIR/.playwright_user_data" --remote-debugging-port=9222
+   google-chrome --user-data-dir="$HOME/GitRepos/fine_grain_access_control/.playwright_user_data" --remote-debugging-port=9222
    ```
 
 2. **Attach**:
