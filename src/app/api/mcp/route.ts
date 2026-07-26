@@ -409,6 +409,48 @@ const handler = createMcpHandler(
       }
     );
 
+    // ── gmail_get_attachment ──────────────────────────────────────────
+    server.tool(
+      'gmail_get_attachment',
+      'Download and retrieve an email attachment by message ID and attachment ID.',
+      {
+        messageId: z.string().describe('Gmail message ID containing the attachment'),
+        attachmentId: z.string().describe('Attachment ID (found in message details payload.parts)'),
+        account: z.string().optional().describe('Email account to use.'),
+      },
+      async ({ messageId, attachmentId, account }, { authInfo }) => {
+        const conn = await requireApproval(authInfo);
+        if ('content' in conn) return conn;
+
+        const resolved = await resolveAccountAndToken(conn, account);
+        if ('error' in resolved) return { content: [{ type: 'text' as const, text: resolved.error }] };
+
+        // Check read blacklist rules on parent message
+        const rules = await loadApplicableRules(conn.user.id, resolved.proxyKeyId, resolved.targetEmail);
+        const parentMsg = await gmailFetch(resolved.token, resolved.targetEmail, `messages/${messageId}?format=full`);
+
+        const readBlacklist = rules.filter(r => r.service === 'gmail' && r.actionType === 'read_blacklist');
+        const parentBodyStr = JSON.stringify(parentMsg);
+        for (const rule of readBlacklist) {
+          if (!rule.regexPattern) continue;
+          const regexStr = rule.regexPattern.replace(/\*/g, '.*');
+          if (!safeRegex(regexStr)) continue;
+          if (new RegExp(regexStr, 'i').test(parentBodyStr)) {
+            return { content: [{ type: 'text' as const, text: `🚫 Access restricted: Parent email content blocked by rule '${rule.ruleName}'.` }] };
+          }
+        }
+
+        // Fetch attachment body from Gmail API
+        const attachmentData = await gmailFetch(
+          resolved.token,
+          resolved.targetEmail,
+          `messages/${messageId}/attachments/${attachmentId}`
+        );
+
+        return { content: [{ type: 'text' as const, text: JSON.stringify(attachmentData, null, 2) }] };
+      }
+    );
+
     // ── gmail_send ────────────────────────────────────────────────────
     server.tool(
       'gmail_send',
