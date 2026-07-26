@@ -55,6 +55,43 @@ Duplicate rows are still created. Remaining exposure:
 - The `email_delegations` unique index is on `(owner_user_id, delegate_user_id)`, so the
   same logical pair can be inserted repeatedly across duplicate rows.
 
+## Follow-on: it also broke revocation (security)
+
+Completing the QA round trip surfaced a second, worse consequence.
+
+`createProxyKey` resolved the mailbox owner with an unordered `.limit(1)` on email. With
+duplicates it picked the row *without* the delegation, found no delegation, and inserted
+the `key_email_access` row with `delegation_id = NULL`.
+
+A null `delegation_id` means "the key owner's own mailbox" everywhere downstream. So that
+row:
+
+- granted access to **someone else's** inbox,
+- survived `revokeDelegation` (which deletes by `delegation_id`),
+- and passed every delegation re-check, because null is treated as own-mailbox.
+
+Combined with `revokeDelegation` only flipping a status flag and the proxy authorising
+purely on `key_email_access`, **revoking a delegation did not revoke access at all** —
+contradicting the revoke dialog's own promise.
+
+Fixed in `b72fdef`: delegation resolved by email pair, refuse to grant with no active
+delegation, delete granted rows on revoke, and re-check the delegation at request time in
+both the proxy and MCP paths.
+
+### Data cleanup still required
+
+Rows already written with `delegation_id = NULL` for an address that is **not** the key
+owner's own email are unbacked grants. They read as own-mailbox access and no runtime
+check will catch them. A migration should find and delete them:
+
+```sql
+SELECT kea.* FROM key_email_access kea
+JOIN proxy_keys pk ON pk.id = kea.proxy_key_id
+JOIN users u ON u.id = pk.user_id
+WHERE kea.delegation_id IS NULL
+  AND lower(kea.target_email) <> lower(u.email);
+```
+
 ## Suggested fix
 
 1. Reconcile on sign-in: if no row matches `clerkUserId` but one matches the email, update
