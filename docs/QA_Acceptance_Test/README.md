@@ -52,12 +52,51 @@ archive/        → Retired one-time-fix tests
 
 | Workflow | Description |
 |----------|-------------|
-| `/qa-setup` | Bootstrap: pull secrets, browser agent setup |
-| `/qa-hosted-mcp` | All capabilities via curl → MCP endpoint |
-| `/qa-claude-code` | All capabilities via tmux Claude Code MCP |
-| `/qa-claude-code-cli` | All capabilities via Claude Code + local scripts |
-| `/qa-openclaw` | All capabilities via genuine OpenClaw Docker |
-| `/qa-production` | All agents via real distribution channels → prod |
+| `/qa-setup` | Bootstrap: pull secrets, dev server, then the `qa-setup-driver` subagent runs the browser flows |
+| `/qa-hosted-mcp` | All capabilities via curl → MCP endpoint (dispatches `qa-env-runner`) |
+| `/qa-claude-code` | All capabilities via tmux Claude Code MCP (dispatches `qa-env-runner`) |
+| `/qa-claude-code-cli` | All capabilities via Claude Code + headless evals (dispatches `qa-env-runner`) |
+| `/qa-openclaw` | All capabilities via genuine OpenClaw Docker (dispatches `qa-env-runner`) |
+| `/qa-production` | `qa-smoke` first, then all agents via real distribution channels → prod |
+
+Each workflow is orchestrated from the main session, which dispatches subagents
+(`.claude/agents/`), audits results via `qa-coverage-auditor` + `scripts/qa-coverage-check.ts`,
+and owns all source fixes. Runbooks execute inside the runner subagent — their transcripts
+never enter the main context; only the coverage matrix comes back. See CLAUDE.md → "QA
+Subagent Architecture".
+
+## Structured results — `qa-results.json`
+
+Every environment run writes `docs/QA_Acceptance_Test/qa-results.json` (gitignored, one
+run at a time — the coverage matrix in the QA report is *derived from* this file, not
+the other way around):
+
+```json
+{
+  "run_id": "2026-07-26T14:00:00Z-cc-mcp",
+  "environment": "02_claude_code_mcp",
+  "results": [
+    { "cap": "01", "assertion": "A1", "status": "pass",
+      "evidence": "HTTP 200; message id returned; recipient USER_B" },
+    { "cap": "06", "assertion": "A9", "status": "skip",
+      "reason": "dashboard-only assertion; this environment is headless" }
+  ]
+}
+```
+
+Rules:
+
+- `status` is `pass` | `fail` | `skip`. A `skip` **requires** `reason`; a `pass`/`fail`
+  **requires** `evidence` citing observed output.
+- `evidence` strings must be masked per CLAUDE.md → "This Repository Is Public": refer
+  to test accounts as `USER_A`/`USER_B`, never paste real email addresses, Clerk user
+  ids, or proxy keys.
+- `npx tsx scripts/qa-coverage-check.ts` is the arbiter of completeness: it parses the
+  `### A<n>:` headings in `capabilities/*.md` and exits non-zero listing anything
+  missing, duplicated, unknown, or under-evidenced. Assertion counts in prose (this
+  file included) are informational; the script is authoritative.
+- Capability docs must use the `### A<n>: <title>` heading format — the checker (and
+  the runners) parse it.
 
 ## Secrets
 

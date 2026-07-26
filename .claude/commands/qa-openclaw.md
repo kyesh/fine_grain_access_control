@@ -1,31 +1,42 @@
 ---
 description: Run all capability tests through a genuine OpenClaw Docker instance
-allowed-tools: Bash(docker:*), Bash(curl:*), Bash(jq:*), Bash(ls:*), Read, Glob
+argument-hint: [capability scope, e.g. "04 06"]
+allowed-tools: Task, Bash(npx tsx scripts/qa-coverage-check.ts:*), Read, Glob
 ---
 
 # OpenClaw QA
 
 Requires: `/qa-setup` completed, dev server running, Docker available.
+Optional scope: `$ARGUMENTS` (capability numbers for a targeted re-test;
+empty = full suite).
 
-Read and execute: `docs/QA_Acceptance_Test/agents/04_openclaw.md`
+You are the orchestrator. The runner executes; you diagnose and fix.
 
-That doc starts a real OpenClaw container and runs ALL capabilities through the gateway API —
-not standalone scripts. Capability assertions are defined in
-`docs/QA_Acceptance_Test/capabilities/`. If new capability files have been added there, the
-agent doc must be updated to cover them.
+## 1. Dispatch the runner
 
-## Coverage Report (Required)
+Dispatch the **qa-env-runner** subagent:
 
-After running all capabilities, generate a coverage matrix in the QA report. Cross-reference
-every assertion in `docs/QA_Acceptance_Test/capabilities/` against actual results:
+> Execute runbook `docs/QA_Acceptance_Test/agents/04_openclaw.md`
+> [scope: capabilities `$ARGUMENTS` only, if given]. This environment starts
+> a real OpenClaw container and runs ALL capabilities through the gateway
+> API — not standalone scripts. Clean up the container when done.
 
-```
-| Cap | Assertion | Status | Notes |
-|-----|-----------|--------|-------|
-| 01  | A1        | ✅/❌/⏭️ |       |
-| 01  | A2        | ✅/❌/⏭️ |       |
-...
-```
+It writes `docs/QA_Acceptance_Test/qa-results.json` and returns only the
+coverage matrix and failures.
 
-All 48 assertions must be accounted for. Any ⏭️ (skipped) must include a reason
-(e.g. "Setup 02 not run"). Report failures honestly with the actual output.
+## 2. Audit
+
+Dispatch the **qa-coverage-auditor** subagent. Treat its findings as failures.
+
+## 3. Fix-and-retest loop (max 3 rounds)
+
+1. Diagnose and fix **in this session** — only the orchestrator edits source.
+2. Re-dispatch **qa-env-runner** scoped to *only the failed capabilities*.
+3. Re-dispatch the auditor.
+
+After 3 rounds, stop and hand the remaining failures to the user.
+
+## 4. Report
+
+Final coverage matrix, audit verdict, and remaining failures with masked
+evidence. `npx tsx scripts/qa-coverage-check.ts` must exit clean on coverage.

@@ -103,7 +103,7 @@ export function ExposedSheetsManager({ activeKeys = [] }: { activeKeys?: ProxyKe
           </p>
         </div>
         <button
-          onClick={triggerAddSheets}
+          onClick={() => triggerAddSheets()}
           disabled={isPickerLoading}
           className="flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-500 text-white font-medium text-sm px-4 py-2 rounded-lg transition-colors shadow-sm disabled:opacity-50 flex-shrink-0"
         >

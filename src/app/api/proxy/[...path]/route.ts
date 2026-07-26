@@ -19,6 +19,16 @@ export async function DELETE(request: NextRequest, { params }: { params: Promise
   return handleProxyRequest(request, await params);
 }
 
+// Sheets values:update and batchUpdate are PUT/PATCH-shaped; without these
+// exports Next.js answers 405 before FGAC's rules ever run.
+export async function PUT(request: NextRequest, { params }: { params: Promise<{ path: string[] }> }) {
+  return handleProxyRequest(request, await params);
+}
+
+export async function PATCH(request: NextRequest, { params }: { params: Promise<{ path: string[] }> }) {
+  return handleProxyRequest(request, await params);
+}
+
 /**
  * Extract the Gmail userId from the API path.
  * Gmail API paths look like: gmail/v1/users/{userId}/messages/...
@@ -76,6 +86,60 @@ async function handleProxyRequest(request: NextRequest, params: { path: string[]
 
     if (!dbUser) {
       return NextResponse.json({ error: 'User not found.' }, { status: 401 });
+    }
+
+    // ─── GOOGLE DRIVE PER-FILE ACCESS GUARD ──────────────────────────────────
+    // Policy: never override Google's native API behavior for discovery —
+    // listing (`drive/v3/files`) passes through untouched (under drive.file it
+    // naturally shows only app-granted files; agents discover FGAC-exposed
+    // sheet ids via get_my_permissions). But ACCESS to a specific file must
+    // respect the same sheets rules as the Sheets API, or drive get/export
+    // would be a bypass around them.
+    {
+      const driveFileMatch = fullPath.match(/^drive\/v[23]\/files\/([^/?]+)/);
+      if (driveFileMatch && driveFileMatch[1] !== 'generateIds') {
+        const fileId = decodeURIComponent(driveFileMatch[1]);
+
+        const allUserRules = await db
+          .select()
+          .from(accessRules)
+          .where(eq(accessRules.userId, dbUser.id));
+
+        const keyAssignments = await db
+          .select()
+          .from(keyRuleAssignments)
+          .where(eq(keyRuleAssignments.proxyKeyId, dbKey.id));
+
+        const assignedRuleIds = new Set(keyAssignments.map(a => a.accessRuleId));
+        const allAssignments = await db.select().from(keyRuleAssignments);
+        const rulesWithAssignments = new Set(allAssignments.map(a => a.accessRuleId));
+
+        const applicableSheetsRules = allUserRules.filter(rule => {
+          if (rule.service !== 'sheets') return false;
+          const isGlobal = !rulesWithAssignments.has(rule.id);
+          const isAssignedToThisKey = assignedRuleIds.has(rule.id);
+          const resourceMatches = (rule.targetResourceId === fileId) || (rule.regexPattern === fileId);
+          return (isGlobal || isAssignedToThisKey) && resourceMatches;
+        });
+
+        if (applicableSheetsRules.length === 0) {
+          return NextResponse.json({
+            error: `Access Denied: File '${fileId}' is not exposed in FGAC rules for this API key.`
+          }, { status: 403 });
+        }
+        if (applicableSheetsRules.some(r => r.actionType === 'sheet_block')) {
+          return NextResponse.json({
+            error: `Access Denied: Access to file '${fileId}' has been explicitly blocked.`
+          }, { status: 403 });
+        }
+        const isMutating = request.method !== 'GET' && request.method !== 'HEAD';
+        if (isMutating && !applicableSheetsRules.some(r => r.actionType === 'sheet_read_write')) {
+          return NextResponse.json({
+            error: `Access Denied: Write operations on file '${fileId}' are restricted to Read-Only.`
+          }, { status: 403 });
+        }
+        // Permitted — falls through to the generic Google passthrough below.
+      }
     }
 
     // ─── GOOGLE SHEETS PROXY HANDLER ─────────────────────────────────────────

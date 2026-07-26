@@ -61,6 +61,34 @@ const mode = clerkMode(process.env.CLERK_SECRET_KEY);
 console.log('\nCLERK');
 if (mode === 'unset') {
   console.log(bad('CLERK_SECRET_KEY not set — auth will not work locally'));
+  // Distinguish "file lacks the line" from "line exists but did not parse".
+  // Presence booleans only — never print values.
+  try {
+    const fs = require('fs') as typeof import('fs');
+    const raw = fs.existsSync('.env.local') ? fs.readFileSync('.env.local', 'utf8') : null;
+    if (raw === null) {
+      console.log(`${DIM}    .env.local does not exist. Bootstrap:`);
+      console.log(`    npx vercel env pull .env.local --environment=development${RESET}`);
+    } else if (raw.split('\n').some(l => l.trim().startsWith('CLERK_SECRET_KEY='))) {
+      const parsed = (require('dotenv') as typeof import('dotenv')).parse(raw).CLERK_SECRET_KEY ?? '';
+      if (/^["']/.test(parsed)) {
+        console.log(`${DIM}    The value parses but BEGINS WITH A QUOTE character — the value stored in`);
+        console.log(`    Vercel itself contains literal quotes (pasted with quotes when added).`);
+        console.log(`    Fix it at the source, then re-pull:`);
+        console.log(`      npx vercel env rm CLERK_SECRET_KEY development`);
+        console.log(`      npx vercel env add CLERK_SECRET_KEY development   # paste WITHOUT quotes`);
+        console.log(`      npx vercel env pull .env.local --environment=development${RESET}`);
+      } else {
+        console.log(`${DIM}    The line EXISTS in .env.local but the value has an unexpected format`);
+        console.log(`    (expected an sk_test_/sk_live_ key). Check the value stored in Vercel.${RESET}`);
+      }
+    } else {
+      console.log(`${DIM}    The line is ABSENT from .env.local. Re-pull (the dev value exists in Vercel):`);
+      console.log(`    npx vercel env pull .env.local --environment=development`);
+      console.log(`    Note: each git worktree has its OWN .env.local — a key fixed in another`);
+      console.log(`    worktree or the main clone does not carry over.${RESET}`);
+    }
+  } catch { /* diagnostics are best-effort */ }
 } else if (mode === 'live') {
   console.log(bad('CLERK_SECRET_KEY is sk_live_ — PRODUCTION instance'));
   console.log(`${DIM}    Local dev should use the development instance. Re-pull:`);

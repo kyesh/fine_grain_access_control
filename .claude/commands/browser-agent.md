@@ -8,8 +8,16 @@ allowed-tools: Bash(curl:*), Bash(npx @playwright/cli:*), Read
 
 Target URL: `$1` (if empty, ask the user what to open).
 
-Two paths. **Default to Path A.** Path B exists only for tests that need the user's real
-Google sign-in session.
+Two paths. **Default to Path A for everything — including signed-in flows.** The
+built-in browser keeps persistent cookies and both QA Google accounts (`USER_A`,
+`USER_B`) are signed in there, so Clerk sign-in via the Google account chooser, OAuth
+consent, and dashboard flows all work in Path A. Path B is the backup for when the
+built-in session is missing or expired.
+
+**Decision rule:** try Path A first, always. Fall back to Path B only when a signed-in
+flow in Path A lands on a Google *password* prompt (session expired — never type a
+password) or the account chooser doesn't list the needed QA account. When falling back,
+tell the user the built-in session needs re-establishing.
 
 ---
 
@@ -35,13 +43,24 @@ inspection is far better than screenshot-scraping.
    - `read_network_requests` — confirm assets and API calls return expected status codes.
      Cancelled RSC prefetches show as `ERR_ABORTED` and are normal in Next.js.
 
-5. **Verify responsive behavior** with `resize_window` (`mobile` / `tablet` / `desktop`).
+5. **Verify responsive and theme behavior** with `resize_window` — presets
+   `mobile` / `tablet` / `desktop`, and `colorScheme: "dark" | "light"` to emulate the OS
+   theme preference (this is how capability 08, strict light mode, is tested without
+   touching OS settings).
 
-### Limits of Path A
+### Signed-in flows in Path A
 
-This browser has **no Google or Clerk session**. Anything behind `/dashboard` redirects to
-sign-in. Do NOT attempt to sign in — entering credentials is off-limits. You can still validate
-a great deal without auth:
+The pane's cookies persist across sessions, and both QA Google accounts stay signed in.
+For Clerk sign-in: click through Clerk's Google OAuth → Google's account chooser lists
+`USER_A` and `USER_B` → pick the one the test needs. Switching accounts this way is the
+standing-approved routine step (CLAUDE.md Local Development note 5) — do it as often as
+tests require without asking.
+
+Hard limit unchanged: **never type a password.** A password/passkey/2FA prompt means the
+session expired — stop, fall back to Path B, and tell the user the built-in session
+needs re-establishing (a one-time manual sign-in by the user).
+
+### What Path A validates without any auth
 
 - Public pages render, and copy/layout is correct
 - No console errors, all chunks load
@@ -66,13 +85,17 @@ Needed only to exercise signed-in flows (dashboard, rules, Google Picker, per-fi
    ```
    Connection refused → STOP and ask the user to launch Chrome:
 
+   The profile lives at the MAIN clone (not `$CLAUDE_PROJECT_DIR`, which in a worktree
+   session points at a disposable directory) so one signed-in profile serves every
+   worktree.
+
    macOS:
    ```bash
-   "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --user-data-dir="$CLAUDE_PROJECT_DIR/.playwright_user_data" --remote-debugging-port=9222
+   "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --user-data-dir="/Users/kyesh/GitRepos/fine_grain_access_control/.playwright_user_data" --remote-debugging-port=9222
    ```
    Linux:
    ```bash
-   google-chrome --user-data-dir="$CLAUDE_PROJECT_DIR/.playwright_user_data" --remote-debugging-port=9222
+   google-chrome --user-data-dir="$HOME/GitRepos/fine_grain_access_control/.playwright_user_data" --remote-debugging-port=9222
    ```
 
 2. **Attach**:

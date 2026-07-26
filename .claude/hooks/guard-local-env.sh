@@ -49,8 +49,57 @@ Use 'npx vercel env pull .env.local --environment=development' then
 'npm run db:branch'. See CLAUDE.md → 'Local Development Environment'."
 fi
 
+# ── Killing Chrome (Session Hygiene rule 8) ────────────────────────────────
+# `pkill chrome` kills the user's REAL browser. Only the scoped form that
+# targets the gitignored test profile is safe.
+# Blocked:  pkill chrome / pkill -f chrome / killall chrome / killall "Google Chrome"
+# Allowed:  pkill -f 'chrome.*playwright_user_data'
+# Anchored to a command position — prose mentioning pkill (commit messages,
+# PR bodies) is not a command.
+if printf '%s' "$CMD" | grep -qiE '(^|[;&|(][[:space:]]*|sudo[[:space:]]+)(pkill|killall)[[:space:]][^|;&]*chrome'; then
+  if ! printf '%s' "$CMD" | grep -q 'playwright_user_data'; then
+    block "BLOCKED: this would kill the user's real Chrome.
+To clean up only test browsers, scope to the test profile:
+  pkill -f 'chrome.*playwright_user_data'
+See CLAUDE.md → Session Hygiene rule 8."
+  fi
+fi
+
+# ── Production env pulls to auto-loaded files ──────────────────────────────
+# .env.production.local is auto-loaded by Next.js when NODE_ENV=production,
+# and .env.local is development-only. Production credentials belong ONLY in
+# .secrets/prod.env (gitignored, never auto-loaded).
+# Blocked:  vercel env pull .env.production.local
+#           vercel env pull .env.local --environment=production
+# Allowed:  vercel env pull .secrets/prod.env --environment=production
+#           vercel env pull .env.local --environment=development
+#           git commit -m "... vercel env pulls ..."   (prose mentioning the
+#           command is not the command — anchor to a command position)
+if printf '%s' "$CMD" | grep -qiE '(^|[;&|(][[:space:]]*|npx[[:space:]]+)vercel[[:space:]]+env[[:space:]]+pull[[:space:]]'; then
+  if printf '%s' "$CMD" | grep -qE '\.env\.production(\.local)?([[:space:]]|$)'; then
+    block "BLOCKED: .env.production.local is auto-loaded by Next.js when NODE_ENV=production.
+Pull production credentials only to .secrets/prod.env:
+  npx vercel env pull .secrets/prod.env --environment=production
+See CLAUDE.md → 'Production Credentials on a Local Machine'."
+  fi
+  if printf '%s' "$CMD" | grep -qiE '\.env\.local\b' \
+     && printf '%s' "$CMD" | grep -qiE '(--environment[= ]|-e[[:space:]]+)production'; then
+    block "BLOCKED: .env.local is development-only — never put production credentials in it.
+Pull production credentials only to .secrets/prod.env:
+  npx vercel env pull .secrets/prod.env --environment=production
+See CLAUDE.md → 'Production Credentials on a Local Machine'."
+  fi
+fi
+
 # ── Production deploys (defence in depth alongside the deny rules) ─────────
-if printf '%s' "$CMD" | grep -qiE 'vercel.*(--prod|promote|alias)'; then
+# Only deploy-shaped commands. `vercel ls --prod`, `inspect`, and `logs --prod`
+# are read-only and explicitly listed as safe in CLAUDE.md — an earlier version
+# of this pattern matched any `vercel` + `--prod` and blocked those too.
+if printf '%s' "$CMD" | grep -qiE 'vercel[[:space:]]+(promote|alias)\b'; then
+  block "BLOCKED: promote/alias change what production serves — user's call via /deploy-prod (CLAUDE.md)."
+fi
+if printf '%s' "$CMD" | grep -qiE 'vercel([[:space:]]+deploy)?([[:space:]]+-[^[:space:]]+)*[[:space:]]+--prod\b' \
+   && ! printf '%s' "$CMD" | grep -qiE 'vercel[[:space:]]+(ls|list|inspect|logs|env|projects?)\b'; then
   block "BLOCKED: production deploys are the user's call via /deploy-prod (CLAUDE.md)."
 fi
 

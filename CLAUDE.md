@@ -1,8 +1,8 @@
 # FGAC.ai — Project Rules
 
-> These rules are the Claude Code port of `.agent/rules/` (Antigravity). Both trees are
-> kept in sync; if you change a rule here, mirror it in `.agent/rules/` and vice versa.
-> Workflows live in `.claude/commands/` (mirror of `.agent/workflows/`).
+> This file is the single source of truth for project rules. Workflows (slash commands)
+> live in `.claude/commands/`. The legacy Antigravity tree (`.agent/`) has been retired —
+> everything it contained was folded in here or into `.claude/commands/`.
 
 ## General Workflow
 
@@ -12,7 +12,28 @@
 4. Review the `docs/` folder and update the docs and data model to match your changes.
 5. Commit frequently as you work through the problem.
 6. **Validation**: Validate changes locally, then in the preview branch via `/deploy-pr-preview`, running the applicable `docs/QA_Acceptance_Test` suites before handing back to the user.
-7. **Browser Automation**: In Claude Code, use the **built-in browser tools** (`mcp__Claude_Browser__*`) to analyze or test the UI — `preview_start`, `navigate`, `get_page_text`, `read_page`, `read_console_messages`, `read_network_requests`, `computer`. NEVER write ad-hoc Node.js browser scripts. The Playwright CLI path described in `.agent/workflows/browser-agent.md` is the Antigravity equivalent and is not the default here; reach for it only when a test genuinely needs the user's logged-in Chrome profile over CDP. See `/browser-agent` for both paths and their trade-offs.
+7. **Browser Automation**: In Claude Code, use the **built-in browser tools** (`mcp__Claude_Browser__*`) for ALL UI testing — `preview_start`, `navigate`, `get_page_text`, `read_page`, `read_console_messages`, `read_network_requests`, `computer`, `resize_window` (viewport + light/dark emulation). NEVER write ad-hoc Node.js browser scripts. **The built-in browser keeps persistent cookies, and both QA Google accounts (`USER_A`, `USER_B`) are signed in there** — so signed-in flows (dashboard, Clerk sign-in via the Google account chooser, OAuth consent) run in the built-in browser too; switching accounts through the chooser is the standing-approved routine step. Verify rather than assume: if a flow lands on a Google *password* prompt, the session has expired — STOP (never type a password) and fall back to the Playwright CLI CDP path (Path B in `/browser-agent`), which attaches to the dedicated signed-in Chrome profile. Path B is the backup for expired/missing built-in sessions, not an alternative default. See `/browser-agent` for both paths.
+
+## QA Subagent Architecture
+
+QA execution is delegated to cost-tiered subagents defined in `.claude/agents/`:
+`qa-env-runner` (Sonnet) executes runbooks and writes
+`docs/QA_Acceptance_Test/qa-results.json`; `qa-smoke` and `deploy-watcher` (Haiku) handle
+mechanical polling and smoke checks; `qa-coverage-auditor` (Sonnet) adversarially reviews
+results; `qa-setup-driver` (inherits the session model) drives the browser setup flows.
+Two rules bind this architecture:
+
+1. **Only the orchestrator (main session) edits source, schema, or config.** Runners
+   execute and report; a runner that hits a code problem records it, never fixes it.
+2. **`npx tsx scripts/qa-coverage-check.ts` is the arbiter of QA completeness** — it
+   parses the `### A<n>:` assertions in `docs/QA_Acceptance_Test/capabilities/` and
+   validates `qa-results.json` (schema in `docs/QA_Acceptance_Test/README.md`). Prose
+   assertion counts are informational.
+
+QA environments run sequentially (they share one dev server, one Neon branch, and the QA
+accounts/keys — lifecycle capabilities mutate that shared state). Targeted re-tests
+re-dispatch a runner scoped to the failed capabilities only, bounded at 3 fix-and-retest
+rounds.
 
 ## Local Development Environment
 
@@ -63,6 +84,16 @@ Notes:
      QA run, or for any other account, sign-in remains the user's job.
 6. `bash scripts/qa-secrets.sh` pulls the 1Password *test account emails* only — it does
    not populate app secrets. Do not confuse the two.
+7. **Every git worktree bootstraps separately.** `.env.local`, `.qa_test_emails.json`,
+   `node_modules`, and `.vercel/` are gitignored and do NOT carry over from the main
+   clone or other worktrees. A fresh worktree needs the full bootstrap above, and a key
+   "fixed" in another worktree has not fixed it here. `npm run env:check` is the first
+   move whenever auth or DB behaves unexpectedly.
+8. **Paste env values into Vercel WITHOUT quotes.** A value stored as `"sk_test_…"`
+   (quotes included) survives `vercel env pull` and dotenv parsing looking superficially
+   fine, but the runtime value starts with a literal `"` and auth fails as if the key
+   were unset. `env:check` detects this exact case and prints the remediation
+   (rm + re-add the var, then re-pull).
 
 These rules are enforced by `.claude/hooks/guard-local-env.sh` (PreToolUse), which blocks
 local database containers, schema pushes without an isolated branch, and hand-written
@@ -127,6 +158,38 @@ user ids are production-instance ids too.
 7. **No Direct DB Writes During QA**: NEVER write ad-hoc scripts (`psql`, `npx tsx`, raw SQL, Drizzle ORM scripts) that INSERT, UPDATE, or DELETE application data to simulate user actions during QA. QA exists to validate the real user flow. All state changes (approving connections, creating keys, configuring rules) MUST go through the Web UI via `/browser-agent` or the application's own API endpoints — exactly as a real user would. Direct DB manipulation bypasses the authorization checks the tests are meant to validate and can create invalid cross-user data bindings. Read-only queries for debugging are fine.
 8. **Migration File Verification**: After `drizzle-kit generate`, ALWAYS verify (a) the new `.sql` file exists in `src/db/migrations/`, (b) `migrate.ts` will pick it up (it uses a dynamic `readdirSync` — confirm the `.sql` extension and `NNNN_*.sql` naming convention), and (c) `npm run db:migrate` succeeds locally against your dev branch. NEVER assume a generated migration will be discovered without verification.
 
+## This Repository Is Public
+
+`kyesh/fine_grain_access_control` is open source. Everything pushed or posted — code,
+commit messages, issues, PRs, comments, releases — is world-readable, permanently and
+immediately.
+
+**Never put customer data in anything that reaches GitHub.** That means real email
+addresses, Clerk user ids (`user_...`), proxy keys (`sk_proxy_...`), delegation or
+connection ids tied to a person, and database rows quoted verbatim.
+
+This applies to *diagnostic* content as much as code. Triaging production data is normal;
+pasting the results into an issue is not. Refer to the query or the local report instead:
+
+> Two addresses carry active keys — run `npm run db:tombstone-orphans -- --prod` to see them.
+
+not
+
+> ~~Two addresses carry active keys: alice@example-university.edu and bob@example-corp.com~~
+
+**Editing does not undo publication.** GitHub retains edit history on issues and PRs and
+shows it to anyone. The only real remedy is deleting the issue/PR, which destroys the
+thread. Treat every post as final.
+
+**If it happens anyway**: delete the issue/PR (not just edit it), check whether the data
+also reached commit messages or files (`git log --all -S '<value>'`), recreate the content
+sanitised, and tell the user what was exposed and for how long.
+
+Enforced by `.claude/hooks/guard-public-content.sh` (PreToolUse), which blocks
+`gh issue/pr create|edit|comment`, `gh gist create`, and `gh release create` when the body
+— inline or via `--body-file` — contains an email address outside the allowlist, a proxy
+key, or a Clerk user id. Reads (`view`, `list`, `checks`) are unaffected.
+
 ## Security, Safety, and Workflow Best Practices
 
 - **Strict UI Policy**: Put debug information exclusively in server logs. NEVER render debug identifiers, developer tokens, or internal error objects into the HTML/UI.
@@ -155,9 +218,9 @@ These bans are additionally enforced as `deny` rules in `.claude/settings.json`.
 
 ## Context Efficiency & Session Hygiene
 
-Ported from `.agent/rules/session-stability.md`. The Antigravity-specific parts (ptyHost
-crash pacing, `waitForPreviousTools`, `command_status` polling) do not apply to Claude Code
-and have been dropped; what remains are the rules that still hold here.
+Originally derived from Antigravity's session-stability rules; the IDE-specific parts
+(ptyHost crash pacing, `waitForPreviousTools`, `command_status` polling) do not apply to
+Claude Code and were dropped. What remains are the rules that still hold here.
 
 1. **Batch related shell checks into one command.** Instead of five separate `curl` calls, run one command with `curl ... && curl ... && curl ...`. Independent commands may be issued in parallel in a single response.
 2. **Playwright snapshots**: ALWAYS pipe through `grep` to extract only relevant elements.

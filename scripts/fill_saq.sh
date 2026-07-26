@@ -3,7 +3,7 @@
 # Each question has a "Yes" button ref and a textbox ref
 # Pattern: Yes button, textbox, Yes button, textbox, ...
 
-CLI="npx @playwright/cli -s=antigravity_ui"
+CLI="npx @playwright/cli -s=fgac_ui"
 DELAY=0.3
 
 # Arrays: yes_refs[i] = Yes button for Q(i+1), text_refs[i] = textbox for Q(i+1)

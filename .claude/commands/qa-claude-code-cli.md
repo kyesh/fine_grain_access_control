@@ -1,96 +1,57 @@
 ---
 description: Run all capability tests through Claude Code CLI local scripts (headless `claude -p` evals)
-argument-hint: [--filter A1]
-allowed-tools: Bash(bash test/qa-envs/cc-cli/reset.sh), Bash(node test/qa-envs/cc-cli/:*), Bash(bash evals/run_evals.sh:*), Bash(cat:*), Bash(jq:*), Bash(tmux:*), Read, Glob
+argument-hint: [--filter A1 | capability scope]
+allowed-tools: Task, Bash(npx tsx scripts/qa-coverage-check.ts:*), Read, Glob
 ---
 
 # Claude Code CLI QA
 
-Requires: `/qa-setup` completed, dev server running. Optional filter: `$ARGUMENTS`
+Requires: `/qa-setup` completed, dev server running. Optional scope:
+`$ARGUMENTS` (an eval `--filter` or capability numbers; empty = full suite).
 
-## Two-Phase Hybrid Testing Model
+You are the orchestrator. The runner executes; you diagnose and fix.
 
-### Phase 1: Auth Setup (interactive, one-time)
+## 1. Dispatch the runner
 
-The OAuth DCR + PKCE flow needs interactive browser consent. Do this once before headless testing:
+Dispatch the **qa-env-runner** subagent:
 
-1. **Reset**:
-   ```bash
-   bash test/qa-envs/cc-cli/reset.sh
-   ```
-2. **Authenticate**:
-   ```bash
-   FGAC_ROOT_URL=http://localhost:3000 node test/qa-envs/cc-cli/.claude/skills/fgac/scripts/auth.js --action login
-   ```
-3. **Approve** the connection in the dashboard via `/browser-agent`.
-4. **Verify** credentials are stored:
-   ```bash
-   cat ~/.openclaw/fgac/fgac-credentials.json | jq '.proxy_key, .key_label'
-   ```
+> Execute runbook `docs/QA_Acceptance_Test/agents/03_claude_code_cli.md`
+> [scope: `$ARGUMENTS`, if given]. This environment is two-phase:
+>
+> **Phase 1 — auth (once):** `bash test/qa-envs/cc-cli/reset.sh`, then
+> `FGAC_ROOT_URL=http://localhost:3000 node test/qa-envs/cc-cli/.claude/skills/fgac/scripts/auth.js --action login`,
+> approve the pending connection in the dashboard via the Playwright CLI
+> (UI only — never DB writes), then verify
+> `cat ~/.openclaw/fgac/fgac-credentials.json | jq '.proxy_key, .key_label'`
+> succeeds (do not print the key value).
+>
+> **Phase 2 — headless evals:**
+> `cd test/qa-envs/cc-cli && bash evals/run_evals.sh` (add `--filter <id>`
+> for a scoped run). The suite uses `claude -p` with `--output-format json`;
+> map its per-test results onto capability assertions in qa-results.json.
 
-### Phase 2: Headless Capability Eval (`claude -p`)
+It writes `docs/QA_Acceptance_Test/qa-results.json` and returns only the
+coverage matrix and failures.
 
-With auth pre-seeded, ALL capability assertions run headlessly:
+New test cases go in `test/qa-envs/cc-cli/evals/test_cases.json` — that is an
+orchestrator (source) change, not a runner action. The tmux interactive
+fallback exists for UI-only assertions (slash-command UI, skill banner); the
+runbook covers it.
 
-```bash
-cd test/qa-envs/cc-cli && bash evals/run_evals.sh
-```
+## 2. Audit
 
-Single test:
-```bash
-cd test/qa-envs/cc-cli && bash evals/run_evals.sh --filter A1
-```
+Dispatch the **qa-coverage-auditor** subagent. Treat its findings as failures.
 
-The runner uses `claude -p` (print/headless mode) with:
-- `--output-format json` — structured, parseable results
-- `--allowedTools "Bash(node:*)"` — restricted to skill scripts
-- `--max-turns 5` — prevents runaway execution
-- `--dangerously-skip-permissions` — unattended execution
+## 3. Fix-and-retest loop (max 3 rounds)
 
-> **Why not tmux?** The earlier tmux approach was fragile (alternate screen buffer issues,
-> timing, usage throttling). `claude -p` is deterministic, fast (10–15s per test), and CI/CD
-> compatible.
+1. Diagnose and fix **in this session** — only the orchestrator edits source
+   (including eval test cases).
+2. Re-dispatch **qa-env-runner** with a `--filter` scoped to the failures.
+3. Re-dispatch the auditor.
 
-## Coverage Report (Required)
+After 3 rounds, stop and hand the remaining failures to the user.
 
-The eval suite emits a pass/fail report automatically. Cross-reference it against
-`docs/QA_Acceptance_Test/capabilities/` for full coverage:
+## 4. Report
 
-```
-| Cap | Assertion | Status | Duration | Notes |
-|-----|-----------|--------|----------|-------|
-| 01  | A1        | ✅/❌/⏭️ | 10s      |       |
-| 01  | A2        | ✅/❌/⏭️ | 15s      |       |
-...
-```
-
-All assertions must be accounted for. Any ⏭️ (skipped) must include a reason. Report failures
-with the actual output — never mark a test passing on an assumption.
-
-## Adding New Test Cases
-
-Add entries to `test/qa-envs/cc-cli/evals/test_cases.json`:
-
-```json
-{
-  "id": "A5",
-  "capability": "02_read_blacklist",
-  "name": "Read blocked competitor email",
-  "prompt": "Using fgac, search for emails from spy@competitor.com",
-  "assert_pattern": "blocked|filtered|no results",
-  "expect_exit": 0,
-  "max_turns": 5
-}
-```
-
-## Fallback: Interactive TUI Testing
-
-If headless testing is insufficient (e.g. testing slash command UI or the skill discovery
-banner), use the tmux fallback:
-
-```bash
-tmux new-session -d -s fgac-cli-qa -x 200 -y 50 "cd test/qa-envs/cc-cli && claude --dangerously-skip-permissions"
-tmux send-keys -t fgac-cli-qa "What skills do you have available?" Enter
-```
-
-This should be rare — most capability assertions work via `claude -p`.
+Final coverage matrix, audit verdict, and remaining failures with masked
+evidence. `npx tsx scripts/qa-coverage-check.ts` must exit clean on coverage.
