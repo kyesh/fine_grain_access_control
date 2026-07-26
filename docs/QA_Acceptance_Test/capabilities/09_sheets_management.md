@@ -25,10 +25,13 @@ events do not route into the iframe — tiles cannot be clicked from this harnes
    `exposeSheetsFromPicker` action) as the signed-in user with a known fixture
    spreadsheet id. This is the application's own API, allowed by Database Rule 7; only
    Google's own picker UI (not our code) goes unexercised.
-2. **Playwright CDP path (full-fidelity)**: Playwright frame locators do pierce
-   cross-origin iframes. Requires the one-time manual sign-in of the
-   `.playwright_user_data` Chrome profile; use for release-level verification of the
-   actual pick interaction.
+2. **Playwright CDP path (full-fidelity) — CONFIRMED WORKING (2026-07-26)**: the
+   Playwright CLI's snapshots expose the picker iframe's contents as frame refs
+   (`f<N>e<M>`), tiles are clickable, and a full pick-to-rule flow was executed end to
+   end (tile → Select → rule row with Read Only default). Requires the one-time manual
+   Google sign-in of the `.playwright_user_data` Chrome profile at the MAIN clone. Use
+   for release-level verification of the actual pick interaction, including the
+   real first-time drive.file consent round-trip (also verified live).
 
 ## Assertions
 
