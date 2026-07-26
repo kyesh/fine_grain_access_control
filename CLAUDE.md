@@ -14,6 +14,42 @@
 6. **Validation**: Validate changes locally, then in the preview branch via `/deploy-pr-preview`, running the applicable `docs/QA_Acceptance_Test` suites before handing back to the user.
 7. **Browser Automation**: In Claude Code, use the **built-in browser tools** (`mcp__Claude_Browser__*`) to analyze or test the UI — `preview_start`, `navigate`, `get_page_text`, `read_page`, `read_console_messages`, `read_network_requests`, `computer`. NEVER write ad-hoc Node.js browser scripts. The Playwright CLI path described in `.agent/workflows/browser-agent.md` is the Antigravity equivalent and is not the default here; reach for it only when a test genuinely needs the user's logged-in Chrome profile over CDP. See `/browser-agent` for both paths and their trade-offs.
 
+## Local Development Environment
+
+There is exactly one supported way to run this app locally. Do NOT improvise an
+environment — no local Postgres in Docker, no hand-written `.env.local`, no Clerk
+keyless mode. Those all produce an app that appears to work while testing a stack
+that does not match production.
+
+```bash
+npx vercel link --yes --project fine-grain-access-control   # once per clone
+npx vercel env pull .env.local --environment=development     # dev Clerk + Neon creds
+npm run db:branch                                            # isolated Neon branch
+npm run dev:qa                                               # webpack, 8GB heap
+```
+
+Notes:
+
+1. **Node version**: system Node may be older than Next's `>=20.9` requirement. Use the
+   Node 22 install (`~/local/node22/bin`) — `.claude/launch.json` already wraps `dev:qa`
+   so `preview_start` resolves it correctly.
+2. **Verify Clerk is real**: the dev server log must say
+   `Clerk has been loaded with development keys`. If it says *keyless mode*, the pull
+   did not work and you are testing against a throwaway Clerk instance.
+3. **Verify Neon isolation**: `.env.local` must contain `neon__POSTGRES_URL` pointing at
+   a branch named after your git branch. `db:branch` writes it.
+4. **Never copy a whole `.env.local` between machines** — it carries another machine's
+   `neon__POSTGRES_URL` and will silently point you at someone else's database branch.
+   Copy individual missing keys.
+5. **Signing in is the user's job.** Agents do not create accounts or enter credentials.
+   Ask the user to sign in, then continue.
+6. `bash scripts/qa-secrets.sh` pulls the 1Password *test account emails* only — it does
+   not populate app secrets. Do not confuse the two.
+
+These rules are enforced by `.claude/hooks/guard-local-env.sh` (PreToolUse), which blocks
+local database containers, schema pushes without an isolated branch, and hand-written
+`.env` files.
+
 ## Database Rules
 
 1. **Isolation First**: BEFORE creating any migration or pushing schema changes, ALWAYS run `npm run db:branch` so Drizzle-Kit executes against an isolated development branch.
