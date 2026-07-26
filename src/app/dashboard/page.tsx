@@ -1,5 +1,6 @@
-import { users, proxyKeys, emailDelegations, keyEmailAccess, accessRules, keyRuleAssignments } from '@/db/schema';
-import { eq, and } from 'drizzle-orm';
+import { users, proxyKeys, keyEmailAccess, accessRules, keyRuleAssignments } from '@/db/schema';
+import { eq } from 'drizzle-orm';
+import { getActiveDelegationsToEmail } from '@/db/delegationQueries';
 import { createDbUser } from '@/db/userHelpers';
 import { currentUser } from '@clerk/nextjs/server';
 import { redirect } from 'next/navigation';
@@ -34,23 +35,17 @@ export default async function DashboardPage() {
   const hasCompleteGoogleAccess = await checkGoogleAccess(user);
 
   // ─── Emails this user can build profiles against ─────────────────────────
-  const delegationsToMe = await db.select({
-    delegation: emailDelegations,
-    ownerEmail: users.email,
-  })
-    .from(emailDelegations)
-    .innerJoin(users, eq(users.id, emailDelegations.ownerUserId))
-    .where(and(
-      eq(emailDelegations.delegateUserId, dbUser.id),
-      eq(emailDelegations.status, 'active'),
-    ));
+  // Resolved by email rather than user row id: duplicate `users` rows for one
+  // email (Clerk re-issuing a user id) otherwise hide the delegation entirely,
+  // and the delegate loses access with no error. See delegationQueries.ts.
+  const delegationsToMe = await getActiveDelegationsToEmail(dbUser.email);
 
   const accessibleEmails = [
     { email: dbUser.email, type: 'own' as const, hasCompleteGoogleAccess },
     ...delegationsToMe.map(d => ({
-      email: d.ownerEmail,
+      email: d.counterpartEmail,
       type: 'delegated' as const,
-      delegationId: d.delegation.id,
+      delegationId: d.id,
     })),
   ];
 

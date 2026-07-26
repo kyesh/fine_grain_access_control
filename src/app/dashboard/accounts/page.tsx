@@ -1,5 +1,6 @@
-import { users, proxyKeys, emailDelegations } from '@/db/schema';
+import { users, proxyKeys } from '@/db/schema';
 import { eq } from 'drizzle-orm';
+import { getDelegationsToEmail, getDelegationsFromEmail } from '@/db/delegationQueries';
 import { createDbUser } from '@/db/userHelpers';
 import { currentUser } from '@clerk/nextjs/server';
 import { redirect } from 'next/navigation';
@@ -27,26 +28,15 @@ export default async function AccountsPage() {
 
   const hasCompleteGoogleAccess = await checkGoogleAccess(user);
 
-  const delegationsToMe = await db.select({
-    delegation: emailDelegations,
-    ownerEmail: users.email,
-  })
-    .from(emailDelegations)
-    .innerJoin(users, eq(users.id, emailDelegations.ownerUserId))
-    .where(eq(emailDelegations.delegateUserId, dbUser.id));
-
-  const delegationsFromMe = await db.select({
-    delegation: emailDelegations,
-    delegateEmail: users.email,
-  })
-    .from(emailDelegations)
-    .innerJoin(users, eq(users.id, emailDelegations.delegateUserId))
-    .where(eq(emailDelegations.ownerUserId, dbUser.id));
+  // Resolved by email, not by user row id — duplicate `users` rows for the same
+  // email would otherwise hide existing delegations. See delegationQueries.ts.
+  const delegationsToMe = await getDelegationsToEmail(dbUser.email);
+  const delegationsFromMe = await getDelegationsFromEmail(dbUser.email);
 
   const userProxyKeys = await db.select().from(proxyKeys).where(eq(proxyKeys.userId, dbUser.id));
   const activeKeys = userProxyKeys.filter(k => !k.revokedAt).map(k => ({ id: k.id, label: k.label }));
 
-  const activeDelegationsToMe = delegationsToMe.filter(d => d.delegation.status === 'active');
+  const activeDelegationsToMe = delegationsToMe.filter(d => d.status === 'active');
 
   return (
     <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-8 space-y-6">
@@ -121,16 +111,16 @@ export default async function AccountsPage() {
 
               {activeDelegationsToMe.map(d => (
                 <div
-                  key={d.delegation.id}
+                  key={d.id}
                   className="flex items-center justify-between gap-2 rounded-sm border border-border bg-card px-4 py-3"
                 >
                   <span className="min-w-0 truncate text-[13px] font-semibold text-foreground">
-                    {d.ownerEmail}
+                    {d.counterpartEmail}
                   </span>
                   <div className="flex items-center gap-2">
                     <Badge tone="primary">Delegated to you</Badge>
                     <span className="text-[11px] text-subtle whitespace-nowrap">
-                      since {d.delegation.createdAt.toLocaleDateString()}
+                      since {d.createdAt.toLocaleDateString()}
                     </span>
                   </div>
                 </div>
@@ -153,22 +143,22 @@ export default async function AccountsPage() {
               ) : (
                 delegationsFromMe.map(d => (
                   <div
-                    key={d.delegation.id}
+                    key={d.id}
                     className="flex flex-wrap items-center justify-between gap-2 rounded-sm border border-border bg-card px-4 py-3"
                   >
                     <div className="flex items-center gap-2.5 min-w-0">
                       <span className="min-w-0 truncate text-[13px] font-semibold text-foreground">
-                        {d.delegateEmail}
+                        {d.counterpartEmail}
                       </span>
-                      {d.delegation.status === 'active'
+                      {d.status === 'active'
                         ? <Badge tone="success">Active</Badge>
                         : <Badge tone="error">Revoked</Badge>}
                       <span className="text-[11px] text-subtle whitespace-nowrap">
-                        since {d.delegation.createdAt.toLocaleDateString()}
+                        since {d.createdAt.toLocaleDateString()}
                       </span>
                     </div>
-                    {d.delegation.status === 'active' && (
-                      <RevokeDelegationButton delegationId={d.delegation.id} />
+                    {d.status === 'active' && (
+                      <RevokeDelegationButton delegationId={d.id} />
                     )}
                   </div>
                 ))
