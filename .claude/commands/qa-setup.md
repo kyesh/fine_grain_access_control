@@ -1,11 +1,18 @@
 ---
 description: Bootstrap the QA environment (secrets, dev server, setup docs) via the browser agent
-allowed-tools: Bash(bash scripts/qa-secrets.sh), Bash(npm run dev:qa), Bash(curl:*), Bash(ls:*), Bash(cat .qa_test_emails.json), Bash(jq:*), Read, Glob
+allowed-tools: Task, Bash(bash scripts/qa-secrets.sh), Bash(npm run dev:qa), Bash(curl:*), Bash(ls:*), Bash(jq:*), Read, Glob
 ---
 
 # QA Setup
 
 Prepares the environment every other `/qa-*` workflow depends on.
+
+Run steps 1–4 yourself (secrets, dev server), then dispatch the
+**qa-setup-driver** subagent to execute steps 5–7 (the browser flows). The
+driver returns the coverage checkpoint as a checklist and a
+`SETUP: COMPLETE/INCOMPLETE` verdict; if incomplete, fix what it reports (or
+surface it to the user) and re-dispatch — a partial setup silently invalidates
+every downstream QA run.
 
 ## Steps
 

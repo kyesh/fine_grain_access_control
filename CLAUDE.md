@@ -14,6 +14,27 @@
 6. **Validation**: Validate changes locally, then in the preview branch via `/deploy-pr-preview`, running the applicable `docs/QA_Acceptance_Test` suites before handing back to the user.
 7. **Browser Automation**: In Claude Code, use the **built-in browser tools** (`mcp__Claude_Browser__*`) to analyze or test the UI — `preview_start`, `navigate`, `get_page_text`, `read_page`, `read_console_messages`, `read_network_requests`, `computer`. NEVER write ad-hoc Node.js browser scripts. The Playwright CLI CDP path (Path B in `/browser-agent`) is not the default; reach for it only when a test genuinely needs the user's logged-in Chrome profile. See `/browser-agent` for both paths and their trade-offs.
 
+## QA Subagent Architecture
+
+QA execution is delegated to cost-tiered subagents defined in `.claude/agents/`:
+`qa-env-runner` (Sonnet) executes runbooks and writes
+`docs/QA_Acceptance_Test/qa-results.json`; `qa-smoke` and `deploy-watcher` (Haiku) handle
+mechanical polling and smoke checks; `qa-coverage-auditor` (Sonnet) adversarially reviews
+results; `qa-setup-driver` (inherits the session model) drives the browser setup flows.
+Two rules bind this architecture:
+
+1. **Only the orchestrator (main session) edits source, schema, or config.** Runners
+   execute and report; a runner that hits a code problem records it, never fixes it.
+2. **`npx tsx scripts/qa-coverage-check.ts` is the arbiter of QA completeness** — it
+   parses the `### A<n>:` assertions in `docs/QA_Acceptance_Test/capabilities/` and
+   validates `qa-results.json` (schema in `docs/QA_Acceptance_Test/README.md`). Prose
+   assertion counts are informational.
+
+QA environments run sequentially (they share one dev server, one Neon branch, and the QA
+accounts/keys — lifecycle capabilities mutate that shared state). Targeted re-tests
+re-dispatch a runner scoped to the failed capabilities only, bounded at 3 fix-and-retest
+rounds.
+
 ## Local Development Environment
 
 There is exactly one supported way to run this app locally. Do NOT improvise an

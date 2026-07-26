@@ -1,6 +1,6 @@
 ---
 description: Push the branch to a PR, wait for the Vercel Preview build, validate the live UI with the browser agent, and return both URLs
-allowed-tools: Bash(git:*), Bash(gh:*), Bash(npm run db:generate), Bash(ls:*), Bash(npx vercel ls:*), Bash(npx vercel inspect:*), Bash(curl:*), Bash(jq:*), Read
+allowed-tools: Task, Bash(git:*), Bash(gh:*), Bash(npm run db:generate), Bash(ls:*), Bash(npx vercel ls:*), Bash(npx vercel inspect:*), Bash(curl:*), Bash(jq:*), Read
 ---
 
 # Deploy PR Preview
@@ -44,34 +44,29 @@ Current branch: !`git branch --show-current`
    npx vercel cancel <deployment-url>
    ```
 
-6. **Wait for the Preview deployment** and extract the live alias URL:
+6. **Dispatch the `deploy-watcher` subagent** (background) with the branch name and pushed
+   commit SHA. It polls until the deployment is `Ready` or `Error`; on error it fetches the
+   build logs and returns a classified failure. Keep working (or wait) — do NOT poll
+   `vercel ls` in this session.
 
-   ```bash
-   npx vercel ls googleapis-fine-grain-access-control | grep -w "Ready" | grep -w "Preview" | head -n 1 | awk '{print $2}'
-   ```
+7. **Deploy-watch loop** (max 3 rounds). On the watcher's result:
 
-7. **If the deployment fails with `● Error`**, you MUST read the build logs BEFORE taking any
-   corrective action. Do NOT blindly delete Neon branches or retry without diagnosing.
+   - `READY <url>` → continue to step 8.
+   - `ERROR <classification>` → apply the matching fix **after reading the quoted log lines**:
+     - `MIGRATION_SQL` — fix the migration file or the `splitStatements` parser in `migrate.ts`.
+     - `NEON_BRANCH_LIMIT` — only THEN run `npx tsx scripts/cleanup-neon-branches.ts` (ask-gated).
+     - `BUILD_ERROR` — fix the code.
+     - `ENV_MISSING` — check Vercel project settings; env-var changes are ask-gated.
+     - `OTHER` — diagnose from the quoted logs before touching anything.
 
-   a. Fetch the build logs:
-   ```bash
-   VERCEL_TOKEN=$(cat ~/.local/share/com.vercel.cli/auth.json | jq -r '.token')
-   npx vercel inspect <deployment-url>
-   curl -s "https://api.vercel.com/v2/deployments/<deployment-id>/events" \
-     -H "Authorization: Bearer $VERCEL_TOKEN" | jq -r '.[].payload.text'
-   ```
+     Then push and dispatch a fresh watcher. After 3 failed rounds, stop and hand the
+     classified failure to the user.
+   - `TIMEOUT` → check `npx vercel ls` once yourself; if the build is genuinely stuck,
+     surface it to the user rather than re-dispatching blindly.
 
-   b. Diagnose from the logs. Common failures:
-   - **Migration SQL errors** (e.g. `cannot insert multiple commands into a prepared statement`) — fix the migration file or the `splitStatements` parser in `migrate.ts`.
-   - **Neon branch limit exceeded** — only THEN run `npx tsx scripts/cleanup-neon-branches.ts`.
-   - **TypeScript/build errors** — fix the code.
-   - **Missing environment variables** — check Vercel project settings.
-
-   c. Fix the root cause, push again, and return to step 5.
-
-   > **CRITICAL**: Never delete Neon branches as a first response to a build error. Always read
-   > the logs first. Deleting branches is destructive and only appropriate when the logs
-   > explicitly indicate a branch limit error.
+   > **CRITICAL**: Never delete Neon branches as a first response to a build error. The
+   > watcher classifies from the logs; deleting branches is destructive and only appropriate
+   > on an explicit `NEON_BRANCH_LIMIT` classification.
 
 8. **Validate the frontend yourself** once the Preview URL is `Ready`, by running the
    `/browser-agent` workflow:

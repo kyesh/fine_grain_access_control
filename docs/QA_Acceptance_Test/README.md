@@ -52,12 +52,18 @@ archive/        → Retired one-time-fix tests
 
 | Workflow | Description |
 |----------|-------------|
-| `/qa-setup` | Bootstrap: pull secrets, browser agent setup |
-| `/qa-hosted-mcp` | All capabilities via curl → MCP endpoint |
-| `/qa-claude-code` | All capabilities via tmux Claude Code MCP |
-| `/qa-claude-code-cli` | All capabilities via Claude Code + local scripts |
-| `/qa-openclaw` | All capabilities via genuine OpenClaw Docker |
-| `/qa-production` | All agents via real distribution channels → prod |
+| `/qa-setup` | Bootstrap: pull secrets, dev server, then the `qa-setup-driver` subagent runs the browser flows |
+| `/qa-hosted-mcp` | All capabilities via curl → MCP endpoint (dispatches `qa-env-runner`) |
+| `/qa-claude-code` | All capabilities via tmux Claude Code MCP (dispatches `qa-env-runner`) |
+| `/qa-claude-code-cli` | All capabilities via Claude Code + headless evals (dispatches `qa-env-runner`) |
+| `/qa-openclaw` | All capabilities via genuine OpenClaw Docker (dispatches `qa-env-runner`) |
+| `/qa-production` | `qa-smoke` first, then all agents via real distribution channels → prod |
+
+Each workflow is orchestrated from the main session, which dispatches subagents
+(`.claude/agents/`), audits results via `qa-coverage-auditor` + `scripts/qa-coverage-check.ts`,
+and owns all source fixes. Runbooks execute inside the runner subagent — their transcripts
+never enter the main context; only the coverage matrix comes back. See CLAUDE.md → "QA
+Subagent Architecture".
 
 ## Structured results — `qa-results.json`
 
