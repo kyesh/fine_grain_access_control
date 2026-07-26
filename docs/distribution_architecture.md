@@ -75,11 +75,11 @@ Each proxy key can access multiple email accounts via `key_email_access`:
 |-----------|------|
 | Hosted MCP Server | `src/app/api/mcp/route.ts` |
 | CLI Token Endpoint | `src/app/api/auth/cli-token/route.ts` |
-| OpenClaw SKILL.md | `docs/skills/gmail-fgac/SKILL.md` |
-| OpenClaw scripts | `docs/skills/gmail-fgac/scripts/` *(symlink → public/skills/claude-code-cli/scripts/)* |
+| OpenClaw SKILL.md | `docs/skills/fgac/SKILL.md` |
+| OpenClaw scripts | `docs/skills/fgac/scripts/` *(symlink → public/skills/claude-code-cli/scripts/)* |
 | Claude Code MCP SKILL.md | `public/skills/claude-code/SKILL.md` |
 | Claude Code CLI plugin | `public/skills/claude-code-cli/` |
-| Claude Code CLI SKILL.md | `public/skills/claude-code-cli/skills/gmail-fgac/SKILL.md` |
+| Claude Code CLI SKILL.md | `public/skills/claude-code-cli/skills/fgac/SKILL.md` |
 | Claude Code CLI scripts | `public/skills/claude-code-cli/scripts/` *(canonical location)* |
 | Marketplace manifest | `.claude-plugin/marketplace.json` |
 | Plugin manifest | `public/skills/claude-code-cli/.claude-plugin/plugin.json` |

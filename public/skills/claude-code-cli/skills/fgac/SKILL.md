@@ -1,5 +1,5 @@
 ---
-name: gmail-fgac
+name: fgac
 description: >
   Gmail integration secured by FGAC.AI — Fine Grain Access Control for AI agents.
   Use when the user wants to read, send, or manage Gmail through a security proxy
@@ -87,7 +87,7 @@ A single proxy key can access multiple inboxes if the key owner has delegated ac
 Use `node scripts/accounts.js --action list` to see which accounts are available.
 
 The `--account` flag is not needed when using FGAC OAuth mode (the default).
-The scripts automatically use the proxy key from `~/.openclaw/gmail-fgac/fgac-credentials.json`.
+The scripts automatically use the proxy key from `~/.openclaw/fgac/fgac-credentials.json`.
 
 ## Auth Management
 

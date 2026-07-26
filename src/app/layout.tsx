@@ -5,13 +5,22 @@ import {
   UserButton
 } from '@clerk/nextjs';
 import type { Metadata } from 'next';
-import { Inter } from 'next/font/google';
+import { Geist, JetBrains_Mono } from 'next/font/google';
 import './globals.css';
 import Link from 'next/link';
 import { PostHogProviderWrapper } from './providers';
 import SuspendedPostHogPageView from './PostHogPageView';
+import { NavLink } from './NavLink';
 
-const inter = Inter({ subsets: ['latin'] });
+const geist = Geist({
+  subsets: ['latin'],
+  variable: '--font-geist',
+});
+
+const jetbrainsMono = JetBrains_Mono({
+  subsets: ['latin'],
+  variable: '--font-jetbrains-mono',
+});
 
 export const metadata: Metadata = {
   title: 'FGAC.ai | Fine Grain Access Control for AI',
@@ -24,50 +33,41 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className="h-full bg-slate-50">
-      <body className={`${inter.className} h-full`}>
+    <html lang="en" className="h-full">
+      <body className={`${geist.variable} ${jetbrainsMono.variable} font-sans h-full bg-background text-foreground antialiased`}>
         <ClerkProvider>
-          <div className="min-h-full">
-            <nav className="border-b border-gray-200 bg-white">
+          <div className="min-h-full flex flex-col">
+            <nav className="border-b border-border bg-card">
               <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
-                <div className="flex h-16 justify-between">
-                  <div className="flex">
-                      <div className="flex flex-shrink-0 items-center">
-                        <Link href="/" className="flex items-center space-x-3">
-                          <img src="/logo-v2.png" alt="FGAC.ai Logo" className="h-12 w-auto" />
-                          <div className="flex flex-col">
-                            <span className="text-xl font-bold tracking-tight text-brand-purple leading-none">FGAC.ai</span>
-                            <span className="text-xs font-semibold text-brand-teal leading-tight mt-1">Fine Grain Access Control</span>
-                          </div>
-                        </Link>
-                      </div>
-                    <div className="hidden sm:-my-px sm:ml-6 sm:flex sm:space-x-8">
-                      <Link
-                        href="/setup"
-                        className="inline-flex items-center border-b-2 border-transparent px-1 pt-1 text-sm font-medium text-gray-800 hover:border-brand-purple hover:text-brand-purple"
-                      >
-                        Setup Guide
-                      </Link>
+                <div className="flex h-16 items-center justify-between gap-6">
+                  <div className="flex items-center gap-10 min-w-0">
+                    <Link href="/" className="flex items-center gap-2 shrink-0">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src="/logo-v2.png" alt="" className="h-8 w-8" />
+                      <span className="text-base font-bold tracking-tight text-foreground">FGAC.ai</span>
+                    </Link>
+
+                    <div className="hidden sm:flex items-center gap-7">
+                      {/* Clerk's <Show> takes a single child, so the two links
+                          are wrapped rather than passed as siblings. */}
+                      <Show when="signed-in">
+                        <div className="flex items-center gap-7">
+                          <NavLink href="/dashboard">Agent Profiles</NavLink>
+                          <NavLink href="/dashboard/accounts">Accounts</NavLink>
+                        </div>
+                      </Show>
+                      <NavLink href="/setup">Setup Guide</NavLink>
                     </div>
-                    <Show when="signed-in">
-                      <div className="hidden sm:-my-px sm:ml-6 sm:flex sm:space-x-8">
-                        <Link
-                          href="/dashboard"
-                          className="inline-flex items-center border-b-2 border-transparent px-1 pt-1 text-sm font-medium text-gray-800 hover:border-brand-purple hover:text-brand-purple"
-                        >
-                          Dashboard
-                        </Link>
-                      </div>
-                    </Show>
                   </div>
-                  <div className="flex items-center">
+
+                  <div className="flex items-center gap-4 shrink-0">
                     <Show when="signed-out">
                       <SignUpButton mode="modal" fallbackRedirectUrl="/dashboard" signInFallbackRedirectUrl="/dashboard">
-                        <button className="text-sm font-medium text-gray-800 hover:text-brand-purple">Sign Up</button>
+                        <button className="rounded-sm bg-primary px-3 py-1.5 text-sm font-semibold text-primary-foreground hover:opacity-90">Sign Up</button>
                       </SignUpButton>
                     </Show>
                     <Show when="signed-in">
-                      <UserButton 
+                      <UserButton
                         userProfileProps={{
                           additionalOAuthScopes: {
                             google: ['https://www.googleapis.com/auth/gmail.modify']
@@ -77,20 +77,34 @@ export default function RootLayout({
                     </Show>
                   </div>
                 </div>
+
+                {/* Nav links wrap below the logo on small screens rather than
+                    disappearing — Accounts is not reachable any other way. */}
+                <div className="sm:hidden flex items-center gap-6 pb-3">
+                  <Show when="signed-in">
+                    <div className="flex items-center gap-6">
+                      <NavLink href="/dashboard">Agent Profiles</NavLink>
+                      <NavLink href="/dashboard/accounts">Accounts</NavLink>
+                    </div>
+                  </Show>
+                  <NavLink href="/setup">Setup Guide</NavLink>
+                </div>
               </div>
             </nav>
-            <main>
+
+            <main className="flex-1">
               <PostHogProviderWrapper>
                 <SuspendedPostHogPageView />
                 {children}
               </PostHogProviderWrapper>
             </main>
-            <footer className="bg-white border-t border-gray-200 mt-auto">
-              <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-8 flex flex-col sm:flex-row justify-between items-center text-sm text-gray-500 gap-4 sm:gap-0">
+
+            <footer className="bg-card border-t border-border">
+              <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-8 flex flex-col sm:flex-row justify-between items-center text-sm text-muted-foreground gap-4 sm:gap-0">
                 <p>&copy; {new Date().getFullYear()} FGAC.ai. All rights reserved.</p>
                 <div className="flex space-x-8">
-                  <Link href="/privacy" className="hover:text-gray-900 border-b border-transparent hover:border-gray-400">Privacy Policy</Link>
-                  <Link href="/terms" className="hover:text-gray-900 border-b border-transparent hover:border-gray-400">Terms of Service</Link>
+                  <Link href="/privacy" className="hover:text-foreground">Privacy Policy</Link>
+                  <Link href="/terms" className="hover:text-foreground">Terms of Service</Link>
                 </div>
               </div>
             </footer>

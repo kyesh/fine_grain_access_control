@@ -20,7 +20,7 @@
    ```bash
    docker exec qa-envs-testclaw-1 \
      FGAC_ROOT_URL=http://localhost:3000 \
-     node /home/node/.openclaw/skills/gmail-fgac/scripts/auth.js --action login
+     node /home/node/.openclaw/skills/fgac/scripts/auth.js --action login
    ```
    *(Complete OAuth flow via `/browser-agent`, then approve connection in dashboard:*
    *Navigate to `http://localhost:3000/dashboard?tab=connections`, find the pending connection, select a proxy key and click **Approve**.*
@@ -31,7 +31,7 @@
 > The following evidence proves the **real OpenClaw agent** processes requests:
 
 - [ ] Docker container logs show gateway receiving the chat prompt:
-      `docker logs testclaw-testclaw-1 2>&1 | grep -i "gmail-fgac"`
+      `docker logs testclaw-testclaw-1 2>&1 | grep -i "fgac"`
 - [ ] Logs show skill discovery and invocation (not direct script execution)
 - [ ] Prompts sent to `http://localhost:18790/api/chat` (gateway API), NOT to `node gmail.js`
 
@@ -44,9 +44,9 @@
 curl -X POST http://localhost:18790/api/chat \
   -H "Authorization: Bearer $OPENCLAW_GATEWAY_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"message": "Send an email to '$USER_B_EMAIL' with subject QA OpenClaw - Send Whitelist A1 and body Test from OpenClaw using the gmail-fgac skill"}'
+  -d '{"message": "Send an email to '$USER_B_EMAIL' with subject QA OpenClaw - Send Whitelist A1 and body Test from OpenClaw using the fgac skill"}'
 ```
-- [ ] OpenClaw discovers gmail-fgac skill, invokes `gmail.js --action send`
+- [ ] OpenClaw discovers fgac skill, invokes `gmail.js --action send`
 - [ ] Email sent successfully
 
 ### A2: Send to blocked address
@@ -54,7 +54,7 @@ curl -X POST http://localhost:18790/api/chat \
 curl -X POST http://localhost:18790/api/chat \
   -H "Authorization: Bearer $OPENCLAW_GATEWAY_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"message": "Send an email to blocked@untrusted.com with subject Blocked using gmail-fgac"}'
+  -d '{"message": "Send an email to blocked@untrusted.com with subject Blocked using fgac"}'
 ```
 - [ ] OpenClaw reports whitelist error from skill output
 - [ ] Agent does not crash — handles error gracefully
@@ -68,7 +68,7 @@ curl -X POST http://localhost:18790/api/chat \
 curl -X POST http://localhost:18790/api/chat \
   -H "Authorization: Bearer $OPENCLAW_GATEWAY_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"message": "List my recent emails using gmail-fgac"}'
+  -d '{"message": "List my recent emails using fgac"}'
 ```
 - [ ] OpenClaw invokes `gmail.js --action list`, returns emails
 
@@ -81,7 +81,7 @@ curl -X POST http://localhost:18790/api/chat \
 curl -X POST http://localhost:18790/api/chat \
   -H "Authorization: Bearer $OPENCLAW_GATEWAY_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"message": "What email accounts can I access via gmail-fgac?"}'
+  -d '{"message": "What email accounts can I access via fgac?"}'
 ```
 - [ ] OpenClaw invokes `accounts.js --action list`
 - [ ] Returns mapped email accounts

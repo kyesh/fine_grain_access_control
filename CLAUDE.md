@@ -14,6 +14,108 @@
 6. **Validation**: Validate changes locally, then in the preview branch via `/deploy-pr-preview`, running the applicable `docs/QA_Acceptance_Test` suites before handing back to the user.
 7. **Browser Automation**: In Claude Code, use the **built-in browser tools** (`mcp__Claude_Browser__*`) to analyze or test the UI — `preview_start`, `navigate`, `get_page_text`, `read_page`, `read_console_messages`, `read_network_requests`, `computer`. NEVER write ad-hoc Node.js browser scripts. The Playwright CLI path described in `.agent/workflows/browser-agent.md` is the Antigravity equivalent and is not the default here; reach for it only when a test genuinely needs the user's logged-in Chrome profile over CDP. See `/browser-agent` for both paths and their trade-offs.
 
+## Local Development Environment
+
+There is exactly one supported way to run this app locally. Do NOT improvise an
+environment — no local Postgres in Docker, no hand-written `.env.local`, no Clerk
+keyless mode. Those all produce an app that appears to work while testing a stack
+that does not match production.
+
+```bash
+npx vercel link --yes --project fine-grain-access-control   # once per clone
+npx vercel env pull .env.local --environment=development     # dev Clerk + Neon creds
+npm run db:branch                                            # isolated Neon branch
+npm run dev:qa                                               # webpack, 8GB heap
+```
+
+Notes:
+
+1. **Node version**: system Node may be older than Next's `>=20.9` requirement. Use the
+   Node 22 install (`~/local/node22/bin`) — `.claude/launch.json` already wraps `dev:qa`
+   so `preview_start` resolves it correctly.
+2. **Verify Clerk is real**: the dev server log must say
+   `Clerk has been loaded with development keys`. If it says *keyless mode*, the pull
+   did not work and you are testing against a throwaway Clerk instance.
+3. **Verify Neon isolation**: `.env.local` must contain `neon__POSTGRES_URL` pointing at
+   a branch named after your git branch. `db:branch` writes it.
+4. **Never copy a whole `.env.local` between machines** — it carries another machine's
+   `neon__POSTGRES_URL` and will silently point you at someone else's database branch.
+   Copy individual missing keys.
+5. **Switch freely between the two QA test users. Never ask permission to do it.**
+
+   `USER_A` and `USER_B` from `.qa_test_emails.json` both stay signed in to Google on the
+   QA machine. Signing out of Clerk and back in as either one is a **routine step of the
+   harness**, exactly like clicking a button — not a decision, not an approval point, not
+   something to confirm, flag, or check in about. Do it as many times as the tests
+   require and simply carry on. Clicking through Google's account chooser and Clerk's
+   OAuth consent for these two accounts is included in this standing approval.
+
+   Do not ask again. Do not end a turn asking whether you may switch. Do not treat a
+   previous approval as single-use — this rule *is* the approval, permanently, for every
+   QA run. If a test needs the other account, switch and keep going.
+
+   Three hard limits remain (these are about safety, not permission):
+   - **Never type a password.** Both accounts are already authenticated with Google. If a
+     password, passkey, or 2FA prompt ever appears, stop and hand back to the user.
+   - **Never create a new account.** If an expected test account is missing, say so
+     rather than signing up.
+   - Only these two accounts, and only against a local or preview deployment. Outside a
+     QA run, or for any other account, sign-in remains the user's job.
+6. `bash scripts/qa-secrets.sh` pulls the 1Password *test account emails* only — it does
+   not populate app secrets. Do not confuse the two.
+
+These rules are enforced by `.claude/hooks/guard-local-env.sh` (PreToolUse), which blocks
+local database containers, schema pushes without an isolated branch, and hand-written
+`.env` files.
+
+## Production Credentials on a Local Machine
+
+Pulling live credentials for diagnostics is fine. Letting them become the *ambient*
+environment is not. The rules below exist so that "am I pointed at prod?" is never a
+question you have to hold in your head.
+
+**Check first, always:**
+
+```bash
+npm run env:check
+```
+
+Prints the resolved database host, whether it is the production branch, which Clerk
+instance the secret belongs to, whether the two are consistent, and whether any
+production URL is sitting in the environment.
+
+**Pull production credentials only to `.secrets/`:**
+
+```bash
+npx vercel env pull .secrets/prod.env --environment=production
+```
+
+`.secrets/` is gitignored and nothing auto-loads it. Do **not** use
+`.env.production.local` — Next.js auto-loads that name whenever `NODE_ENV=production`, so
+a local `npm run build && npm start` would silently run against production. Delete
+`.secrets/prod.env` when finished.
+
+**Never copy production values into `.env.local`.** That file is development-only.
+
+**How the app protects itself** (`src/db/connectionSafety.ts`):
+
+- Outside a production runtime the ONLY accepted connection is `neon__POSTGRES_URL`
+  (written by `npm run db:branch`). There is no fallback chain — a missing branch URL is
+  a hard error, not a reason to try `POSTGRES_URL` or `DATABASE_URL`, both of which point
+  at production in a pulled `.env.local`.
+- The resolved host is checked against the production endpoint and refused outside
+  production, so even a branch variable containing a prod URL is caught.
+
+**Scripts that touch production** must require an explicit `--prod`, read `.secrets/prod.env`
+by name, and refuse to write unless `--apply` is also given. See
+`scripts/tombstone-orphaned-users.ts` for the pattern.
+
+**Clerk instance must match the database.** Production user ids do not exist in the
+development Clerk instance — every lookup 404s and reads as "account deleted". Any script
+that infers state from Clerk must verify the key mode (`sk_live_` vs `sk_test_`) and bail
+if a majority of users resolve as deleted. The branch database is a copy of main, so its
+user ids are production-instance ids too.
+
 ## Database Rules
 
 1. **Isolation First**: BEFORE creating any migration or pushing schema changes, ALWAYS run `npm run db:branch` so Drizzle-Kit executes against an isolated development branch.

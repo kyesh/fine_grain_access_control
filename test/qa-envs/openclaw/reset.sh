@@ -24,8 +24,8 @@ services:
     volumes:
       - ./data:/home/node/.openclaw
       # Mount the live repo skill directory as READ-ONLY to prevent agent mutation
-      - $REPO_ROOT/docs/skills/gmail-fgac:/home/node/.openclaw/skills/gmail-fgac:ro
-      - ./credentials:/home/node/.openclaw/gmail-fgac
+      - $REPO_ROOT/docs/skills/fgac:/home/node/.openclaw/skills/fgac:ro
+      - ./credentials:/home/node/.openclaw/fgac
     network_mode: host
     init: true
 EOF

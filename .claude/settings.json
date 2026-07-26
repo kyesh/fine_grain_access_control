@@ -16,7 +16,15 @@
       "Read(./.env)",
       "Read(./.env.local)",
       "Read(./.env.production)",
-      "Read(./.qa_test_emails.json)"
+      "Read(./.qa_test_emails.json)",
+      "Write(./.env)",
+      "Write(./.env.local)",
+      "Write(./.env.production)",
+      "Write(./.qa_test_emails.json)",
+      "Edit(./.env)",
+      "Edit(./.env.local)",
+      "Edit(./.env.production)",
+      "Edit(./.qa_test_emails.json)"
     ],
     "ask": [
       "Bash(git push:*)",
@@ -26,6 +34,8 @@
       "Bash(npx vercel env add:*)",
       "Bash(npx vercel env rm:*)",
       "Bash(npx vercel cancel:*)",
+      "Bash(vercel link:*)",
+      "Bash(npx vercel link:*)",
       "Bash(git commit --no-verify:*)",
       "Bash(npx tsx scripts/cleanup-neon-branches.ts:*)"
     ],
@@ -40,16 +50,32 @@
       "Bash(gh pr list:*)",
       "Bash(npm run lint:*)",
       "Bash(npm run build:*)",
+      "Bash(npm run dev:qa:*)",
       "Bash(npm run db:branch:*)",
       "Bash(npm run db:generate:*)",
+      "Bash(bash scripts/qa-secrets.sh)",
       "Bash(npx vercel ls:*)",
       "Bash(npx vercel inspect:*)",
       "Bash(npx vercel logs:*)",
       "Bash(npx vercel env ls:*)",
       "Bash(npx vercel env pull:*)",
+      "Bash(npx vercel project ls:*)",
       "Bash(npx @playwright/cli:*)",
       "Bash(curl -s http://localhost:9222/json/version)",
       "Bash(curl -sf http://localhost:3000:*)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/guard-local-env.sh"
+          }
+        ]
+      }
     ]
   }
 }

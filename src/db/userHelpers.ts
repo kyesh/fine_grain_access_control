@@ -1,7 +1,83 @@
 import { db } from '@/db';
 import { users, proxyKeys, keyEmailAccess } from '@/db/schema';
+import { eq, and, desc, isNull } from 'drizzle-orm';
 import * as jose from 'jose';
 
+/**
+ * Resolve the FGAC user row for a Clerk session, creating one only when this
+ * person is genuinely new.
+ *
+ * `users` is keyed on `clerkUserId`, but Clerk can hand out a *new* user id for
+ * the same email — session re-creation, re-signup, a dev-instance reset. Naively
+ * inserting on every unseen `clerkUserId` produced duplicate rows per email, and
+ * because `proxy_keys`, `access_rules`, `key_email_access` and `email_delegations`
+ * all reference a specific `users.id`, the person silently lost their profiles,
+ * rules and delegations — no error, just an apparently empty account.
+ *
+ * So: match on `clerkUserId` first; failing that, adopt an existing row with the
+ * same email by repointing its `clerkUserId`. Only insert when neither matches.
+ *
+ * See docs/bug_reports/duplicate_user_rows_break_delegation.md.
+ */
+export async function resolveDbUser(clerkUserId: string, email: string) {
+  const byClerkId = await db.select().from(users)
+    .where(eq(users.clerkUserId, clerkUserId))
+    .limit(1).then(res => res[0]);
+
+  if (byClerkId) {
+    // Keep the email in sync if it changed on Clerk's side.
+    if (byClerkId.email !== email) {
+      const [updated] = await db.update(users)
+        .set({ email })
+        .where(eq(users.id, byClerkId.id))
+        .returning();
+      return updated;
+    }
+    return byClerkId;
+  }
+
+  // No row for this Clerk id. There are two very different reasons for that,
+  // and they must not be treated the same:
+  //
+  //   1. The previous Clerk account was DELETED and someone signed up again
+  //      with the same address. That is a NEW account. Inheriting the old row's
+  //      proxy keys, rules and delegations would resurrect a deleted identity's
+  //      access — and if the address were ever reassigned, hand it to someone
+  //      else entirely. Tombstoned rows are therefore skipped.
+  //
+  //   2. Clerk reissued an id while the account is still live. Same person,
+  //      same account: adopt the row so their profiles and the delegations
+  //      pointing at them keep working.
+  //
+  // Only live (non-tombstoned) rows are adoptable. Newest first, because
+  // historical data already contains duplicates.
+  const adoptable = await db.select().from(users)
+    .where(and(eq(users.email, email), isNull(users.deletedAt)))
+    .orderBy(desc(users.createdAt))
+    .limit(1).then(res => res[0]);
+
+  if (adoptable) {
+    console.warn(
+      `[resolveDbUser] Adopting live row for ${email}: clerkUserId ${adoptable.clerkUserId} -> ${clerkUserId}`,
+    );
+    const [adopted] = await db.update(users)
+      .set({ clerkUserId })
+      .where(eq(users.id, adoptable.id))
+      .returning();
+    return adopted;
+  }
+
+  // Either no row at all, or only tombstoned ones — start fresh.
+  return createDbUser(clerkUserId, email);
+}
+
+/**
+ * Provision a genuinely new user: the row, an RSA keypair, a default agent
+ * profile, and access to their own mailbox.
+ *
+ * Prefer `resolveDbUser` at call sites — calling this directly on an existing
+ * email creates a duplicate row.
+ */
 export async function createDbUser(clerkUserId: string, email: string) {
   // 1. Create User
   const [newUser] = await db.insert(users).values({

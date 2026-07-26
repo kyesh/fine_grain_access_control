@@ -1,5 +1,5 @@
 /**
- * Shared utilities for gmail-fgac skill.
+ * Shared utilities for fgac skill.
  *
  * Supports two auth modes:
  *   1. FGAC OAuth (recommended) — Clerk OAuth token → proxy key via /api/auth/cli-token
@@ -14,7 +14,7 @@ const path = require('path');
 
 // ─── Directory Configuration ────────────────────────────────────────────────
 
-const CONFIG_DIR = path.join(process.env.HOME || '~', '.openclaw', 'gmail-fgac');
+const CONFIG_DIR = path.join(process.env.HOME || '~', '.openclaw', 'fgac');
 const FGAC_CONFIG_DIR = CONFIG_DIR;
 const FGAC_CONFIG_PATH = path.join(FGAC_CONFIG_DIR, 'fgac-credentials.json');
 const TOKENS_DIR = path.join(CONFIG_DIR, 'tokens');

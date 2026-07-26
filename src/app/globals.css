@@ -1,32 +1,192 @@
 @import "tailwindcss";
 
+/* Dark mode is opt-in via a `.dark` class on a wrapper element.
+   It is deliberately NOT wired to prefers-color-scheme yet — several dashboard
+   components still carry hardcoded light colors, so an automatic flip would
+   half-render. Remove the guard once those are migrated. */
+@custom-variant dark (&:is(.dark *));
+
+/* ─── Design tokens ────────────────────────────────────────────────────────
+   Ported from the pen.dev design file. Semantic names only: tokens are named
+   for the role they play, not the color they happen to be, so a rebrand is a
+   value change here rather than a find-and-replace across components. */
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
   color-scheme: light;
+
+  /* Surfaces */
+  --background: #F2F3F0;
+  --foreground: #111111;
+  --card: #FFFFFF;
+  --card-foreground: #111111;
+  --popover: #FFFFFF;
+  --popover-foreground: #111111;
+
+  /* Brand action color */
+  --primary: #0D9488;
+  --primary-foreground: #FFFFFF;
+  --primary-muted: #E1F2EF;
+
+  --secondary: #E7E8E5;
+  --secondary-foreground: #111111;
+  --accent: #F2F3F0;
+  --accent-foreground: #111111;
+
+  /* Text tiers — three of them: body, secondary, and timestamps//metadata */
+  --muted: #F2F3F0;
+  --muted-foreground: #666666;
+  --muted-foreground-subtle: #9A9B98;
+
+  /* Lines & focus */
+  --border: #CBCCC9;
+  --input: #CBCCC9;
+  --ring: #666666;
+
+  /* Inverted surface — code blocks, endpoint pills.
+     Inverts with the theme so a code block stays visually distinct from the
+     card behind it in both modes. */
+  --surface-inverse: #0F172A;
+  --surface-inverse-foreground: #CBCCC9;
+
+  /* Status */
+  --destructive: #D93C15;
+  --success: #DFE6E1;
+  --success-foreground: #004D1A;
+  --warning: #E9E3D8;
+  --warning-foreground: #804200;
+  --error: #E5DCDA;
+  --error-foreground: #8C1C00;
+  --info: #DFDFE6;
+  --info-foreground: #000066;
+
+  /* Third-party service identity.
+     The hue is Google's, not ours — it does not participate in theming. Only
+     the surrounding tint adapts, so a Gmail chip still reads as Gmail. */
+  --gmail: #2563EB;
+  --gmail-bg: #EFF6FF;
+  --gmail-border: #BFDBFE;
+  --sheets: #059669;
+  --sheets-bg: #ECFDF5;
+  --sheets-border: #A7F3D0;
+}
+
+.dark {
+  color-scheme: dark;
+
+  --background: #111111;
+  --foreground: #FFFFFF;
+  --card: #1A1A1A;
+  --card-foreground: #FFFFFF;
+  --popover: #1A1A1A;
+  --popover-foreground: #FFFFFF;
+
+  --primary: #0D9488;
+  --primary-foreground: #FFFFFF;
+  --primary-muted: #12302A;
+
+  --secondary: #2E2E2E;
+  --secondary-foreground: #FFFFFF;
+  --accent: #111111;
+  --accent-foreground: #F2F3F0;
+
+  --muted: #2E2E2E;
+  --muted-foreground: #B8B9B6;
+  --muted-foreground-subtle: #8B8C89;
+
+  --border: #2E2E2E;
+  --input: #2E2E2E;
+  --ring: #666666;
+
+  --surface-inverse: #F2F3F0;
+  --surface-inverse-foreground: #52534F;
+
+  --destructive: #FF5C33;
+  --success: #222924;
+  --success-foreground: #B6FFCE;
+  --warning: #291C0F;
+  --warning-foreground: #FF8400;
+  --error: #24100B;
+  --error-foreground: #FF5C33;
+  --info: #222229;
+  --info-foreground: #B2B2FF;
+
+  --gmail: #60A5FA;
+  --gmail-bg: #0E1A2E;
+  --gmail-border: #1E3A5F;
+  --sheets: #34D399;
+  --sheets-bg: #0B1F17;
+  --sheets-border: #14432F;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-  
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary-muted: var(--primary-muted);
+
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-subtle: var(--muted-foreground-subtle);
+
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --color-surface-inverse: var(--surface-inverse);
+  --color-surface-inverse-foreground: var(--surface-inverse-foreground);
+
+  --color-destructive: var(--destructive);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-error: var(--error);
+  --color-error-foreground: var(--error-foreground);
+  --color-info: var(--info);
+  --color-info-foreground: var(--info-foreground);
+
+  --color-gmail: var(--gmail);
+  --color-gmail-bg: var(--gmail-bg);
+  --color-gmail-border: var(--gmail-border);
+  --color-sheets: var(--sheets);
+  --color-sheets-bg: var(--sheets-bg);
+  --color-sheets-border: var(--sheets-border);
+
+  /* Logo palette. Fixed values — these belong to the mark, not the UI, and
+     are not used for interface surfaces. */
   --color-brand-purple: #4B2C7F;
   --color-brand-gold: #D4AF37;
   --color-brand-teal: #2D9B9B;
   --color-brand-glow: #A0FFFF;
+
+  --radius-xs: 6px;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 14px;
+
+  --font-sans: var(--font-geist), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-jetbrains-mono), ui-monospace, monospace;
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
 }
 
 @keyframes pulse-subtle {
-  0%, 100% { border-color: rgb(252 211 77); }
-  50% { border-color: rgb(253 230 138); }
+  0%, 100% { border-color: var(--warning-foreground); }
+  50%      { border-color: var(--warning); }
 }
 
 .animate-pulse-subtle {

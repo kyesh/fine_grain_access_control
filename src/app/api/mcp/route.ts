@@ -17,9 +17,10 @@ import {
   accessRules, keyRuleAssignments, emailDelegations,
 } from '@/db/schema';
 import { eq, and } from 'drizzle-orm';
+import { filterLiveDelegatedAccess } from '@/db/delegationQueries';
 import { clerkClient } from '@clerk/nextjs/server';
 import safeRegex from 'safe-regex';
-import { createDbUser } from '@/db/userHelpers';
+import { resolveDbUser } from '@/db/userHelpers';
 
 const DASHBOARD_URL = process.env.NEXT_PUBLIC_APP_URL
   || (process.env.VERCEL_PROJECT_PRODUCTION_URL ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}` : null)
@@ -64,7 +65,7 @@ async function resolveConnection(userId: string, clientId: string | undefined): 
         return { authorized: false, reason: 'user_not_found' };
       }
       
-      user = await createDbUser(userId, email);
+      user = await resolveDbUser(userId, email);
       console.log(`[MCP] Auto-created DB user for ${email}`);
     } catch (err) {
       console.error('[MCP] Failed to auto-create user:', err);
@@ -142,13 +143,14 @@ function pendingMessage(result: ConnectionDenied) {
 // ─── Email & Permission Resolution ──────────────────────────────────────────
 
 async function getAccessibleEmails(proxyKeyId: string) {
-  return db.select().from(keyEmailAccess)
+  const rows = await db.select().from(keyEmailAccess)
     .where(eq(keyEmailAccess.proxyKeyId, proxyKeyId));
+  // Revoked delegations must not keep granting access — see delegationQueries.
+  return filterLiveDelegatedAccess(rows);
 }
 
 async function checkEmailAccess(proxyKeyId: string, targetEmail: string) {
-  const rows = await db.select().from(keyEmailAccess)
-    .where(eq(keyEmailAccess.proxyKeyId, proxyKeyId));
+  const rows = await getAccessibleEmails(proxyKeyId);
   return rows.find(r => r.targetEmail.toLowerCase() === targetEmail.toLowerCase());
 }
 
@@ -725,7 +727,7 @@ const handler = createMcpHandler(
   },
   {
     serverInfo: {
-      name: 'fgac-gmail',
+      name: 'fgac',
       version: '1.0.0',
     },
   },

@@ -13,7 +13,9 @@
     "db:migrate": "tsx src/db/migrate.ts",
     "db:generate": "drizzle-kit generate",
     "prepare": "husky",
-    "qa:secrets": "bash scripts/qa-secrets.sh"
+    "qa:secrets": "bash scripts/qa-secrets.sh",
+    "env:check": "tsx scripts/env-check.ts",
+    "db:tombstone-orphans": "tsx scripts/tombstone-orphaned-users.ts"
   },
   "dependencies": {
     "@clerk/mcp-tools": "^0.5.0",
@@ -32,6 +34,7 @@
     "react": "^19.2.3",
     "react-dom": "19.2.3",
     "safe-regex": "^2.1.1",
+    "svix": "^1.99.1",
     "tailwind-merge": "^3.5.0",
     "tsx": "^4.21.0"
   },

@@ -6,6 +6,11 @@ export const users = pgTable('users', {
   id: uuid('id').defaultRandom().primaryKey(),
   clerkUserId: text('clerk_user_id').notNull().unique(),
   email: text('email').notNull(), // Primary Clerk email
+  // Set when the backing Clerk account is deleted. The row is kept for audit,
+  // but it is inert: its proxy keys and delegations are revoked, and a later
+  // sign-up with the same address starts a fresh account rather than inheriting
+  // this one. NULL = live user.
+  deletedAt: timestamp('deleted_at'),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 });

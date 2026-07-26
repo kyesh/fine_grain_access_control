@@ -14,7 +14,7 @@ export function RevokeDelegationButton({ delegationId }: { delegationId: string 
         }
       }}
       disabled={isPending}
-      className="text-sm text-red-600 hover:text-red-800 font-medium disabled:opacity-50 transition-colors"
+      className="text-[11px] font-semibold text-destructive hover:opacity-80 disabled:opacity-50 transition-opacity"
     >
       {isPending ? "Revoking..." : "Revoke"}
     </button>

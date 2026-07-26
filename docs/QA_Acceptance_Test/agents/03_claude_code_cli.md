@@ -11,11 +11,11 @@ for skill testing. Phase 1 handles interactive auth, Phase 2 uses `claude -p` he
 ### Phase 1: Auth Setup (Interactive, One-Time)
 
 1. **Run reset**: `bash test/qa-envs/cc-cli/reset.sh`
-   - Copies plugin into `.claude/skills/gmail-fgac/` (mimics marketplace install)
+   - Copies plugin into `.claude/skills/fgac/` (mimics marketplace install)
    - Installs npm dependencies
 2. **Authenticate**:
    ```bash
-   FGAC_ROOT_URL=http://localhost:3000 node test/qa-envs/cc-cli/.claude/skills/gmail-fgac/scripts/auth.js --action login
+   FGAC_ROOT_URL=http://localhost:3000 node test/qa-envs/cc-cli/.claude/skills/fgac/scripts/auth.js --action login
    ```
    Complete OAuth in browser via `/browser-agent`, then approve connection in dashboard:
    Navigate to `http://localhost:3000/dashboard?tab=connections`, find the pending connection,
@@ -23,11 +23,11 @@ for skill testing. Phase 1 handles interactive auth, Phase 2 uses `claude -p` he
    ⚠️ NEVER approve connections via direct DB writes — always use the Web UI.
 3. **Retrieve proxy key**:
    ```bash
-   FGAC_ROOT_URL=http://localhost:3000 node test/qa-envs/cc-cli/.claude/skills/gmail-fgac/scripts/auth.js --action status
+   FGAC_ROOT_URL=http://localhost:3000 node test/qa-envs/cc-cli/.claude/skills/fgac/scripts/auth.js --action status
    ```
 4. **Verify credentials exist**:
    ```bash
-   test -f ~/.openclaw/gmail-fgac/fgac-credentials.json && echo "✅ Auth ready" || echo "❌ Auth needed"
+   test -f ~/.openclaw/fgac/fgac-credentials.json && echo "✅ Auth ready" || echo "❌ Auth needed"
    ```
 
 ### Phase 2: Headless Capability Eval (`claude -p`)
@@ -43,9 +43,9 @@ This runs each test case via `claude -p` (non-interactive mode) with:
 - `--max-turns 5` — prevents runaway execution
 - `--dangerously-skip-permissions` — unattended execution
 
-> **Key insight**: Slash commands (`/gmail-fgac`) are interactive-only. In `-p` mode,
+> **Key insight**: Slash commands (`/fgac`) are interactive-only. In `-p` mode,
 > prompts reference the skill by its trigger description in natural language
-> (e.g., "Using the gmail-fgac skill, ...").
+> (e.g., "Using the fgac skill, ...").
 
 ## Proof of Authenticity
 
@@ -61,14 +61,14 @@ This runs each test case via `claude -p` (non-interactive mode) with:
 
 ### A1: Send to whitelisted address
 ```bash
-claude -p "Using the gmail-fgac skill, send an email to \$USER_B_EMAIL with subject 'QA CC CLI - Send Whitelist A1' and body 'Test'" \
+claude -p "Using the fgac skill, send an email to \$USER_B_EMAIL with subject 'QA CC CLI - Send Whitelist A1' and body 'Test'" \
   --allowedTools "Bash(node:*)" --output-format json --max-turns 5 --dangerously-skip-permissions
 ```
 - [ ] Result contains "sent successfully" or "Message ID"
 
 ### A2: Send to blocked address
 ```bash
-claude -p "Using the gmail-fgac skill, send an email to blocked@untrusted.com with subject 'Should Block' and body 'Test'" \
+claude -p "Using the fgac skill, send an email to blocked@untrusted.com with subject 'Should Block' and body 'Test'" \
   --allowedTools "Bash(node:*)" --output-format json --max-turns 5 --dangerously-skip-permissions
 ```
 - [ ] Result contains "blocked", "403", "Unauthorized", or "whitelist"
@@ -79,7 +79,7 @@ claude -p "Using the gmail-fgac skill, send an email to blocked@untrusted.com wi
 
 ### A3: Read normal email
 ```bash
-claude -p "Using the gmail-fgac skill, list my 5 most recent emails" \
+claude -p "Using the fgac skill, list my 5 most recent emails" \
   --allowedTools "Bash(node:*)" --output-format json --max-turns 5 --dangerously-skip-permissions
 ```
 - [ ] Result contains email subjects/senders or appropriate rule-based block message
@@ -90,7 +90,7 @@ claude -p "Using the gmail-fgac skill, list my 5 most recent emails" \
 
 ### A4: List accounts
 ```bash
-claude -p "Using the gmail-fgac skill, what email accounts can I access?" \
+claude -p "Using the fgac skill, what email accounts can I access?" \
   --allowedTools "Bash(node:*)" --output-format json --max-turns 5 --dangerously-skip-permissions
 ```
 - [ ] Result shows mapped email addresses

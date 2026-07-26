@@ -1,0 +1,17 @@
+echo "Checking commit message for secrets..."
+
+. "$(dirname "$0")/secret-pattern.sh"
+
+# A secret pasted into a commit message is as permanent as one committed in a
+# file — rewriting published history is the only way to remove it. Scan the
+# message with the same pattern the pre-commit hook uses on file content.
+#
+# $1 is the path to the prepared commit message file.
+if grep -qE "$FORBIDDEN_PATTERN" "$1" 2>/dev/null; then
+  echo "🚨 ERROR: Commit rejected — the commit message contains a proxy API key (sk_proxy_...) or a private test email."
+  echo "Commit messages are permanent. Rewrite the message without the secret."
+  echo "If this is a false positive, bypass with: git commit --no-verify"
+  exit 1
+fi
+
+echo "✅ Commit message scan passed."

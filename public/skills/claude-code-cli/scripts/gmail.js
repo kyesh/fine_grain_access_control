@@ -1,5 +1,5 @@
 /**
- * Gmail script for gmail-fgac skill — read, send, and forward emails via Gmail API.
+ * Gmail script for fgac skill — read, send, and forward emails via Gmail API.
  * 
  * When configured with FGAC.AI credentials, all requests are routed through
  * the FGAC.AI security proxy for fine-grain access control.
