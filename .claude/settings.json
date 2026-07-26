@@ -27,7 +27,6 @@
       "Edit(./.qa_test_emails.json)"
     ],
     "ask": [
-      "Bash(git push:*)",
       "Bash(gh pr merge:*)",
       "Bash(vercel env add:*)",
       "Bash(vercel env rm:*)",
@@ -46,8 +45,11 @@
       "Bash(git log:*)",
       "Bash(git diff:*)",
       "Bash(git branch:*)",
+      "Bash(git push:*)",
       "Bash(gh pr view:*)",
       "Bash(gh pr list:*)",
+      "Bash(gh pr create:*)",
+      "Bash(gh pr edit:*)",
       "Bash(npm run lint:*)",
       "Bash(npm run build:*)",
       "Bash(npm run dev:qa:*)",
