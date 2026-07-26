@@ -50,7 +50,14 @@ Use 'npx vercel env pull .env.local --environment=development' then
 fi
 
 # ── Production deploys (defence in depth alongside the deny rules) ─────────
-if printf '%s' "$CMD" | grep -qiE 'vercel.*(--prod|promote|alias)'; then
+# Only deploy-shaped commands. `vercel ls --prod`, `inspect`, and `logs --prod`
+# are read-only and explicitly listed as safe in CLAUDE.md — an earlier version
+# of this pattern matched any `vercel` + `--prod` and blocked those too.
+if printf '%s' "$CMD" | grep -qiE 'vercel[[:space:]]+(promote|alias)\b'; then
+  block "BLOCKED: promote/alias change what production serves — user's call via /deploy-prod (CLAUDE.md)."
+fi
+if printf '%s' "$CMD" | grep -qiE 'vercel([[:space:]]+deploy)?([[:space:]]+-[^[:space:]]+)*[[:space:]]+--prod\b' \
+   && ! printf '%s' "$CMD" | grep -qiE 'vercel[[:space:]]+(ls|list|inspect|logs|env|projects?)\b'; then
   block "BLOCKED: production deploys are the user's call via /deploy-prod (CLAUDE.md)."
 fi
 
