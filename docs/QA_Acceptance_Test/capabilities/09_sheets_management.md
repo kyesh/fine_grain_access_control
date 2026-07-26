@@ -15,6 +15,21 @@ listing returned empty.
 * UI assertions (A1-A4): built-in browser, signed-in session. API assertions
   (A5-A7): curl with the profile's `sk_proxy_` bearer against the proxy endpoints.
 
+## Harness note — automating the Google Picker
+The picker modal renders inside a cross-origin `docs.google.com` iframe. The built-in
+browser can OPEN it and see it in screenshots (allow ~10s to paint), but its input
+events do not route into the iframe — tiles cannot be clicked from this harness
+(verified empirically). Two sanctioned ways to cover the post-pick assertions:
+1. **App-API seam (default)**: A1/A2 prove the picker opens; for A3/A4, drive the same
+   code path the picker callback invokes — `POST /api/rules/grant-sheets-access` (or the
+   `exposeSheetsFromPicker` action) as the signed-in user with a known fixture
+   spreadsheet id. This is the application's own API, allowed by Database Rule 7; only
+   Google's own picker UI (not our code) goes unexercised.
+2. **Playwright CDP path (full-fidelity)**: Playwright frame locators do pierce
+   cross-origin iframes. Requires the one-time manual sign-in of the
+   `.playwright_user_data` Chrome profile; use for release-level verification of the
+   actual pick interaction.
+
 ## Assertions
 
 ### A1: "+ Expose a sheet" on a profile opens the Google Picker directly
