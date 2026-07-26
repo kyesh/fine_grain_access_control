@@ -80,6 +80,16 @@ events do not route into the iframe — tiles cannot be clicked from this harnes
   rules are present, each labeled with its scope (`global` / `this-key`). The
   owner's full rule set leaking to every agent is a failure.
 
+### A8: Write succeeds with Read & Write permission — and only then
+- Set the exposed sheet's FGAC permission to **Read & Write** (dashboard dropdown, or
+  the app's own `grant-sheets-access` API as the signed-in user), then write a
+  QA-tagged row via MCP (`sheets_append_rows` or `sheets_update_range`) AND via the
+  raw API proxy (PUT/POST on the Sheets values endpoint).
+- **Expected**: Both writes succeed against the real Google Sheet, and the written
+  values read back correctly. Cleanup is part of the assertion: restore the
+  permission to **Read Only** and confirm the same write is blocked again with the
+  Read-Only error — proving the permission toggle is live in both directions.
+
 ### A7: Drive listing is Google-native; per-file Drive access respects sheet rules
 - `GET {proxy}/drive/v3/files` with the profile's bearer token, then
   `GET {proxy}/drive/v3/files/<id>` for (a) an exposed sheet, (b) a sheet with a
