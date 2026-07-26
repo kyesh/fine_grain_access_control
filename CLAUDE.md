@@ -84,6 +84,16 @@ Notes:
      QA run, or for any other account, sign-in remains the user's job.
 6. `bash scripts/qa-secrets.sh` pulls the 1Password *test account emails* only — it does
    not populate app secrets. Do not confuse the two.
+7. **Every git worktree bootstraps separately.** `.env.local`, `.qa_test_emails.json`,
+   `node_modules`, and `.vercel/` are gitignored and do NOT carry over from the main
+   clone or other worktrees. A fresh worktree needs the full bootstrap above, and a key
+   "fixed" in another worktree has not fixed it here. `npm run env:check` is the first
+   move whenever auth or DB behaves unexpectedly.
+8. **Paste env values into Vercel WITHOUT quotes.** A value stored as `"sk_test_…"`
+   (quotes included) survives `vercel env pull` and dotenv parsing looking superficially
+   fine, but the runtime value starts with a literal `"` and auth fails as if the key
+   were unset. `env:check` detects this exact case and prints the remediation
+   (rm + re-add the var, then re-pull).
 
 These rules are enforced by `.claude/hooks/guard-local-env.sh` (PreToolUse), which blocks
 local database containers, schema pushes without an isolated branch, and hand-written
