@@ -1,8 +1,8 @@
 # FGAC.ai — Project Rules
 
-> These rules are the Claude Code port of `.agent/rules/` (Antigravity). Both trees are
-> kept in sync; if you change a rule here, mirror it in `.agent/rules/` and vice versa.
-> Workflows live in `.claude/commands/` (mirror of `.agent/workflows/`).
+> This file is the single source of truth for project rules. Workflows (slash commands)
+> live in `.claude/commands/`. The legacy Antigravity tree (`.agent/`) has been retired —
+> everything it contained was folded in here or into `.claude/commands/`.
 
 ## General Workflow
 
@@ -12,7 +12,7 @@
 4. Review the `docs/` folder and update the docs and data model to match your changes.
 5. Commit frequently as you work through the problem.
 6. **Validation**: Validate changes locally, then in the preview branch via `/deploy-pr-preview`, running the applicable `docs/QA_Acceptance_Test` suites before handing back to the user.
-7. **Browser Automation**: In Claude Code, use the **built-in browser tools** (`mcp__Claude_Browser__*`) to analyze or test the UI — `preview_start`, `navigate`, `get_page_text`, `read_page`, `read_console_messages`, `read_network_requests`, `computer`. NEVER write ad-hoc Node.js browser scripts. The Playwright CLI path described in `.agent/workflows/browser-agent.md` is the Antigravity equivalent and is not the default here; reach for it only when a test genuinely needs the user's logged-in Chrome profile over CDP. See `/browser-agent` for both paths and their trade-offs.
+7. **Browser Automation**: In Claude Code, use the **built-in browser tools** (`mcp__Claude_Browser__*`) to analyze or test the UI — `preview_start`, `navigate`, `get_page_text`, `read_page`, `read_console_messages`, `read_network_requests`, `computer`. NEVER write ad-hoc Node.js browser scripts. The Playwright CLI CDP path (Path B in `/browser-agent`) is not the default; reach for it only when a test genuinely needs the user's logged-in Chrome profile. See `/browser-agent` for both paths and their trade-offs.
 
 ## Local Development Environment
 
@@ -155,9 +155,9 @@ These bans are additionally enforced as `deny` rules in `.claude/settings.json`.
 
 ## Context Efficiency & Session Hygiene
 
-Ported from `.agent/rules/session-stability.md`. The Antigravity-specific parts (ptyHost
-crash pacing, `waitForPreviousTools`, `command_status` polling) do not apply to Claude Code
-and have been dropped; what remains are the rules that still hold here.
+Originally derived from Antigravity's session-stability rules; the IDE-specific parts
+(ptyHost crash pacing, `waitForPreviousTools`, `command_status` polling) do not apply to
+Claude Code and were dropped. What remains are the rules that still hold here.
 
 1. **Batch related shell checks into one command.** Instead of five separate `curl` calls, run one command with `curl ... && curl ... && curl ...`. Independent commands may be issued in parallel in a single response.
 2. **Playwright snapshots**: ALWAYS pipe through `grep` to extract only relevant elements.

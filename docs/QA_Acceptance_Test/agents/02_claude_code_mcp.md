@@ -39,7 +39,7 @@
    ```
 5. Auto-consent via playwright:
    ```bash
-   npx @playwright/cli -s=antigravity_ui goto "$AUTH_URL"
+   npx @playwright/cli -s=fgac_ui goto "$AUTH_URL"
    # Wait for and click "Allow" button
    ```
 6. Verify authentication:
