@@ -25,7 +25,9 @@ export async function checkGoogleAccess(user: ClerkUser): Promise<boolean> {
 
   try {
     const clerk = await clerkClient();
-    const oauthTokens = await clerk.users.getUserOauthAccessToken(user.id, 'oauth_google');
+    // Provider takes no `oauth_` prefix — the prefixed form is deprecated and
+    // removed in Clerk's next major.
+    const oauthTokens = await clerk.users.getUserOauthAccessToken(user.id, 'google');
     if (oauthTokens.data.length === 0) return false;
 
     const tokenInfo = oauthTokens.data[0];

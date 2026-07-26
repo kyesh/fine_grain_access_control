@@ -7,12 +7,13 @@ import { assignRulesToKey, unassignRuleFromKey, revokeProxyKey, setSheetRulePerm
 import { EditRuleButton } from './EditRuleButton';
 import { DeleteRuleButton } from './DeleteRuleButton';
 import { RuleControls } from './RuleControls';
-import { KeyControls } from './KeyControls';
+import { KeyControls, SecretKeyDisplay } from './KeyControls';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
 export interface Profile {
   id: string;
+  key: string;
   label: string;
   createdAt: string;
   revokedAt: string | null;
@@ -180,7 +181,7 @@ export function AgentProfilesView({
                 hasCompleteGoogleAccess={hasCompleteGoogleAccess}
               />
 
-              <McpConnectCard endpoint={mcpEndpoint} />
+              <McpConnectCard endpoint={mcpEndpoint} proxyKey={active.key} />
             </div>
           </div>
 
@@ -265,10 +266,12 @@ function ProfileTabs({
       </div>
       <div className="ml-auto pl-3 pb-1.5 shrink-0">
         <KeyControls
+          variant="button"
+          triggerLabel="+ New profile"
           accessibleEmails={accessibleEmails}
           existingKeys={profilesForKeyControls.map(p => ({
             id: p.id,
-            key: '',
+            key: p.key,
             label: p.label,
             revokedAt: p.revokedAt ? new Date(p.revokedAt) : null,
             expiresAt: null,
@@ -378,7 +381,9 @@ function SheetsRulesCard({
                 candidates={applicable}
                 emptyMessage={
                   <>
-                    No unexposed sheets. Grant FGAC access to a new file from{' '}
+                    {allRules.some(r => r.service === 'sheets')
+                      ? 'Every exposed sheet already applies to this profile. Grant access to another from '
+                      : 'No sheets have been exposed to FGAC yet. Grant access to a file from '}
                     <Link href="/dashboard/accounts" className="font-semibold text-primary hover:underline">
                       Accounts
                     </Link>
@@ -518,6 +523,11 @@ function GmailRulesCard({
               <ApplyRulePopover
                 profileId={profileId}
                 candidates={applicable}
+                emptyMessage={
+                  allRules.some(r => r.service !== 'sheets')
+                    ? 'Every existing Gmail rule already applies to this profile.'
+                    : "You haven't created any Gmail rules yet — use “Create a rule” below."
+                }
                 onClose={() => setPopoverOpen(false)}
               />
             )}
@@ -940,7 +950,7 @@ function GmailAccessCard({
 
 // ─── MCP endpoint ───────────────────────────────────────────────────────────
 
-function McpConnectCard({ endpoint }: { endpoint: string }) {
+function McpConnectCard({ endpoint, proxyKey }: { endpoint: string; proxyKey: string }) {
   const [copied, setCopied] = useState(false);
 
   return (
@@ -949,7 +959,15 @@ function McpConnectCard({ endpoint }: { endpoint: string }) {
         title="Connect a new agent via MCP"
         subtitle="Point any MCP client at this endpoint. It will show up above as pending until you attach it to a profile."
       />
-      <div className="px-5 pb-5">
+      <div className="px-5 pb-5 space-y-3">
+        {/* Endpoint and key sit together because configuring an agent needs
+            both; splitting them across cards made people hunt for the key. */}
+        <div>
+          <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-subtle">
+            Bearer token for this profile
+          </p>
+          <SecretKeyDisplay apiKey={proxyKey} className="text-[12px] text-foreground w-full" />
+        </div>
         <button
           onClick={async () => {
             await navigator.clipboard.writeText(endpoint);

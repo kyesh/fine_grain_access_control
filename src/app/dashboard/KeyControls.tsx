@@ -21,7 +21,7 @@ interface ProxyKey {
   emailAccess: string[]; // email addresses this key can access
 }
 
-function SecretKeyDisplay({
+export function SecretKeyDisplay({
   apiKey,
   className = "text-sm text-slate-700",
   iconSize = 14,
@@ -42,21 +42,21 @@ function SecretKeyDisplay({
   const maskedKey = "sk_proxy_" + "•".repeat(24);
 
   return (
-    <div className={`inline-flex items-center gap-2 font-mono bg-slate-50 px-2 py-1 rounded mt-1.5 ${className}`}>
-      <span>{isVisible ? apiKey : maskedKey}</span>
+    <div className={`inline-flex items-center gap-2 font-mono bg-muted border border-border px-2 py-1 rounded-xs mt-1.5 ${className}`}>
+      <span className="min-w-0 truncate">{isVisible ? apiKey : maskedKey}</span>
       <button
         onClick={() => setIsVisible(!isVisible)}
-        className="text-slate-400 hover:text-slate-600 focus:outline-none transition-colors"
+        className="ml-auto shrink-0 text-muted-foreground hover:text-foreground focus:outline-none transition-colors"
         title={isVisible ? "Hide Key" : "Reveal Key"}
       >
         {isVisible ? <EyeOff size={iconSize} /> : <Eye size={iconSize} />}
       </button>
       <button
         onClick={handleCopy}
-        className="text-slate-400 hover:text-slate-600 focus:outline-none transition-colors"
+        className="shrink-0 text-muted-foreground hover:text-foreground focus:outline-none transition-colors"
         title="Copy to clipboard"
       >
-        {copied ? <Check size={iconSize} className="text-green-500" /> : <Copy size={iconSize} />}
+        {copied ? <Check size={iconSize} className="text-primary" /> : <Copy size={iconSize} />}
       </button>
     </div>
   );
@@ -65,9 +65,20 @@ function SecretKeyDisplay({
 export function KeyControls({
   accessibleEmails,
   existingKeys,
+  variant = 'panel',
+  triggerLabel = 'Create New Key',
+  triggerClassName,
 }: {
   accessibleEmails: AccessibleEmail[];
   existingKeys: ProxyKey[];
+  /**
+   * 'panel' renders the full API-keys list (legacy layout).
+   * 'button' renders only the create trigger + modal, for hosts that already
+   * present the keys themselves — e.g. the profile tab strip.
+   */
+  variant?: 'panel' | 'button';
+  triggerLabel?: string;
+  triggerClassName?: string;
 }) {
   const [isPending, startTransition] = useTransition();
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -144,13 +155,22 @@ export function KeyControls({
 
   return (
     <>
+      {variant === 'button' ? (
+        <button
+          onClick={() => setIsModalOpen(true)}
+          className={triggerClassName ?? 'inline-flex items-center justify-center gap-1.5 rounded-sm border border-border bg-card px-3 py-1.5 text-[13px] font-semibold text-foreground hover:bg-muted'}
+        >
+          {triggerLabel}
+        </button>
+      ) : (
+      <>
       <div className="flex justify-between items-center mb-4">
         <h2 className="text-xl font-semibold text-gray-900">API Keys</h2>
         <button
           onClick={() => setIsModalOpen(true)}
           className="bg-blue-600 text-white hover:bg-blue-500 px-4 py-2 text-sm font-medium rounded-md transition-all shadow-sm"
         >
-          Create New Key
+          {triggerLabel}
         </button>
       </div>
 
@@ -239,6 +259,8 @@ export function KeyControls({
             ))}
           </div>
         </details>
+      )}
+      </>
       )}
 
       {/* Create Key Modal */}

@@ -69,13 +69,13 @@ export function RuleControls({
           }
           disabled={isPending || hasBlacklistRules}
           title={hasBlacklistRules ? "Security rules already applied" : undefined}
-          className="bg-indigo-50 text-indigo-700 hover:bg-indigo-100 px-4 py-2 text-sm font-medium rounded-md disabled:opacity-50 transition-all border border-indigo-200"
+          className="inline-flex items-center justify-center rounded-sm border border-border bg-card px-3 py-1.5 text-[13px] font-semibold text-foreground hover:bg-muted disabled:opacity-50"
         >
           {hasBlacklistRules ? "✓ 2FA Block Applied" : isPending ? "Applying..." : "+ Quick Add 2FA Block"}
         </button>
         <button
           onClick={() => setIsModalOpen(true)}
-          className="bg-blue-600 text-white hover:bg-blue-500 px-4 py-2 text-sm font-medium rounded-md transition-all shadow-sm"
+          className="inline-flex items-center justify-center rounded-sm bg-primary px-3 py-1.5 text-[13px] font-semibold text-primary-foreground hover:opacity-90"
         >
           Create Custom Rule
         </button>

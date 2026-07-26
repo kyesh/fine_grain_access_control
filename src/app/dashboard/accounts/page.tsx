@@ -175,20 +175,15 @@ export default async function AccountsPage() {
               )}
             </div>
           </Card>
+
+          {/* Renders its own card chrome and header, and its horizontal
+              header layout needs the full-width column — nesting it in the
+              narrow side column wrapped the heading one word per line. */}
+          <ExposedSheetsManager activeKeys={activeKeys} />
         </div>
 
         {/* ─── Side column ────────────────────────────────────────────── */}
         <div className="space-y-6 min-w-0">
-          <Card tone="sheets">
-            <CardHeader
-              title="Exposed Google Sheets"
-              subtitle="Files you've granted FGAC access to, via the Google Picker."
-            />
-            <div className="px-5 pb-5">
-              <ExposedSheetsManager activeKeys={activeKeys} />
-            </div>
-          </Card>
-
           <Card tone="primary" className="px-5 py-4">
             <h2 className="text-[13px] font-bold text-foreground">Your credentials stay with you</h2>
             <p className="mt-1.5 text-[13px] text-muted-foreground">

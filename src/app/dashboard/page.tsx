@@ -60,6 +60,7 @@ export default async function DashboardPage() {
 
   const profiles = userProxyKeys.map(k => ({
     id: k.id,
+    key: k.key,
     label: k.label,
     createdAt: k.createdAt.toISOString(),
     revokedAt: k.revokedAt ? k.revokedAt.toISOString() : null,
@@ -86,7 +87,10 @@ export default async function DashboardPage() {
       .map(kra => kra.proxyKeyId),
   }));
 
-  const mcpEndpoint = `${process.env.NEXT_PUBLIC_APP_URL ?? 'https://fgac.ai'}/api/mcp`;
+  // Trim and strip a trailing slash — the pulled env value carries stray
+  // whitespace, which rendered as "http://localhost:3000 /api/mcp".
+  const appUrl = (process.env.NEXT_PUBLIC_APP_URL ?? 'https://fgac.ai').trim().replace(/\/+$/, '');
+  const mcpEndpoint = `${appUrl}/api/mcp`;
 
   return (
     <>

@@ -76,7 +76,7 @@ export function EditRuleButton({
     <>
       <button
         onClick={() => setIsOpen(true)}
-        className="text-blue-600 hover:text-blue-900 text-sm font-medium transition-opacity"
+        className="text-[11px] font-semibold text-muted-foreground hover:text-foreground transition-opacity"
       >
         Edit
       </button>
