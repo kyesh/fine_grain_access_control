@@ -345,6 +345,87 @@ export async function deleteRule(id: string) {
   revalidatePath("/dashboard");
 }
 
+const SHEET_ACTION_TYPES = ['sheet_read', 'sheet_read_write', 'sheet_block'] as const;
+
+/**
+ * Change the permission level on a Google Sheets rule in place.
+ *
+ * 'sheet_block' intentionally keeps the underlying file grant while denying
+ * access, so a sheet can be suspended and restored without re-running the
+ * Google Picker flow.
+ */
+export async function setSheetRulePermission(ruleId: string, actionType: string) {
+  const dbUser = await getDbUser();
+
+  if (!SHEET_ACTION_TYPES.includes(actionType as typeof SHEET_ACTION_TYPES[number])) {
+    throw new Error(`Invalid sheet permission: ${actionType}`);
+  }
+
+  const rule = await db.select().from(accessRules).where(eq(accessRules.id, ruleId)).limit(1).then(res => res[0]);
+  if (!rule || rule.userId !== dbUser.id) {
+    throw new Error("Unauthorized or Rule not found");
+  }
+  if (rule.service !== 'sheets') {
+    throw new Error("Not a Google Sheets rule");
+  }
+
+  await db.update(accessRules)
+    .set({ actionType, updatedAt: new Date() })
+    .where(eq(accessRules.id, ruleId));
+
+  revalidatePath("/dashboard");
+}
+
+/**
+ * Attach existing rules to one agent profile without touching their other
+ * assignments. Used by the "Apply a rule" popover, which reuses rules across
+ * profiles rather than duplicating them.
+ */
+export async function assignRulesToKey(keyId: string, ruleIds: string[]) {
+  const dbUser = await getDbUser();
+
+  const key = await db.select().from(proxyKeys).where(eq(proxyKeys.id, keyId)).limit(1).then(res => res[0]);
+  if (!key || key.userId !== dbUser.id) {
+    throw new Error("Unauthorized or Profile not found");
+  }
+
+  for (const ruleId of ruleIds) {
+    const rule = await db.select().from(accessRules).where(eq(accessRules.id, ruleId)).limit(1).then(res => res[0]);
+    if (!rule || rule.userId !== dbUser.id) {
+      throw new Error("Unauthorized or Rule not found");
+    }
+
+    // The (proxy_key_id, access_rule_id) unique index makes a repeat click a
+    // no-op rather than an error.
+    await db.insert(keyRuleAssignments)
+      .values({ proxyKeyId: keyId, accessRuleId: ruleId })
+      .onConflictDoNothing();
+  }
+
+  revalidatePath("/dashboard");
+}
+
+/**
+ * Detach one rule from one profile. The rule itself survives — it may still be
+ * assigned elsewhere. Note that removing the LAST assignment turns the rule
+ * global (applies to every key), which is why the UI warns before doing it.
+ */
+export async function unassignRuleFromKey(keyId: string, ruleId: string) {
+  const dbUser = await getDbUser();
+
+  const rule = await db.select().from(accessRules).where(eq(accessRules.id, ruleId)).limit(1).then(res => res[0]);
+  if (!rule || rule.userId !== dbUser.id) {
+    throw new Error("Unauthorized or Rule not found");
+  }
+
+  await db.delete(keyRuleAssignments).where(and(
+    eq(keyRuleAssignments.proxyKeyId, keyId),
+    eq(keyRuleAssignments.accessRuleId, ruleId),
+  ));
+
+  revalidatePath("/dashboard");
+}
+
 export async function applyRecommendedSecurityRules() {
   const dbUser = await getDbUser();
 
