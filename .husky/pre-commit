@@ -1,25 +1,34 @@
-
-
 echo "Checking for accidentally staged secrets or test emails..."
 
-# Base pattern for API keys
-FORBIDDEN_PATTERN="(sk_proxy_[a-fA-F0-9]{15,})"
+. "$(dirname "$0")/secret-pattern.sh"
 
-# If the private test config exists, read from it to construct the forbidden regex pattern
-CONFIG_FILE=".qa_test_emails.json"
-if [ -f "$CONFIG_FILE" ]; then
-  # Extract all email values from the JSON and join them with |
-  PRIVATE_EMAILS=$(grep -oE '[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}' "$CONFIG_FILE" | tr '\n' '|' | sed 's/|$//' | sed 's/\./\\./g')
-  if [ ! -z "$PRIVATE_EMAILS" ]; then
-     FORBIDDEN_PATTERN="(sk_proxy_[a-fA-F0-9]{15,}|$PRIVATE_EMAILS)"
+# Scan staged file CONTENT.
+#
+# Deliberately not `git diff --cached --name-only -z | xargs -0 grep`: with an
+# empty staged set, xargs runs grep with no file arguments, so grep reads stdin
+# — which during `git commit -F -` is the commit message — and could reject a
+# commit over content that was never staged. A directory rename also puts a
+# directory path in --name-only, which grep then errors on.
+#
+# --diff-filter=ACM skips deletions (nothing left to scan); the -f test skips
+# anything that is not a regular file.
+FOUND=""
+while IFS= read -r f; do
+  [ -n "$f" ] || continue
+  [ -f "$f" ] || continue
+  if grep -qE "$FORBIDDEN_PATTERN" "$f" 2>/dev/null; then
+    FOUND="$FOUND  $f
+"
   fi
-fi
+done <<EOF
+$(git diff --cached --name-only --diff-filter=ACM)
+EOF
 
-if git diff --cached --name-only -z | xargs -0 grep -lE "$FORBIDDEN_PATTERN"; then
-  echo "🚨 ERROR: Commit rejected."
-  echo "It looks like you are trying to commit a file containing a sensitive proxy API key (sk_proxy_...) or one of your private test emails."
-  echo "Please remove the secrets from the files listed above and stage the changes again."
-  echo "If this is a false positive, you can bypass this check using git commit --no-verify."
+if [ -n "$FOUND" ]; then
+  echo "🚨 ERROR: Commit rejected — staged file(s) contain a proxy API key (sk_proxy_...) or a private test email:"
+  printf '%s' "$FOUND"
+  echo "Remove the secrets and stage the changes again."
+  echo "If this is a false positive, bypass with: git commit --no-verify"
   exit 1
 fi
 
