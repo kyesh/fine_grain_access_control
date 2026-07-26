@@ -19,6 +19,16 @@ export async function DELETE(request: NextRequest, { params }: { params: Promise
   return handleProxyRequest(request, await params);
 }
 
+// Sheets values:update and batchUpdate are PUT/PATCH-shaped; without these
+// exports Next.js answers 405 before FGAC's rules ever run.
+export async function PUT(request: NextRequest, { params }: { params: Promise<{ path: string[] }> }) {
+  return handleProxyRequest(request, await params);
+}
+
+export async function PATCH(request: NextRequest, { params }: { params: Promise<{ path: string[] }> }) {
+  return handleProxyRequest(request, await params);
+}
+
 /**
  * Extract the Gmail userId from the API path.
  * Gmail API paths look like: gmail/v1/users/{userId}/messages/...

@@ -136,13 +136,23 @@ export function useGooglePicker(onSheetsPicked: (sheets: PickedSheet[], context?
       };
 
       const view = new window.google.picker.View(window.google.picker.ViewId.SPREADSHEETS);
-      const picker = new window.google.picker.PickerBuilder()
+      const builder = new window.google.picker.PickerBuilder()
         .addView(view)
         .setOAuthToken(tokenData.accessToken)
         .setCallback(pickerCallback)
         .setTitle('Select Google Sheets to Expose in FGAC')
-        .enableFeature(window.google.picker.Feature.MULTISELECT_ENABLED)
-        .build();
+        .enableFeature(window.google.picker.Feature.MULTISELECT_ENABLED);
+
+      // Without the Cloud project number, a drive.file pick is cosmetic:
+      // Google never registers the per-file grant and every later API call on
+      // the picked sheet 404s. The token bridge derives it from the token.
+      if (tokenData.appId) {
+        builder.setAppId(tokenData.appId);
+      } else {
+        console.warn('Picker running without appId — drive.file grants may not register.');
+      }
+
+      const picker = builder.build();
 
       picker.setVisible(true);
     } catch (err) {
