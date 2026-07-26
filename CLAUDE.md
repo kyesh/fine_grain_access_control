@@ -127,6 +127,38 @@ user ids are production-instance ids too.
 7. **No Direct DB Writes During QA**: NEVER write ad-hoc scripts (`psql`, `npx tsx`, raw SQL, Drizzle ORM scripts) that INSERT, UPDATE, or DELETE application data to simulate user actions during QA. QA exists to validate the real user flow. All state changes (approving connections, creating keys, configuring rules) MUST go through the Web UI via `/browser-agent` or the application's own API endpoints — exactly as a real user would. Direct DB manipulation bypasses the authorization checks the tests are meant to validate and can create invalid cross-user data bindings. Read-only queries for debugging are fine.
 8. **Migration File Verification**: After `drizzle-kit generate`, ALWAYS verify (a) the new `.sql` file exists in `src/db/migrations/`, (b) `migrate.ts` will pick it up (it uses a dynamic `readdirSync` — confirm the `.sql` extension and `NNNN_*.sql` naming convention), and (c) `npm run db:migrate` succeeds locally against your dev branch. NEVER assume a generated migration will be discovered without verification.
 
+## This Repository Is Public
+
+`kyesh/fine_grain_access_control` is open source. Everything pushed or posted — code,
+commit messages, issues, PRs, comments, releases — is world-readable, permanently and
+immediately.
+
+**Never put customer data in anything that reaches GitHub.** That means real email
+addresses, Clerk user ids (`user_...`), proxy keys (`sk_proxy_...`), delegation or
+connection ids tied to a person, and database rows quoted verbatim.
+
+This applies to *diagnostic* content as much as code. Triaging production data is normal;
+pasting the results into an issue is not. Refer to the query or the local report instead:
+
+> Two addresses carry active keys — run `npm run db:tombstone-orphans -- --prod` to see them.
+
+not
+
+> ~~Two addresses carry active keys: alice@example-university.edu and bob@example-corp.com~~
+
+**Editing does not undo publication.** GitHub retains edit history on issues and PRs and
+shows it to anyone. The only real remedy is deleting the issue/PR, which destroys the
+thread. Treat every post as final.
+
+**If it happens anyway**: delete the issue/PR (not just edit it), check whether the data
+also reached commit messages or files (`git log --all -S '<value>'`), recreate the content
+sanitised, and tell the user what was exposed and for how long.
+
+Enforced by `.claude/hooks/guard-public-content.sh` (PreToolUse), which blocks
+`gh issue/pr create|edit|comment`, `gh gist create`, and `gh release create` when the body
+— inline or via `--body-file` — contains an email address outside the allowlist, a proxy
+key, or a Clerk user id. Reads (`view`, `list`, `checks`) are unaffected.
+
 ## Security, Safety, and Workflow Best Practices
 
 - **Strict UI Policy**: Put debug information exclusively in server logs. NEVER render debug identifiers, developer tokens, or internal error objects into the HTML/UI.
