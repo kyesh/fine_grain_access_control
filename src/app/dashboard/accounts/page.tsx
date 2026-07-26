@@ -1,7 +1,7 @@
 import { users, proxyKeys } from '@/db/schema';
 import { eq } from 'drizzle-orm';
 import { getDelegationsToEmail, getDelegationsFromEmail } from '@/db/delegationQueries';
-import { createDbUser } from '@/db/userHelpers';
+import { resolveDbUser } from '@/db/userHelpers';
 import { currentUser } from '@clerk/nextjs/server';
 import { redirect } from 'next/navigation';
 import { db } from '@/db';
@@ -19,12 +19,8 @@ export default async function AccountsPage() {
     redirect('/');
   }
 
-  let dbUser = await db.select().from(users).where(eq(users.clerkUserId, user.id)).limit(1).then(res => res[0]);
   const currentEmail = user.emailAddresses[0]?.emailAddress ?? 'unknown';
-
-  if (!dbUser) {
-    dbUser = await createDbUser(user.id, currentEmail);
-  }
+  const dbUser = await resolveDbUser(user.id, currentEmail);
 
   const hasCompleteGoogleAccess = await checkGoogleAccess(user);
 

@@ -1,7 +1,7 @@
-import { users, proxyKeys, keyEmailAccess, accessRules, keyRuleAssignments } from '@/db/schema';
+import { proxyKeys, keyEmailAccess, accessRules, keyRuleAssignments } from '@/db/schema';
 import { eq } from 'drizzle-orm';
 import { getActiveDelegationsToEmail } from '@/db/delegationQueries';
-import { createDbUser } from '@/db/userHelpers';
+import { resolveDbUser } from '@/db/userHelpers';
 import { currentUser } from '@clerk/nextjs/server';
 import { redirect } from 'next/navigation';
 import { db } from '@/db';
@@ -16,21 +16,10 @@ export default async function DashboardPage() {
     redirect('/');
   }
 
-  // Ensure user exists in our DB
-  let dbUser = await db.select().from(users).where(eq(users.clerkUserId, user.id)).limit(1).then(res => res[0]);
-
+  // Resolves by Clerk id, adopts an existing row for the same email if Clerk
+  // reissued the id, and keeps the email in sync — all handled in one place.
   const currentEmail = user.emailAddresses[0]?.emailAddress ?? 'unknown';
-
-  if (!dbUser) {
-    dbUser = await createDbUser(user.id, currentEmail);
-  } else if (dbUser.email !== currentEmail) {
-    // Sync email if Clerk's email has changed since first signup
-    const updated = await db.update(users)
-      .set({ email: currentEmail })
-      .where(eq(users.id, dbUser.id))
-      .returning();
-    dbUser = updated[0];
-  }
+  const dbUser = await resolveDbUser(user.id, currentEmail);
 
   const hasCompleteGoogleAccess = await checkGoogleAccess(user);
 

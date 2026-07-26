@@ -28,14 +28,15 @@ npm run dev:qa                                               # webpack, 8GB heap
 4. **Never copy a whole `.env.local` between machines** — it carries another machine's
    `neon__POSTGRES_URL` and will silently point you at someone else's database branch.
    Copy individual missing keys.
-5. **Test-user switching during QA is pre-approved.** The two QA accounts in
-   `.qa_test_emails.json` (`USER_A` / `USER_B`) both stay signed in to Google on the QA
-   machine. During a `/qa-*` run you may sign out of Clerk and sign back in as either of
-   them as often as the test matrix requires, without stopping to ask — the delegate-side
-   assertions (capability 04) cannot be verified any other way.
+5. **Switch freely between the two QA test users. Never ask permission to do it.**
+   `USER_A` and `USER_B` from `.qa_test_emails.json` both stay signed in to Google on the
+   QA machine. Signing out of Clerk and back in as either one is a routine harness step,
+   like clicking a button — not a decision or an approval point. Do it as often as the
+   tests require and carry on. Do not ask again; this rule is the standing approval for
+   every QA run.
 
-   Bounds: only those two accounts; only against local or preview; never type a password
-   (stop if one is prompted); never create a new account. Outside a QA run, or for any
-   other account, sign-in remains the user's job.
+   Hard limits (safety, not permission): never type a password — stop and hand back if a
+   password, passkey, or 2FA prompt appears; never create a new account; only these two
+   accounts, only against local or preview.
 6. `scripts/qa-secrets.sh` pulls 1Password *test account emails* only — it does not
    populate app secrets.

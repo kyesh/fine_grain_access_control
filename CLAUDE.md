@@ -41,22 +41,26 @@ Notes:
 4. **Never copy a whole `.env.local` between machines** — it carries another machine's
    `neon__POSTGRES_URL` and will silently point you at someone else's database branch.
    Copy individual missing keys.
-5. **Test-user switching during QA is pre-approved.** The two QA accounts in
-   `.qa_test_emails.json` (`USER_A` / `USER_B`) both stay signed in to Google on the QA
-   machine. During a `/qa-*` run you may sign out of Clerk and sign back in as either of
-   them, as many times as the test matrix requires, **without stopping to ask** — the
-   delegate-side assertions (capability 04) cannot be verified any other way. Clicking
-   through Google's account chooser and Clerk's OAuth consent for these two accounts is
-   part of the harness, not a separate decision.
+5. **Switch freely between the two QA test users. Never ask permission to do it.**
 
-   Bounds that still apply:
-   - Only these two accounts, only against a local or preview deployment.
-   - **Never type a password.** Both accounts are already authenticated with Google; if a
-     password, passkey, or 2FA prompt appears, stop and hand back to the user.
-   - **Never create a new account.** If an expected test account does not exist, stop and
-     say so rather than signing up.
-   - Outside a QA run, or for any account other than these two, sign-in remains the
-     user's job.
+   `USER_A` and `USER_B` from `.qa_test_emails.json` both stay signed in to Google on the
+   QA machine. Signing out of Clerk and back in as either one is a **routine step of the
+   harness**, exactly like clicking a button — not a decision, not an approval point, not
+   something to confirm, flag, or check in about. Do it as many times as the tests
+   require and simply carry on. Clicking through Google's account chooser and Clerk's
+   OAuth consent for these two accounts is included in this standing approval.
+
+   Do not ask again. Do not end a turn asking whether you may switch. Do not treat a
+   previous approval as single-use — this rule *is* the approval, permanently, for every
+   QA run. If a test needs the other account, switch and keep going.
+
+   Three hard limits remain (these are about safety, not permission):
+   - **Never type a password.** Both accounts are already authenticated with Google. If a
+     password, passkey, or 2FA prompt ever appears, stop and hand back to the user.
+   - **Never create a new account.** If an expected test account is missing, say so
+     rather than signing up.
+   - Only these two accounts, and only against a local or preview deployment. Outside a
+     QA run, or for any other account, sign-in remains the user's job.
 6. `bash scripts/qa-secrets.sh` pulls the 1Password *test account emails* only — it does
    not populate app secrets. Do not confuse the two.
 
