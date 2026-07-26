@@ -68,6 +68,54 @@ These rules are enforced by `.claude/hooks/guard-local-env.sh` (PreToolUse), whi
 local database containers, schema pushes without an isolated branch, and hand-written
 `.env` files.
 
+## Production Credentials on a Local Machine
+
+Pulling live credentials for diagnostics is fine. Letting them become the *ambient*
+environment is not. The rules below exist so that "am I pointed at prod?" is never a
+question you have to hold in your head.
+
+**Check first, always:**
+
+```bash
+npm run env:check
+```
+
+Prints the resolved database host, whether it is the production branch, which Clerk
+instance the secret belongs to, whether the two are consistent, and whether any
+production URL is sitting in the environment.
+
+**Pull production credentials only to `.secrets/`:**
+
+```bash
+npx vercel env pull .secrets/prod.env --environment=production
+```
+
+`.secrets/` is gitignored and nothing auto-loads it. Do **not** use
+`.env.production.local` — Next.js auto-loads that name whenever `NODE_ENV=production`, so
+a local `npm run build && npm start` would silently run against production. Delete
+`.secrets/prod.env` when finished.
+
+**Never copy production values into `.env.local`.** That file is development-only.
+
+**How the app protects itself** (`src/db/connectionSafety.ts`):
+
+- Outside a production runtime the ONLY accepted connection is `neon__POSTGRES_URL`
+  (written by `npm run db:branch`). There is no fallback chain — a missing branch URL is
+  a hard error, not a reason to try `POSTGRES_URL` or `DATABASE_URL`, both of which point
+  at production in a pulled `.env.local`.
+- The resolved host is checked against the production endpoint and refused outside
+  production, so even a branch variable containing a prod URL is caught.
+
+**Scripts that touch production** must require an explicit `--prod`, read `.secrets/prod.env`
+by name, and refuse to write unless `--apply` is also given. See
+`scripts/tombstone-orphaned-users.ts` for the pattern.
+
+**Clerk instance must match the database.** Production user ids do not exist in the
+development Clerk instance — every lookup 404s and reads as "account deleted". Any script
+that infers state from Clerk must verify the key mode (`sk_live_` vs `sk_test_`) and bail
+if a majority of users resolve as deleted. The branch database is a copy of main, so its
+user ids are production-instance ids too.
+
 ## Database Rules
 
 1. **Isolation First**: BEFORE creating any migration or pushing schema changes, ALWAYS run `npm run db:branch` so Drizzle-Kit executes against an isolated development branch.

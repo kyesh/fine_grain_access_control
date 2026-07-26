@@ -96,3 +96,9 @@ test/qa-envs/hosted-mcp/auth-server.js
 test/qa-envs/hosted-mcp/playwright-auth.js
 .qa_test_keys.json
 .qa_test_keys.json
+
+# Production credentials pulled for diagnostics.
+# Deliberately NOT named .env.production.local — Next.js auto-loads that name
+# whenever NODE_ENV=production (a local `npm run build && npm start` would pick
+# it up). Nothing auto-loads .secrets/; scripts must read it explicitly.
+.secrets/
