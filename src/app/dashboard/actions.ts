@@ -3,6 +3,7 @@
 import { db } from "@/db";
 import { users, proxyKeys, emailDelegations, keyEmailAccess, accessRules, keyRuleAssignments } from "@/db/schema";
 import { eq, and, desc } from "drizzle-orm";
+import { findActiveDelegation } from "@/db/delegationQueries";
 import { currentUser } from "@clerk/nextjs/server";
 import { revalidatePath } from "next/cache";
 import safeRegex from "safe-regex";
@@ -106,6 +107,12 @@ export async function revokeDelegation(delegationId: string) {
     revokedAt: new Date(),
   }).where(eq(emailDelegations.id, delegationId));
 
+  // Tear down the access this delegation granted. Flipping the status alone left
+  // the delegate's key_email_access rows in place, and the proxy authorises on
+  // those rows — so "revoked" delegations kept working. The proxy now re-checks
+  // the delegation too, but the rows should not linger regardless.
+  await db.delete(keyEmailAccess).where(eq(keyEmailAccess.delegationId, delegationId));
+
   revalidatePath("/dashboard");
 }
 
@@ -132,30 +139,26 @@ export async function createProxyKey(formData: FormData) {
     label,
   }).returning().then(res => res[0]);
 
-  // Grant email access — look up delegation for each email
+  // Grant email access — every non-own address must be backed by an ACTIVE
+  // delegation, recorded on the row so revocation can tear it down again.
   for (const email of emailAddresses) {
-    // Check if this is the user's own email or a delegated email
     let delegationId: string | null = null;
 
     if (email.toLowerCase() !== dbUser.email.toLowerCase()) {
-      // This is a delegated email — find the active delegation
-      const ownerUser = await db.select().from(users)
-        .where(eq(users.email, email))
-        .limit(1).then(res => res[0]);
+      // Matched on both emails: the previous `.limit(1)` lookup of the owner
+      // row picked arbitrarily among duplicate rows for the same address, so a
+      // real delegation could come back empty.
+      const delegation = await findActiveDelegation(email, dbUser.email);
 
-      if (ownerUser) {
-        const delegation = await db.select().from(emailDelegations)
-          .where(and(
-            eq(emailDelegations.ownerUserId, ownerUser.id),
-            eq(emailDelegations.delegateUserId, dbUser.id),
-            eq(emailDelegations.status, 'active'),
-          ))
-          .limit(1).then(res => res[0]);
-
-        if (delegation) {
-          delegationId = delegation.id;
-        }
+      if (!delegation) {
+        // Previously this fell through and inserted the row with a null
+        // delegationId — granting access that no delegation backed, that
+        // revocation could not remove, and that looked like the user's own
+        // mailbox to every downstream check.
+        throw new Error(`No active delegation grants you access to ${email}.`);
       }
+
+      delegationId = delegation.id;
     }
 
     await db.insert(keyEmailAccess).values({

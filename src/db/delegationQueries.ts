@@ -1,7 +1,33 @@
 import { alias } from 'drizzle-orm/pg-core';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import { db } from '@/db';
 import { users, emailDelegations } from '@/db/schema';
+
+/**
+ * Drop access rows whose backing delegation is no longer active.
+ *
+ * A `key_email_access` row records that access was granted; it is not proof the
+ * grant still stands. Revoking a delegation used to leave these rows in place,
+ * so the delegate kept both the listing and — because the proxy authorises on
+ * these rows — real access to the owner's mailbox. Every read path that turns
+ * key_email_access into "mailboxes this key can reach" must apply this.
+ *
+ * Rows with a null delegationId are the key owner's own mailbox and always pass.
+ */
+export async function filterLiveDelegatedAccess<T extends { delegationId: string | null }>(
+  rows: T[],
+): Promise<T[]> {
+  const delegationIds = [...new Set(
+    rows.map(r => r.delegationId).filter((id): id is string => !!id),
+  )];
+  if (delegationIds.length === 0) return rows;
+
+  const found = await db.select().from(emailDelegations)
+    .where(inArray(emailDelegations.id, delegationIds));
+  const activeIds = new Set(found.filter(d => d.status === 'active').map(d => d.id));
+
+  return rows.filter(r => !r.delegationId || activeIds.has(r.delegationId));
+}
 
 /**
  * Delegation lookups resolved by EMAIL rather than by user row id.
@@ -81,6 +107,35 @@ export async function getActiveDelegationsToEmail(email: string): Promise<Delega
     ));
 
   return dedupeByCounterpart(rows);
+}
+
+/**
+ * Find the active delegation letting `delegateEmail` act on `ownerEmail`.
+ *
+ * Matched on both emails rather than on user row ids: a `.limit(1)` lookup of
+ * "the user with this email" picks an arbitrary row when duplicates exist, and
+ * picking the wrong one makes an existing delegation look absent.
+ *
+ * Returns null when there is no active delegation. Callers MUST treat null as
+ * "no access" — granting anyway produces a key_email_access row with no backing
+ * delegation, which cannot be revoked and is indistinguishable from the user's
+ * own mailbox.
+ */
+export async function findActiveDelegation(ownerEmail: string, delegateEmail: string) {
+  return db.select({
+    id: emailDelegations.id,
+    status: emailDelegations.status,
+  })
+    .from(emailDelegations)
+    .innerJoin(ownerUsers, eq(ownerUsers.id, emailDelegations.ownerUserId))
+    .innerJoin(delegateUsers, eq(delegateUsers.id, emailDelegations.delegateUserId))
+    .where(and(
+      eq(ownerUsers.email, ownerEmail),
+      eq(delegateUsers.email, delegateEmail),
+      eq(emailDelegations.status, 'active'),
+    ))
+    .limit(1)
+    .then(res => res[0] ?? null);
 }
 
 /**

@@ -1,6 +1,6 @@
 import { proxyKeys, keyEmailAccess, accessRules, keyRuleAssignments } from '@/db/schema';
 import { eq } from 'drizzle-orm';
-import { getActiveDelegationsToEmail } from '@/db/delegationQueries';
+import { getActiveDelegationsToEmail, filterLiveDelegatedAccess } from '@/db/delegationQueries';
 import { resolveDbUser } from '@/db/userHelpers';
 import { currentUser } from '@clerk/nextjs/server';
 import { redirect } from 'next/navigation';
@@ -40,7 +40,10 @@ export default async function DashboardPage() {
 
   // ─── Agent profiles (proxy keys) and what each can reach ─────────────────
   const userProxyKeys = await db.select().from(proxyKeys).where(eq(proxyKeys.userId, dbUser.id));
-  const allKeyEmailAccess = await db.select().from(keyEmailAccess);
+  // Stale rows from revoked delegations must not appear as reachable mailboxes.
+  const allKeyEmailAccess = await filterLiveDelegatedAccess(
+    await db.select().from(keyEmailAccess),
+  );
 
   const profiles = userProxyKeys.map(k => ({
     id: k.id,

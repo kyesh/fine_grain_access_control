@@ -208,6 +208,29 @@ async function handleProxyRequest(request: NextRequest, params: { path: string[]
       }, { status: 403 });
     }
 
+    // ─── 3b. Re-check the delegation behind delegated access ────────────────
+    // key_email_access is a grant record, not proof the grant is still valid.
+    // A row created through a delegation must be backed by an ACTIVE delegation
+    // at request time — otherwise revoking access in the dashboard would not
+    // actually revoke anything, which is the promise the revoke dialog makes.
+    if (emailAccessFallback.delegationId) {
+      const delegation = await db
+        .select()
+        .from(emailDelegations)
+        .where(eq(emailDelegations.id, emailAccessFallback.delegationId))
+        .limit(1)
+        .then(res => res[0]);
+
+      if (!delegation || delegation.status !== 'active') {
+        console.warn(
+          `[PROXY] Blocked request for '${targetEmail}': delegation ${emailAccessFallback.delegationId} is ${delegation?.status ?? 'missing'}`,
+        );
+        return NextResponse.json({
+          error: `Access to '${targetEmail}' has been revoked by its owner.`
+        }, { status: 403 });
+      }
+    }
+
     // ─── 4. Load Applicable Rules ───────────────────────────────────────────
     const allUserRules = await db
       .select()

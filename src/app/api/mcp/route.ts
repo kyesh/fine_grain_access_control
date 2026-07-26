@@ -17,6 +17,7 @@ import {
   accessRules, keyRuleAssignments, emailDelegations,
 } from '@/db/schema';
 import { eq, and } from 'drizzle-orm';
+import { filterLiveDelegatedAccess } from '@/db/delegationQueries';
 import { clerkClient } from '@clerk/nextjs/server';
 import safeRegex from 'safe-regex';
 import { resolveDbUser } from '@/db/userHelpers';
@@ -142,13 +143,14 @@ function pendingMessage(result: ConnectionDenied) {
 // ─── Email & Permission Resolution ──────────────────────────────────────────
 
 async function getAccessibleEmails(proxyKeyId: string) {
-  return db.select().from(keyEmailAccess)
+  const rows = await db.select().from(keyEmailAccess)
     .where(eq(keyEmailAccess.proxyKeyId, proxyKeyId));
+  // Revoked delegations must not keep granting access — see delegationQueries.
+  return filterLiveDelegatedAccess(rows);
 }
 
 async function checkEmailAccess(proxyKeyId: string, targetEmail: string) {
-  const rows = await db.select().from(keyEmailAccess)
-    .where(eq(keyEmailAccess.proxyKeyId, proxyKeyId));
+  const rows = await getAccessibleEmails(proxyKeyId);
   return rows.find(r => r.targetEmail.toLowerCase() === targetEmail.toLowerCase());
 }
 
