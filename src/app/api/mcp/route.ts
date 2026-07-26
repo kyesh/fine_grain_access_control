@@ -218,6 +218,11 @@ async function gmailFetch(token: string, email: string, path: string, method = '
   return res.json();
 }
 
+function extractSheetsSpreadsheetId(path: string): string | null {
+  const match = path.match(/(?:v4\/spreadsheets|sheets\/v4\/spreadsheets|spreadsheets)\/([^/?:#]+)/);
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
 async function sheetsFetch(token: string, path: string, method = 'GET', body?: string) {
   const url = `https://sheets.googleapis.com/v4/spreadsheets/${path}`;
   const res = await fetch(url, {
@@ -565,6 +570,73 @@ const handler = createMcpHandler(
         const body = JSON.stringify({ values });
         const data = await sheetsFetch(resolved.token, `${spreadsheetId}/values/${encodedRange}:append?valueInputOption=USER_ENTERED`, 'POST', body);
         return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
+      }
+    );
+
+    // ── raw_google_api_call ───────────────────────────────────────────
+    server.tool(
+      'raw_google_api_call',
+      'Execute any raw Google API request (Gmail or Google Sheets) through FGAC access control rules. Guarantees access to any API endpoint even if no dedicated tool exists.',
+      {
+        path: z.string().describe('API path (e.g. "v4/spreadsheets/1BxiM.../values/Sheet1" or "gmail/v1/users/me/messages")'),
+        method: z.enum(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']).optional().describe('HTTP method (default: GET)'),
+        body: z.union([z.string(), z.record(z.string(), z.any())]).optional().describe('Request body (JSON object or string)'),
+        account: z.string().optional().describe('Email account to use.'),
+      },
+      async ({ path, method = 'GET', body, account }, { authInfo }) => {
+        const conn = await requireApproval(authInfo);
+        if ('content' in conn) return conn;
+
+        const resolved = await resolveAccountAndToken(conn, account);
+        if ('error' in resolved) return { content: [{ type: 'text' as const, text: resolved.error }] };
+
+        const isMutating = method !== 'GET';
+        let googleUrl = '';
+
+        // Evaluate FGAC rules based on path
+        if (path.includes('spreadsheets')) {
+          const spreadsheetId = extractSheetsSpreadsheetId(path);
+          if (spreadsheetId) {
+            const perm = await checkSheetsPermission(conn.user.id, resolved.proxyKeyId, spreadsheetId, isMutating);
+            if (!perm.allowed) {
+              return { content: [{ type: 'text' as const, text: perm.reason! }] };
+            }
+          }
+          const cleanPath = path.replace(/^sheets\//, '');
+          googleUrl = `https://sheets.googleapis.com/${cleanPath}`;
+        } else {
+          // Gmail / general Google API
+          const rules = await loadApplicableRules(conn.user.id, resolved.proxyKeyId, resolved.targetEmail);
+
+          if (isMutating && path.includes('messages/send')) {
+            const sendRules = rules.filter(r => r.service === 'gmail' && r.actionType === 'send_whitelist');
+            if (sendRules.length === 0) {
+              return { content: [{ type: 'text' as const, text: '🚫 Access Denied: No send whitelist rules configured.' }] };
+            }
+          }
+
+          if (method === 'DELETE' && (path.includes('messages/trash') || path.includes('emptyTrash'))) {
+            return { content: [{ type: 'text' as const, text: '🚫 Access Denied: Safeguard prevents deletion of emails.' }] };
+          }
+
+          googleUrl = `https://www.googleapis.com/${path}`;
+        }
+
+        const bodyString = typeof body === 'object' ? JSON.stringify(body) : body;
+        const res = await fetch(googleUrl, {
+          method,
+          headers: {
+            'Authorization': `Bearer ${resolved.token}`,
+            'Content-Type': 'application/json',
+          },
+          body: isMutating ? bodyString : undefined,
+        });
+
+        const resText = await res.text();
+        let parsedData: any = resText;
+        try { parsedData = JSON.parse(resText); } catch {}
+
+        return { content: [{ type: 'text' as const, text: typeof parsedData === 'string' ? parsedData : JSON.stringify(parsedData, null, 2) }] };
       }
     );
 
