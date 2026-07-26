@@ -22,16 +22,20 @@ export async function GET(request: NextRequest) {
       }, { status: 404 });
     }
 
-    const hasDriveFileScope = scopes.some((s: string) =>
-      s.includes('drive.file') || s.includes('drive')
-    );
-
-    // The Picker needs the Google Cloud PROJECT NUMBER (setAppId) or picked
-    // files are never registered to the app's drive.file grant — every later
-    // API call on them 404s. The project number is the prefix of the OAuth
-    // client id, which tokeninfo reports as `aud`; deriving it here works in
-    // every environment without a per-env config value.
+    // Two things come from Google's tokeninfo, and both matter:
+    //
+    // 1. The ACTUAL scopes on this access token. Clerk's scope record is a
+    //    cache of what was once approved — a later re-login through the base
+    //    OAuth consent replaces the Google grant WITHOUT drive.file, and
+    //    Clerk keeps claiming it. Trusting the cache means never re-asking
+    //    for consent while every Drive/Sheets call fails with
+    //    ACCESS_TOKEN_SCOPE_INSUFFICIENT. The token itself is the truth.
+    //
+    // 2. The Cloud PROJECT NUMBER (tokeninfo `aud` prefix) for Picker
+    //    setAppId — without it, picked files are never registered to the
+    //    app's drive.file grant and every later API call on them 404s.
     let appId: string | null = null;
+    let actualScopes: string[] | null = null;
     try {
       const infoRes = await fetch(
         `https://www.googleapis.com/oauth2/v3/tokeninfo?access_token=${encodeURIComponent(googleToken)}`,
@@ -44,16 +48,25 @@ export async function GET(request: NextRequest) {
         if (projectNumber && /^\d+$/.test(projectNumber)) {
           appId = projectNumber;
         }
+        if (typeof info.scope === 'string') {
+          actualScopes = info.scope.split(' ');
+        }
       }
     } catch (e) {
-      console.error('tokeninfo lookup failed; Picker will run without appId:', e);
+      console.error('tokeninfo lookup failed; falling back to Clerk scope record:', e);
     }
+
+    const effectiveScopes = actualScopes ?? scopes;
+    const hasDriveFileScope = effectiveScopes.some((s: string) =>
+      s.includes('drive.file') || s.includes('drive')
+    );
 
     return NextResponse.json({
       accessToken: googleToken,
       hasDriveFileScope,
       appId,
-      scopes
+      scopes: effectiveScopes,
+      scopeSource: actualScopes ? 'google-tokeninfo' : 'clerk-cache',
     });
   } catch (error) {
     console.error('Error fetching Google Picker token:', error);
