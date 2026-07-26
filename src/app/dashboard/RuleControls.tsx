@@ -18,16 +18,27 @@ export function RuleControls({
   accessibleEmails = [],
   activeKeys = [],
   hasBlacklistRules = false,
+  openSignal = 0,
 }: {
   accessibleEmails?: string[];
   activeKeys?: ProxyKeyInfo[];
   hasBlacklistRules?: boolean;
+  /**
+   * Increment to open the create-rule modal from elsewhere on the page — the
+   * "Create a new rule…" action inside the Apply-a-rule picker uses this so you
+   * do not have to close the picker and hunt for this card.
+   */
+  openSignal?: number;
 }) {
   const [isPending, startTransition] = useTransition();
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedActionType, setSelectedActionType] = useState("read_blacklist");
   const [gmailLabels, setGmailLabels] = useState<GmailLabel[]>([]);
   const [isLoadingLabels, setIsLoadingLabels] = useState(false);
+
+  useEffect(() => {
+    if (openSignal > 0) setIsModalOpen(true);
+  }, [openSignal]);
 
   // Fetch labels when the modal opens if not already fetched
   useEffect(() => {

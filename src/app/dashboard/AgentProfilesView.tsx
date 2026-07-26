@@ -81,6 +81,8 @@ export function AgentProfilesView({
   const [activeId, setActiveId] = useState<string | null>(activeProfiles[0]?.id ?? null);
   const [connections, setConnections] = useState<Connection[]>([]);
   const [connectionsLoading, setConnectionsLoading] = useState(true);
+  // Bumped by the "Create a new rule…" action inside the Apply-a-rule picker.
+  const [createRuleSignal, setCreateRuleSignal] = useState(0);
 
   // Keep the selected tab valid when profiles are added or revoked.
   useEffect(() => {
@@ -163,6 +165,7 @@ export function AgentProfilesView({
                 allRules={rules}
                 accessibleEmails={emailList}
                 activeKeys={activeKeyList}
+                onCreateNew={() => setCreateRuleSignal(n => n + 1)}
               />
             </div>
 
@@ -196,6 +199,7 @@ export function AgentProfilesView({
                   accessibleEmails={emailList}
                   activeKeys={activeKeyList}
                   hasBlacklistRules={rules.some(r => r.actionType === 'read_blacklist')}
+                  openSignal={createRuleSignal}
                 />
               }
             />
@@ -494,12 +498,14 @@ function GmailRulesCard({
   allRules,
   accessibleEmails,
   activeKeys,
+  onCreateNew,
 }: {
   profileId: string;
   rules: Rule[];
   allRules: Rule[];
   accessibleEmails: string[];
   activeKeys: { id: string; label: string }[];
+  onCreateNew: () => void;
 }) {
   const [popoverOpen, setPopoverOpen] = useState(false);
 
@@ -526,8 +532,9 @@ function GmailRulesCard({
                 emptyMessage={
                   allRules.some(r => r.service !== 'sheets')
                     ? 'Every existing Gmail rule already applies to this profile.'
-                    : "You haven't created any Gmail rules yet — use “Create a rule” below."
+                    : "You haven't created any Gmail rules yet."
                 }
+                onCreateNew={onCreateNew}
                 onClose={() => setPopoverOpen(false)}
               />
             )}
@@ -637,11 +644,13 @@ function ApplyRulePopover({
   profileId,
   candidates,
   onClose,
+  onCreateNew,
   emptyMessage = 'Every existing rule already applies here.',
 }: {
   profileId: string;
   candidates: Rule[];
   onClose: () => void;
+  onCreateNew?: () => void;
   emptyMessage?: React.ReactNode;
 }) {
   const [selected, setSelected] = useState<string[]>([]);
@@ -719,6 +728,20 @@ function ApplyRulePopover({
         )}
       </div>
 
+      {/* The design specifies a create path inside the picker: if the rule you
+          want does not exist yet, you should not have to close this, scroll to
+          the bottom of the page, and lose your selection. */}
+      {onCreateNew && (
+        <div className="border-t border-border px-5 py-2.5">
+          <button
+            onClick={() => { onClose(); onCreateNew(); }}
+            className="text-[12px] font-semibold text-primary hover:underline"
+          >
+            + Create a new rule…
+          </button>
+        </div>
+      )}
+
       <div className="flex items-center justify-between gap-2 rounded-b-lg border-t border-border bg-muted px-5 py-3">
         <span className="text-[11px] text-muted-foreground">
           {selected.length} selected
@@ -779,6 +802,10 @@ function ConnectedAgentsCard({
 
   const mine = connections.filter(c => c.status === 'approved' && c.proxyKeyId === profileId);
   const pending = connections.filter(c => c.status === 'pending');
+  // Blocked connections are not profile-scoped: blocking clears nothing, but a
+  // blocked agent has no key binding to filter on, so show them on every tab
+  // rather than hiding them somewhere unreachable.
+  const blocked = connections.filter(c => c.status === 'blocked');
 
   return (
     <Card className="scroll-mt-24" >
@@ -795,7 +822,7 @@ function ConnectedAgentsCard({
           </div>
         ) : (
           <>
-            {mine.length === 0 && pending.length === 0 && (
+            {mine.length === 0 && pending.length === 0 && blocked.length === 0 && (
               <EmptyState>
                 No agents attached yet. Connect one with the endpoint below and it will
                 appear here for approval.
@@ -803,24 +830,13 @@ function ConnectedAgentsCard({
             )}
 
             {mine.map(conn => (
-              <div key={conn.id} className="rounded-sm border border-border bg-card p-3.5">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="min-w-0 truncate text-[13px] font-semibold text-foreground">
-                    {conn.nickname || conn.clientName || conn.clientId}
-                  </span>
-                  <Badge tone="success">Approved</Badge>
-                </div>
-                <div className="mt-2 flex items-center justify-between gap-2">
-                  <span className="text-[11px] text-subtle">Last used {timeAgo(conn.lastUsedAt)}</span>
-                  <button
-                    className="text-[11px] font-semibold text-muted-foreground hover:text-destructive disabled:opacity-50"
-                    disabled={busyId === conn.id}
-                    onClick={() => act(conn.id, 'block')}
-                  >
-                    {busyId === conn.id ? '…' : 'Detach'}
-                  </button>
-                </div>
-              </div>
+              <ApprovedAgentCard
+                key={conn.id}
+                conn={conn}
+                busy={busyId === conn.id}
+                onRename={nickname => act(conn.id, 'update_nickname', { nickname })}
+                onDetach={() => act(conn.id, 'block')}
+              />
             ))}
 
             {pending.map(conn => (
@@ -834,10 +850,85 @@ function ConnectedAgentsCard({
                 onBlock={() => act(conn.id, 'block')}
               />
             ))}
+
+            {blocked.map(conn => (
+              <div key={conn.id} className="rounded-sm border border-border bg-muted p-3.5">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="min-w-0 truncate text-[13px] font-semibold text-muted-foreground line-through">
+                    {conn.nickname || conn.clientName || conn.clientId}
+                  </span>
+                  <Badge tone="error">Blocked</Badge>
+                </div>
+                <div className="mt-2 flex items-center justify-end">
+                  <button
+                    className="text-[11px] font-semibold text-primary hover:underline disabled:opacity-50"
+                    disabled={busyId === conn.id}
+                    onClick={() => act(conn.id, 'approve', { proxyKeyId: profileId })}
+                  >
+                    {busyId === conn.id ? '…' : 'Unblock into this profile'}
+                  </button>
+                </div>
+              </div>
+            ))}
           </>
         )}
       </div>
     </Card>
+  );
+}
+
+/** Approved agent. Nickname is editable inline — click the name to rename. */
+function ApprovedAgentCard({
+  conn,
+  busy,
+  onRename,
+  onDetach,
+}: {
+  conn: Connection;
+  busy: boolean;
+  onRename: (nickname: string) => void;
+  onDetach: () => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(conn.nickname || conn.clientName || '');
+
+  return (
+    <div className="rounded-sm border border-border bg-card p-3.5">
+      <div className="flex items-center justify-between gap-2">
+        {editing ? (
+          <input
+            value={draft}
+            autoFocus
+            onChange={e => setDraft(e.target.value)}
+            onBlur={() => { setEditing(false); if (draft.trim()) onRename(draft.trim()); }}
+            onKeyDown={e => {
+              if (e.key === 'Enter') { setEditing(false); if (draft.trim()) onRename(draft.trim()); }
+              if (e.key === 'Escape') { setEditing(false); setDraft(conn.nickname || conn.clientName || ''); }
+            }}
+            className="min-w-0 flex-1 rounded-xs border border-input bg-card px-1.5 py-0.5 text-[13px] font-semibold text-foreground"
+          />
+        ) : (
+          <button
+            onClick={() => setEditing(true)}
+            title="Rename"
+            className="min-w-0 truncate text-left text-[13px] font-semibold text-foreground hover:underline"
+          >
+            {conn.nickname || conn.clientName || conn.clientId}
+          </button>
+        )}
+        <Badge tone="success">Approved</Badge>
+      </div>
+      <div className="mt-2 flex items-center justify-between gap-2">
+        <span className="text-[11px] text-subtle">Last used {timeAgo(conn.lastUsedAt)}</span>
+        <button
+          className="text-[11px] font-semibold text-muted-foreground hover:text-destructive disabled:opacity-50"
+          disabled={busy}
+          onClick={onDetach}
+        >
+          {busy ? '…' : 'Detach'}
+        </button>
+      </div>
+    </div>
   );
 }
 
