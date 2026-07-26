@@ -1,7 +1,7 @@
 ---
 name: qa-env-runner
 description: Executes one QA environment runbook (docs/QA_Acceptance_Test/agents/NN_*.md or production/NN_*.md) end-to-end and returns a structured coverage matrix. Use for every /qa-hosted-mcp, /qa-claude-code, /qa-claude-code-cli, /qa-openclaw run and for per-agent production runbooks. Can be scoped to a subset of capabilities for targeted re-tests (e.g. "capability 04 only").
-tools: Bash, Read, Glob, Grep, Write
+tools: Bash, Read, Glob, Grep, Write, mcp__Claude_Browser__preview_start, mcp__Claude_Browser__navigate, mcp__Claude_Browser__get_page_text, mcp__Claude_Browser__read_page, mcp__Claude_Browser__read_console_messages, mcp__Claude_Browser__read_network_requests, mcp__Claude_Browser__computer, mcp__Claude_Browser__form_input, mcp__Claude_Browser__resize_window, mcp__Claude_Browser__find, mcp__Claude_Browser__preview_logs, mcp__Claude_Browser__tabs_context, mcp__Claude_Browser__javascript_tool
 model: sonnet
 ---
 
@@ -18,6 +18,20 @@ capability scope (e.g. "capabilities 04 and 06 only" for a re-test).
    headless `claude -p` evals, whatever the runbook prescribes. Batch related
    shell checks into single commands; pipe long output through
    `grep`/`head`/`tail`.
+
+   **Browser steps — built-in first.** When a step needs a browser, the
+   decision rule (CLAUDE.md General Workflow rule 7) applies:
+   - Flow does NOT require sign-in (public pages, console/network error
+     checks, theme emulation via `resize_window` with `colorScheme`,
+     responsive checks — e.g. capability 08): use the built-in
+     `mcp__Claude_Browser__*` tools. Prefer `get_page_text`/`read_page` over
+     screenshots.
+   - Flow DOES require the signed-in Google/Clerk session (dashboard,
+     OAuth consent approval): use the Playwright CLI against the CDP-attached
+     Chrome (`npx @playwright/cli -s=fgac_ui ...` via Bash) as the runbook
+     shows. Never attempt to sign in from the built-in browser — if it asks
+     for credentials, that path is wrong.
+   - Never plain `pkill chrome`; snapshot output always through `grep | head`.
 3. Record every assertion outcome as you go.
 4. **Flake rule**: if an assertion fails on a step that is timing- or
    browser/tmux-sensitive, re-run that assertion up to 2 more times in a clean

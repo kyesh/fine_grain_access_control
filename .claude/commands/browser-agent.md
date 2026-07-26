@@ -8,8 +8,13 @@ allowed-tools: Bash(curl:*), Bash(npx @playwright/cli:*), Read
 
 Target URL: `$1` (if empty, ask the user what to open).
 
-Two paths. **Default to Path A.** Path B exists only for tests that need the user's real
-Google sign-in session.
+Two paths. **Default to Path A.** Path B is the backup, and exists only for tests that
+need the signed-in Google/Clerk session.
+
+**Decision rule:** does this flow require being signed in (anything behind `/dashboard`,
+Google OAuth consent, Clerk sign-in)? No → Path A. Yes → Path B for those steps only —
+run the unauthenticated parts of the same test (public pages, console/network checks,
+theme/responsive) in Path A anyway; its instrumentation is strictly better.
 
 ---
 
@@ -35,7 +40,10 @@ inspection is far better than screenshot-scraping.
    - `read_network_requests` — confirm assets and API calls return expected status codes.
      Cancelled RSC prefetches show as `ERR_ABORTED` and are normal in Next.js.
 
-5. **Verify responsive behavior** with `resize_window` (`mobile` / `tablet` / `desktop`).
+5. **Verify responsive and theme behavior** with `resize_window` — presets
+   `mobile` / `tablet` / `desktop`, and `colorScheme: "dark" | "light"` to emulate the OS
+   theme preference (this is how capability 08, strict light mode, is tested without
+   touching OS settings).
 
 ### Limits of Path A
 

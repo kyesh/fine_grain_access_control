@@ -6,6 +6,12 @@ This acceptance test ensures that the application strictly enforces its Light Mo
 ## Pre-requisites
 * Application is running locally (`npm run dev`) or deployed to a preview/production environment.
 
+> **Preferred harness**: the built-in browser tools. `resize_window` with
+> `colorScheme: "dark" | "light"` emulates the OS preference directly — no OS settings,
+> no DevTools, no signed-in session needed. Verify computed colors with `javascript_tool`
+> (`getComputedStyle(document.body).backgroundColor`) rather than eyeballing screenshots.
+> The OS-settings/DevTools instructions below are the manual fallback.
+
 ## Assertions
 
 ### A1: Light Mode OS preference renders light UI
