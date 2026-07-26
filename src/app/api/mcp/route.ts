@@ -219,6 +219,47 @@ async function loadApplicableRules(userId: string, proxyKeyId: string, targetEma
   });
 }
 
+/**
+ * Read-time enforcement, shared by every path that returns message content.
+ * Policy: messages may APPEAR in listings, but reading content must respect
+ * label blacklists (checked first — precedence), label whitelists, and content
+ * read-blacklists — identically on MCP and the raw API proxy.
+ * Returns a user-facing restriction message, or null if the read is allowed.
+ */
+function checkReadRestrictions(
+  rules: Awaited<ReturnType<typeof loadApplicableRules>>,
+  message: unknown,
+): string | null {
+  const gmailRules = rules.filter(r => r.service === 'gmail');
+  const labelIds: string[] =
+    message && typeof message === 'object' && Array.isArray((message as { labelIds?: unknown }).labelIds)
+      ? (message as { labelIds: string[] }).labelIds
+      : [];
+
+  for (const rule of gmailRules.filter(r => r.actionType === 'label_blacklist')) {
+    if (rule.regexPattern && labelIds.includes(rule.regexPattern)) {
+      return `🚫 Access restricted: Email contains blacklisted label '${rule.regexPattern}'.`;
+    }
+  }
+
+  const whitelists = gmailRules.filter(r => r.actionType === 'label_whitelist' && !!r.regexPattern);
+  if (whitelists.length > 0 && !whitelists.some(r => labelIds.includes(r.regexPattern!))) {
+    return '🚫 Access restricted: Email lacks a required whitelisted label.';
+  }
+
+  const bodyStr = JSON.stringify(message);
+  for (const rule of gmailRules.filter(r => r.actionType === 'read_blacklist')) {
+    if (!rule.regexPattern) continue;
+    const regexStr = rule.regexPattern.replace(/\*/g, '.*');
+    if (!safeRegex(regexStr)) continue;
+    if (new RegExp(regexStr, 'i').test(bodyStr)) {
+      return `🚫 Access restricted: Content blocked by rule '${rule.ruleName}'.`;
+    }
+  }
+
+  return null;
+}
+
 // ─── Gmail API Helpers ──────────────────────────────────────────────────────
 
 async function gmailFetch(token: string, email: string, path: string, method = 'GET', body?: string) {
@@ -406,20 +447,13 @@ const handler = createMcpHandler(
         const resolved = await resolveAccountAndToken(conn, account);
         if ('error' in resolved) return { content: [{ type: 'text' as const, text: resolved.error }] };
 
-        // Check read blacklist rules
+        // Read-time enforcement: label blacklist/whitelist + content blacklist
         const rules = await loadApplicableRules(conn.user.id, resolved.proxyKeyId, resolved.targetEmail);
         const data = await gmailFetch(resolved.token, resolved.targetEmail, `messages/${messageId}?format=${format || 'full'}`);
 
-        // Apply read blacklist
-        const readBlacklist = rules.filter(r => r.service === 'gmail' && r.actionType === 'read_blacklist');
-        const bodyStr = JSON.stringify(data);
-        for (const rule of readBlacklist) {
-          if (!rule.regexPattern) continue;
-          const regexStr = rule.regexPattern.replace(/\*/g, '.*');
-          if (!safeRegex(regexStr)) continue;
-          if (new RegExp(regexStr, 'i').test(bodyStr)) {
-            return { content: [{ type: 'text' as const, text: `🚫 Access restricted: Content blocked by rule '${rule.ruleName}'.` }] };
-          }
+        const restriction = checkReadRestrictions(rules, data);
+        if (restriction) {
+          return { content: [{ type: 'text' as const, text: restriction }] };
         }
 
         return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
@@ -442,19 +476,14 @@ const handler = createMcpHandler(
         const resolved = await resolveAccountAndToken(conn, account);
         if ('error' in resolved) return { content: [{ type: 'text' as const, text: resolved.error }] };
 
-        // Check read blacklist rules on parent message
+        // Read-time enforcement on the parent message (labels + content rules):
+        // an attachment is only as readable as the email that carries it
         const rules = await loadApplicableRules(conn.user.id, resolved.proxyKeyId, resolved.targetEmail);
         const parentMsg = await gmailFetch(resolved.token, resolved.targetEmail, `messages/${messageId}?format=full`);
 
-        const readBlacklist = rules.filter(r => r.service === 'gmail' && r.actionType === 'read_blacklist');
-        const parentBodyStr = JSON.stringify(parentMsg);
-        for (const rule of readBlacklist) {
-          if (!rule.regexPattern) continue;
-          const regexStr = rule.regexPattern.replace(/\*/g, '.*');
-          if (!safeRegex(regexStr)) continue;
-          if (new RegExp(regexStr, 'i').test(parentBodyStr)) {
-            return { content: [{ type: 'text' as const, text: `🚫 Access restricted: Parent email content blocked by rule '${rule.ruleName}'.` }] };
-          }
+        const restriction = checkReadRestrictions(rules, parentMsg);
+        if (restriction) {
+          return { content: [{ type: 'text' as const, text: restriction }] };
         }
 
         // Fetch attachment body from Gmail API

@@ -62,12 +62,14 @@ listing returned empty.
   rules are present, each labeled with its scope (`global` / `this-key`). The
   owner's full rule set leaking to every agent is a failure.
 
-### A7: Drive file listing through the proxy returns the key's reachable sheets
-- `GET {proxy}/drive/v3/files` with the profile's bearer token, with sheets exposed
-  to that profile (directly or globally).
-- **Expected**: A well-formed `drive#fileList` whose `files[]` contains exactly the
-  sheets this key can reach — `id`, `name`, and the spreadsheet mimeType — with
-  `sheet_block`-ed sheets excluded. An empty list while the key has reachable
-  sheets is a failure (this is FGAC's answer, deliberately not Google's drive.file
-  listing, which is empty for picker-granted files). A key with NO reachable sheets
-  correctly gets an empty list.
+### A7: Drive listing is Google-native; per-file Drive access respects sheet rules
+- `GET {proxy}/drive/v3/files` with the profile's bearer token, then
+  `GET {proxy}/drive/v3/files/<id>` for (a) an exposed sheet, (b) a sheet with a
+  `sheet_block` rule, and (c) an unexposed id.
+- **Expected**: The LIST passes through to Google untouched — a well-formed
+  `drive#fileList`, even if empty (empty is legitimate `drive.file`-scope behavior for
+  picker-granted files; FGAC does not override native discovery — agents get sheet ids
+  from `get_my_permissions`, per A5). Per-FILE access is guarded: (a) succeeds, (b) and
+  (c) return 403 with the FGAC error text; a write-shaped request (POST/PATCH) on a
+  Read-Only sheet also 403s. Drive get/export must never be a bypass around the Sheets
+  rules.
