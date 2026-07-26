@@ -66,7 +66,7 @@ export const accessRules = pgTable('access_rules', {
   ruleName: text('rule_name').notNull(), // e.g., "Block Project X" or "Q3 Financials Read Only"
   service: text('service').notNull(), // 'gmail', 'sheets'
   actionType: text('action_type').notNull(), // Gmail: 'read_blacklist', 'send_whitelist', etc. | Sheets: 'sheet_read', 'sheet_read_write', 'sheet_block'
-  regexPattern: text('regex_pattern').notNull(), // e.g., "*@competitor.com" or spreadsheetId for sheets
+  regexPattern: text('regex_pattern'), // Optional: Gmail regex pattern or label ID
   targetResourceId: text('target_resource_id'), // e.g. spreadsheetId for Google Sheets
   resourceName: text('resource_name'), // e.g. human-readable document title "Q3 Financials"
   createdAt: timestamp('created_at').defaultNow().notNull(),

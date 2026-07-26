@@ -235,18 +235,26 @@ export async function createRule(formData: FormData) {
   const ruleName = formData.get("ruleName") as string;
   const service = formData.get("service") as string;
   const actionType = formData.get("actionType") as string;
-  const regexPattern = formData.get("regexPattern") as string;
+  const rawPattern = formData.get("regexPattern") as string;
   const targetEmail = formData.get("targetEmail") as string || null;
   const keyIds = formData.getAll("keyIds") as string[];
 
-  if (!ruleName || !service || !actionType || !regexPattern) {
-    console.error("[createRule] Missing required fields:", { ruleName, service, actionType, regexPattern });
+  if (!ruleName || !service || !actionType) {
+    console.error("[createRule] Missing required fields:", { ruleName, service, actionType });
     revalidatePath("/dashboard");
     return;
   }
 
-  if (!safeRegex(regexPattern)) {
-    throw new Error(`The provided regular expression '${regexPattern}' is too complex and poses a performance risk. Please simplify it (e.g. avoid nested quantifiers).`);
+  let finalRegexPattern: string | null = null;
+  let targetResourceId: string | null = null;
+
+  if (service === 'sheets') {
+    targetResourceId = rawPattern;
+  } else {
+    finalRegexPattern = rawPattern;
+    if (finalRegexPattern && !safeRegex(finalRegexPattern)) {
+      throw new Error(`The provided regular expression '${finalRegexPattern}' is too complex and poses a performance risk.`);
+    }
   }
 
   const newRule = await db.insert(accessRules).values({
@@ -254,7 +262,8 @@ export async function createRule(formData: FormData) {
     ruleName,
     service,
     actionType,
-    regexPattern,
+    regexPattern: finalRegexPattern,
+    targetResourceId,
     targetEmail: targetEmail || null,
   }).returning().then(res => res[0]);
 
@@ -274,18 +283,26 @@ export async function updateRule(formData: FormData) {
   const ruleName = formData.get("ruleName") as string;
   const service = formData.get("service") as string;
   const actionType = formData.get("actionType") as string;
-  const regexPattern = formData.get("regexPattern") as string;
+  const rawPattern = formData.get("regexPattern") as string;
   const targetEmail = formData.get("targetEmail") as string || null;
   const keyIds = formData.getAll("keyIds") as string[];
 
-  if (!ruleId || !ruleName || !service || !actionType || !regexPattern) {
+  if (!ruleId || !ruleName || !service || !actionType) {
     console.error("[updateRule] Missing required fields");
     revalidatePath("/dashboard");
     return;
   }
 
-  if (!safeRegex(regexPattern)) {
-    throw new Error(`The provided regular expression '${regexPattern}' is too complex and poses a performance risk. Please simplify it (e.g. avoid nested quantifiers).`);
+  let finalRegexPattern: string | null = null;
+  let targetResourceId: string | null = null;
+
+  if (service === 'sheets') {
+    targetResourceId = rawPattern;
+  } else {
+    finalRegexPattern = rawPattern;
+    if (finalRegexPattern && !safeRegex(finalRegexPattern)) {
+      throw new Error(`The provided regular expression '${finalRegexPattern}' is too complex and poses a performance risk.`);
+    }
   }
 
   // Verify ownership
@@ -299,7 +316,8 @@ export async function updateRule(formData: FormData) {
     ruleName,
     service,
     actionType,
-    regexPattern,
+    regexPattern: finalRegexPattern,
+    targetResourceId: service === 'sheets' ? targetResourceId : rule.targetResourceId,
     targetEmail: targetEmail || null,
   }).where(eq(accessRules.id, ruleId));
 

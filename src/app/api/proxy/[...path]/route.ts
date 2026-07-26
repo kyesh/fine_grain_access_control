@@ -255,6 +255,7 @@ async function handleProxyRequest(request: NextRequest, params: { path: string[]
         if (sendRules.length > 0) {
           let isWhitelisted = false;
           for (const rule of sendRules) {
+            if (!rule.regexPattern) continue;
             const regexStr = rule.regexPattern.replace(/\*/g, '.*');
             if (!safeRegex(regexStr)) {
               console.error(`Skipping unsafe regex pattern: ${regexStr}`);
@@ -350,12 +351,12 @@ async function handleProxyRequest(request: NextRequest, params: { path: string[]
       const labelWhitelists = applicableRules.filter(r => r.service === 'gmail' && r.actionType === 'label_whitelist');
       
       for (const rule of labelBlacklists) {
-        existingQ += ` -label:${rule.regexPattern}`;
+        if (rule.regexPattern) existingQ += ` -label:${rule.regexPattern}`;
       }
       
       if (labelWhitelists.length > 0) {
-        const whitelistQuery = labelWhitelists.map(r => `label:${r.regexPattern}`).join(' OR ');
-        existingQ += ` {${whitelistQuery}}`;
+        const whitelistQuery = labelWhitelists.filter(r => !!r.regexPattern).map(r => `label:${r.regexPattern}`).join(' OR ');
+        if (whitelistQuery) existingQ += ` {${whitelistQuery}}`;
       }
       
       if (existingQ.trim() !== '') {
@@ -395,7 +396,7 @@ async function handleProxyRequest(request: NextRequest, params: { path: string[]
       if (parsedBody && parsedBody.labelIds && Array.isArray(parsedBody.labelIds)) {
         // 1. Check Label Blacklists First (Precedence)
         for (const rule of labelBlacklistRules) {
-          if (parsedBody.labelIds.includes(rule.regexPattern)) {
+          if (rule.regexPattern && parsedBody.labelIds.includes(rule.regexPattern)) {
              return NextResponse.json({
                error: `Access restricted: Email contains blacklisted label '${rule.regexPattern}'.`
              }, { status: 403 });
@@ -406,7 +407,7 @@ async function handleProxyRequest(request: NextRequest, params: { path: string[]
         if (labelWhitelistRules.length > 0) {
            let hasWhitelistedLabel = false;
            for (const rule of labelWhitelistRules) {
-             if (parsedBody.labelIds.includes(rule.regexPattern)) {
+             if (rule.regexPattern && parsedBody.labelIds.includes(rule.regexPattern)) {
                hasWhitelistedLabel = true;
                break;
              }
@@ -421,6 +422,7 @@ async function handleProxyRequest(request: NextRequest, params: { path: string[]
 
       if (readBlacklistRules.length > 0) {
         for (const rule of readBlacklistRules) {
+          if (!rule.regexPattern) continue;
           const regexStr = rule.regexPattern.replace(/\*/g, '.*');
           if (!safeRegex(regexStr)) {
             console.error(`Skipping unsafe regex pattern: ${regexStr}`);

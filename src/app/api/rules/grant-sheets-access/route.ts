@@ -91,7 +91,7 @@ export async function POST(request: NextRequest) {
         and(
           eq(accessRules.userId, dbUser.id),
           eq(accessRules.service, 'sheets'),
-          eq(accessRules.regexPattern, targetResourceId)
+          eq(accessRules.targetResourceId, targetResourceId)
         )
       )
       .limit(1)
@@ -118,7 +118,6 @@ export async function POST(request: NextRequest) {
           ruleName: resourceName || `Spreadsheet ${targetResourceId.slice(0, 8)}...`,
           service: 'sheets',
           actionType: chosenActionType,
-          regexPattern: targetResourceId,
           targetResourceId,
           resourceName: resourceName || `Spreadsheet (${targetResourceId.slice(0, 8)})`
         })

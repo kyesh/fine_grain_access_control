@@ -14,7 +14,7 @@ interface EditableRule {
   ruleName: string;
   service: string;
   actionType: string;
-  regexPattern: string;
+  regexPattern: string | null;
   targetResourceId?: string | null;
   resourceName?: string | null;
   targetEmail: string | null;
@@ -182,7 +182,7 @@ export function EditRuleButton({
                     type="text"
                     name="regexPattern"
                     required
-                    defaultValue={rule.regexPattern}
+                    defaultValue={rule.targetResourceId || rule.regexPattern || ""}
                     placeholder="e.g. 1cS2oyMtx-Wa..."
                     className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm font-mono text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 shadow-sm"
                   />
@@ -199,7 +199,7 @@ export function EditRuleButton({
                     <select
                       name="regexPattern"
                       required
-                      defaultValue={rule.regexPattern}
+                      defaultValue={rule.regexPattern || ""}
                       className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 shadow-sm"
                     >
                       <option value="">{isLoadingLabels ? "Loading labels..." : "Choose a Gmail Label..."}</option>
@@ -212,7 +212,7 @@ export function EditRuleButton({
                       type="text"
                       name="regexPattern"
                       required
-                      defaultValue={rule.regexPattern}
+                      defaultValue={rule.regexPattern || ""}
                       className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm font-mono text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 shadow-sm"
                     />
                   )}

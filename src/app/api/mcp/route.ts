@@ -397,6 +397,7 @@ const handler = createMcpHandler(
         const readBlacklist = rules.filter(r => r.service === 'gmail' && r.actionType === 'read_blacklist');
         const bodyStr = JSON.stringify(data);
         for (const rule of readBlacklist) {
+          if (!rule.regexPattern) continue;
           const regexStr = rule.regexPattern.replace(/\*/g, '.*');
           if (!safeRegex(regexStr)) continue;
           if (new RegExp(regexStr, 'i').test(bodyStr)) {
@@ -435,6 +436,7 @@ const handler = createMcpHandler(
 
         let isWhitelisted = false;
         for (const rule of sendRules) {
+          if (!rule.regexPattern) continue;
           const regexStr = rule.regexPattern.replace(/\*/g, '.*');
           if (!safeRegex(regexStr)) continue;
           if (new RegExp(regexStr, 'i').test(to)) { isWhitelisted = true; break; }
