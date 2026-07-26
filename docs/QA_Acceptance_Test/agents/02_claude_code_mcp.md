@@ -37,7 +37,9 @@
    ```bash
    AUTH_URL=$(tmux capture-pane -t fgac-qa -p -S -50 | grep -o 'http[s]*://[^ ]*auth[^ ]*')
    ```
-5. Auto-consent via playwright:
+5. Auto-consent in the **built-in browser** (default — it holds the signed-in QA
+   sessions): `navigate` to `$AUTH_URL`, `read_page`, click **Allow** via its `ref`.
+   Playwright CLI fallback only if the built-in session has expired (password prompt):
    ```bash
    npx @playwright/cli -s=fgac_ui goto "$AUTH_URL"
    # Wait for and click "Allow" button

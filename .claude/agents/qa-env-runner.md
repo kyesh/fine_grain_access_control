@@ -19,18 +19,20 @@ capability scope (e.g. "capabilities 04 and 06 only" for a re-test).
    shell checks into single commands; pipe long output through
    `grep`/`head`/`tail`.
 
-   **Browser steps — built-in first.** When a step needs a browser, the
-   decision rule (CLAUDE.md General Workflow rule 7) applies:
-   - Flow does NOT require sign-in (public pages, console/network error
-     checks, theme emulation via `resize_window` with `colorScheme`,
-     responsive checks — e.g. capability 08): use the built-in
-     `mcp__Claude_Browser__*` tools. Prefer `get_page_text`/`read_page` over
-     screenshots.
-   - Flow DOES require the signed-in Google/Clerk session (dashboard,
-     OAuth consent approval): use the Playwright CLI against the CDP-attached
-     Chrome (`npx @playwright/cli -s=fgac_ui ...` via Bash) as the runbook
-     shows. Never attempt to sign in from the built-in browser — if it asks
-     for credentials, that path is wrong.
+   **Browser steps — built-in browser for everything, Playwright CLI as
+   fallback** (CLAUDE.md General Workflow rule 7):
+   - Use the built-in `mcp__Claude_Browser__*` tools for all browser steps —
+     unauthenticated checks (console/network errors, theme emulation via
+     `resize_window` + `colorScheme`, responsive) AND signed-in flows. The
+     pane keeps persistent cookies with both QA Google accounts signed in;
+     Clerk sign-in goes through Google's account chooser (`USER_A`/`USER_B`
+     — switching is standing-approved, do it freely). Prefer
+     `get_page_text`/`read_page` over screenshots.
+   - **Never type a password.** A password/passkey/2FA prompt means the
+     built-in session expired: fall back to the Playwright CLI against the
+     CDP-attached Chrome (`npx @playwright/cli -s=fgac_ui ...` via Bash) for
+     that flow, and include a note in your report that the built-in session
+     needs re-establishing.
    - Never plain `pkill chrome`; snapshot output always through `grep | head`.
 3. Record every assertion outcome as you go.
 4. **Flake rule**: if an assertion fails on a step that is timing- or

@@ -15,9 +15,11 @@ everywhere downstream.
    `curl -sf http://localhost:3000`.
 2. Discover the setup docs and execute ALL of them, in order:
    `ls docs/QA_Acceptance_Test/setup/*.md | sort`. Follow each doc's steps
-   through the browser per the `/browser-agent` rules — built-in browser
-   tools by default; the CDP-attached Chrome profile when a signed-in Google
-   session is required.
+   through the **built-in browser tools** (`mcp__Claude_Browser__*`) — the
+   pane keeps persistent cookies with both QA Google accounts signed in, so
+   Clerk sign-in and account switching go through Google's account chooser.
+   Fall back to the CDP-attached Chrome profile (Playwright CLI) only if a
+   flow lands on a password prompt (built-in session expired — report it).
 3. Account switching between `USER_A` and `USER_B` is a routine harness step
    under CLAUDE.md's standing approval — switch as often as the docs require
    without asking. Hard limits: never type a password (if a password, passkey,
