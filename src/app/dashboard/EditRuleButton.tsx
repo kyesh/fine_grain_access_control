@@ -15,6 +15,8 @@ interface EditableRule {
   service: string;
   actionType: string;
   regexPattern: string;
+  targetResourceId?: string | null;
+  resourceName?: string | null;
   targetEmail: string | null;
   assignedKeyIds: string[];
 }
@@ -35,13 +37,14 @@ export function EditRuleButton({
 }) {
   const [isPending, startTransition] = useTransition();
   const [isOpen, setIsOpen] = useState(false);
+  const [selectedService, setSelectedService] = useState(rule.service);
   const [selectedActionType, setSelectedActionType] = useState(rule.actionType);
   const [gmailLabels, setGmailLabels] = useState<GmailLabel[]>([]);
   const [isLoadingLabels, setIsLoadingLabels] = useState(false);
 
   useEffect(() => {
     let ignore = false;
-    if (isOpen && gmailLabels.length === 0) {
+    if (isOpen && selectedService === 'gmail' && gmailLabels.length === 0) {
       const fetchLabels = async () => {
         setIsLoadingLabels(true);
         try {
@@ -60,7 +63,7 @@ export function EditRuleButton({
       fetchLabels();
     }
     return () => { ignore = true; };
-  }, [isOpen, gmailLabels.length]);
+  }, [isOpen, selectedService, gmailLabels.length]);
 
   async function onSubmit(formData: FormData) {
     startTransition(async () => {
@@ -110,10 +113,19 @@ export function EditRuleButton({
                 </label>
                 <select
                   name="service"
-                  defaultValue={rule.service}
+                  value={selectedService}
+                  onChange={(e) => {
+                    setSelectedService(e.target.value);
+                    if (e.target.value === 'sheets') {
+                      setSelectedActionType('sheet_read');
+                    } else {
+                      setSelectedActionType('read_blacklist');
+                    }
+                  }}
                   className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 shadow-sm"
                 >
                   <option value="gmail">Gmail</option>
+                  <option value="sheets">Google Sheets</option>
                 </select>
               </div>
 
@@ -127,50 +139,85 @@ export function EditRuleButton({
                   onChange={(e) => setSelectedActionType(e.target.value)}
                   className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 shadow-sm"
                 >
-                  <option value="read_blacklist">
-                    Read Blacklist (Inbound Regex)
-                  </option>
-                  <option value="send_whitelist">
-                    Send Whitelist (Outbound To:)
-                  </option>
-                  <option value="delete_whitelist">
-                    Delete Whitelist (From:)
-                  </option>
-                  <option value="label_blacklist">
-                    Label Blacklist (Block Email via Label)
-                  </option>
-                  <option value="label_whitelist">
-                    Label Whitelist (Allow Only via Required Label)
-                  </option>
+                  {selectedService === 'sheets' ? (
+                    <>
+                      <option value="sheet_read">
+                        Read Only (GET)
+                      </option>
+                      <option value="sheet_read_write">
+                        Read & Write (GET + POST/PUT)
+                      </option>
+                      <option value="sheet_block">
+                        Blocked (Deny All)
+                      </option>
+                    </>
+                  ) : (
+                    <>
+                      <option value="read_blacklist">
+                        Read Blacklist (Inbound Regex)
+                      </option>
+                      <option value="send_whitelist">
+                        Send Whitelist (Outbound To:)
+                      </option>
+                      <option value="delete_whitelist">
+                        Delete Whitelist (From:)
+                      </option>
+                      <option value="label_blacklist">
+                        Label Blacklist (Block Email via Label)
+                      </option>
+                      <option value="label_whitelist">
+                        Label Whitelist (Allow Only via Required Label)
+                      </option>
+                    </>
+                  )}
                 </select>
               </div>
 
-              <div>
-                <label className="block text-sm font-semibold text-slate-700 mb-1.5">
-                  {selectedActionType.startsWith('label_') ? 'Select Label' : 'Regex Pattern'}
-                </label>
-                {selectedActionType.startsWith('label_') ? (
-                  <select
-                    name="regexPattern"
-                    required
-                    defaultValue={rule.regexPattern}
-                    className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 shadow-sm"
-                  >
-                    <option value="">{isLoadingLabels ? "Loading labels..." : "Choose a Gmail Label..."}</option>
-                    {gmailLabels.map(label => (
-                       <option key={label.id} value={label.id}>{label.name} ({label.type})</option>
-                    ))}
-                  </select>
-                ) : (
+              {selectedService === 'sheets' ? (
+                <div>
+                  <label className="block text-sm font-semibold text-slate-700 mb-1.5">
+                    Spreadsheet ID
+                  </label>
                   <input
                     type="text"
                     name="regexPattern"
                     required
                     defaultValue={rule.regexPattern}
+                    placeholder="e.g. 1cS2oyMtx-Wa..."
                     className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm font-mono text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 shadow-sm"
                   />
-                )}
-              </div>
+                  <p className="text-xs text-slate-500 mt-1">
+                    Document Title: {rule.resourceName || 'Google Sheet'}
+                  </p>
+                </div>
+              ) : (
+                <div>
+                  <label className="block text-sm font-semibold text-slate-700 mb-1.5">
+                    {selectedActionType.startsWith('label_') ? 'Select Label' : 'Regex Pattern'}
+                  </label>
+                  {selectedActionType.startsWith('label_') ? (
+                    <select
+                      name="regexPattern"
+                      required
+                      defaultValue={rule.regexPattern}
+                      className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 shadow-sm"
+                    >
+                      <option value="">{isLoadingLabels ? "Loading labels..." : "Choose a Gmail Label..."}</option>
+                      {gmailLabels.map(label => (
+                         <option key={label.id} value={label.id}>{label.name} ({label.type})</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      type="text"
+                      name="regexPattern"
+                      required
+                      defaultValue={rule.regexPattern}
+                      className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm font-mono text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 shadow-sm"
+                    />
+                  )}
+                </div>
+              )}
 
               <div>
                 <label className="block text-sm font-semibold text-slate-700 mb-1.5">
