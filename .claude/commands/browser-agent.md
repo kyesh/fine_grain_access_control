@@ -1,91 +1,104 @@
 ---
-description: Drive the user's real Chrome via Playwright CLI over CDP, preserving Google sign-in sessions
+description: Analyze or test the UI in a browser — built-in browser tools by default, CDP-attached Chrome when a logged-in session is required
 argument-hint: [url]
-allowed-tools: Bash(curl:*), Bash(npx @playwright/cli:*), Bash(playwright-cli:*), Read
+allowed-tools: Bash(curl:*), Bash(npx @playwright/cli:*), Read
 ---
 
 # Browser Agent Workflow
 
-Drives the user's real Chrome browser via `@playwright/cli attach --cdp`, preserving all
-Google sign-in sessions and cookies. Target URL: `$1` (if empty, ask the user what to open).
+Target URL: `$1` (if empty, ask the user what to open).
 
-See `.claude/skills/playwright-cli/SKILL.md` for the full CLI command reference.
+Two paths. **Default to Path A.** Path B exists only for tests that need the user's real
+Google sign-in session.
 
-## Prerequisites
+---
 
-Chrome must be running with remote debugging enabled using the **project testing profile**:
+## Path A — Built-in browser tools (default in Claude Code)
 
-macOS:
-```bash
-"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --user-data-dir="$CLAUDE_PROJECT_DIR/.playwright_user_data" --remote-debugging-port=9222
-```
+Use the `mcp__Claude_Browser__*` tools. No setup, no external process, and console/network
+inspection is far better than screenshot-scraping.
 
-Linux:
-```bash
-google-chrome --user-data-dir="$CLAUDE_PROJECT_DIR/.playwright_user_data" --remote-debugging-port=9222
-```
+1. **Open the pane** at the target URL:
+   `preview_start` with `{url: "$1"}`
 
-> **CRITICAL**: Always use the project `.playwright_user_data` profile — it holds the Google
-> sign-in sessions and cookies the tests need. Do NOT launch Chrome without `--user-data-dir`,
-> do NOT use a different profile path, and do NOT run `pkill chrome` (that kills the user's
-> real browser session). To clean up only test Chrome instances, use
-> `pkill -f 'chrome.*playwright_user_data'`. If Chrome isn't listening on 9222, STOP and ask
-> the user to start it with the command above.
+2. **Read the page.** Prefer text and the accessibility tree over screenshots — they are
+   cheaper and more precise:
+   - `get_page_text` — visible copy
+   - `read_page` with `filter: "interactive"` — elements tagged `ref_N` for clicking
+   - `computer` with `action: "screenshot"` — only when you need to judge *visual* layout
 
-## Execution Steps
+3. **Interact** via `computer` (`left_click`, `type`, `scroll`) using `ref` from `read_page`,
+   or `form_input` for form fields.
 
-1. **Check the Chrome debugging port**
+4. **Check for runtime errors** — this is the highest-signal step for validating a deploy:
+   - `read_console_messages` with `{onlyErrors: true}`
+   - `read_network_requests` — confirm assets and API calls return expected status codes.
+     Cancelled RSC prefetches show as `ERR_ABORTED` and are normal in Next.js.
 
+5. **Verify responsive behavior** with `resize_window` (`mobile` / `tablet` / `desktop`).
+
+### Limits of Path A
+
+This browser has **no Google or Clerk session**. Anything behind `/dashboard` redirects to
+sign-in. Do NOT attempt to sign in — entering credentials is off-limits. You can still validate
+a great deal without auth:
+
+- Public pages render, and copy/layout is correct
+- No console errors, all chunks load
+- Auth gates actually gate (a redirect to Clerk is a *passing* result)
+- API endpoints return sane codes unauthenticated — e.g. `/api/mcp` `tools/list` returning
+  **401 rather than 500** proves new tool code loads without crashing the handler
+
+---
+
+## Path B — CDP-attached real Chrome (only when auth is required)
+
+Needed only to exercise signed-in flows (dashboard, rules, Google Picker, per-file access).
+
+> **Prerequisite that is easy to miss**: the profile directory must already exist *and* be
+> signed in to Google. It is gitignored, so it does NOT travel with the repo — a fresh clone or
+> a different machine has no profile and therefore no session. Creating it is a one-time
+> interactive sign-in by the user.
+
+1. **Check the debugging port**:
    ```bash
    curl -s http://localhost:9222/json/version
    ```
-   - Returns JSON → proceed to step 2.
-   - Connection refused → STOP and ask the user to launch Chrome with the command above.
+   Connection refused → STOP and ask the user to launch Chrome:
 
-2. **Attach to the running browser**
+   macOS:
+   ```bash
+   "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --user-data-dir="$CLAUDE_PROJECT_DIR/.playwright_user_data" --remote-debugging-port=9222
+   ```
+   Linux:
+   ```bash
+   google-chrome --user-data-dir="$CLAUDE_PROJECT_DIR/.playwright_user_data" --remote-debugging-port=9222
+   ```
 
+2. **Attach**:
    ```bash
    npx @playwright/cli attach --cdp=http://localhost:9222 -s=fgac_ui
    ```
-   This connects the CLI session to the user's real Chrome with cookies and auth state intact.
-   If the attach fails, STOP and report it — do not silently fall back to a fresh browser.
+   If attach fails, STOP and report — never silently fall back to a fresh browser, which
+   would produce a green result against an unauthenticated session.
 
-3. **Navigate to the target URL**
-
+3. **Drive it**, filtering snapshots to keep context small:
    ```bash
    npx @playwright/cli -s=fgac_ui goto $1
-   ```
-
-4. **Snapshot the page structure**, filtered to keep context small:
-
-   ```bash
-   npx @playwright/cli -s=fgac_ui snapshot 2>&1 | grep -E "heading|button|link|textbox|Agent|Approve" | head -30
-   ```
-   Read the YAML output to identify element refs (e.g. `e15`, `e23`). Widen the grep only if
-   you can't find the element you need.
-
-5. **Interact using refs from the snapshot**
-
-   ```bash
+   npx @playwright/cli -s=fgac_ui snapshot 2>&1 | grep -E "heading|button|link|Approve" | head -30
    npx @playwright/cli -s=fgac_ui click e15
-   npx @playwright/cli -s=fgac_ui fill e12 "some text"
-   npx @playwright/cli -s=fgac_ui select e8 "option_value"
-   ```
-
-6. **Capture proof screenshots** into the gitignored QA directory, never the project root:
-
-   ```bash
    npx @playwright/cli -s=fgac_ui screenshot .playwright/qa_proof.png
-   ```
-
-7. **Close the session when done** (does NOT close the user's browser)
-
-   ```bash
    npx @playwright/cli -s=fgac_ui close
    ```
 
-## Rules
+> **NEVER run `pkill chrome`** — it kills the user's real browser. To clean up only test
+> instances: `pkill -f 'chrome.*playwright_user_data'`.
 
-- Never write ad-hoc Node.js Playwright scripts — use this CLI flow.
-- Never perform QA state changes by writing to the database. Drive the UI as a real user would.
-- Report attach/navigation failures immediately instead of continuing with unverified state.
+---
+
+## Rules for both paths
+
+- Never write ad-hoc Node.js Playwright scripts.
+- Never make QA state changes by writing to the database — drive the UI as a real user would.
+- Screenshots go to gitignored paths (`.playwright/`), never the project root.
+- Report attach/navigation failures immediately rather than continuing with unverified state.

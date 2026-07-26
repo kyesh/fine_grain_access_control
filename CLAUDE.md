@@ -12,7 +12,7 @@
 4. Review the `docs/` folder and update the docs and data model to match your changes.
 5. Commit frequently as you work through the problem.
 6. **Validation**: Validate changes locally, then in the preview branch via `/deploy-pr-preview`, running the applicable `docs/QA_Acceptance_Test` suites before handing back to the user.
-7. **Browser Automation**: NEVER call raw Playwright screenshot tools or write ad-hoc Node.js browser scripts. To analyze or test the UI interactively you MUST use `/browser-agent`, which attaches to the user's real Chrome over CDP so Google sign-in sessions and cookies are preserved.
+7. **Browser Automation**: In Claude Code, use the **built-in browser tools** (`mcp__Claude_Browser__*`) to analyze or test the UI — `preview_start`, `navigate`, `get_page_text`, `read_page`, `read_console_messages`, `read_network_requests`, `computer`. NEVER write ad-hoc Node.js browser scripts. The Playwright CLI path described in `.agent/workflows/browser-agent.md` is the Antigravity equivalent and is not the default here; reach for it only when a test genuinely needs the user's logged-in Chrome profile over CDP. See `/browser-agent` for both paths and their trade-offs.
 
 ## Database Rules
 
