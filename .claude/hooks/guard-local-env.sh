@@ -54,7 +54,9 @@ fi
 # targets the gitignored test profile is safe.
 # Blocked:  pkill chrome / pkill -f chrome / killall chrome / killall "Google Chrome"
 # Allowed:  pkill -f 'chrome.*playwright_user_data'
-if printf '%s' "$CMD" | grep -qiE '\b(pkill|killall)\b[^|;&]*chrome'; then
+# Anchored to a command position — prose mentioning pkill (commit messages,
+# PR bodies) is not a command.
+if printf '%s' "$CMD" | grep -qiE '(^|[;&|(][[:space:]]*|sudo[[:space:]]+)(pkill|killall)[[:space:]][^|;&]*chrome'; then
   if ! printf '%s' "$CMD" | grep -q 'playwright_user_data'; then
     block "BLOCKED: this would kill the user's real Chrome.
 To clean up only test browsers, scope to the test profile:

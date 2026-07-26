@@ -43,6 +43,8 @@ check $G BLOCK "pkill -f chrome"          "pkill -f chrome"
 check $G BLOCK "killall chrome"           "killall 'Google Chrome'"
 check $G ALLOW "scoped to test profile"   "pkill -f 'chrome.*playwright_user_data'"
 check $G ALLOW "unrelated pkill"          "pkill -f 'next dev'"
+check $G ALLOW "prose mentioning pkill"   "gh pr create --body 'adds pkill-chrome and prod-env-pull guards'"
+check $G BLOCK "pkill after && chain"     "sleep 1 && pkill -f chrome"
 
 echo "── production env pulls ─────────────────────────────────────────"
 check $G BLOCK "pull to .env.production.local"   "npx vercel env pull .env.production.local --environment=production"
