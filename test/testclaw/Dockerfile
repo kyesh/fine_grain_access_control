@@ -10,12 +10,12 @@ USER root
 RUN apt-get update && apt-get install -y --no-install-recommends curl jq && \
     rm -rf /var/lib/apt/lists/*
 
-# Pre-install the gmail-fgac skill
-COPY skills/gmail-fgac /home/node/.openclaw/skills/gmail-fgac
+# Pre-install the fgac skill
+COPY skills/fgac /home/node/.openclaw/skills/fgac
 
 # Copy FGAC credentials (pre-provisioned OAuth tokens + proxy key)
 # These get volume-mounted at runtime for flexibility
-RUN mkdir -p /home/node/.openclaw/gmail-fgac
+RUN mkdir -p /home/node/.openclaw/fgac
 
 # Copy QA test runner
 COPY run-qa.sh /home/node/run-qa.sh

@@ -12,7 +12,7 @@
 
 2. Install the Gmail skill:
    ```
-   /plugin install fgac-gmail@fine_grain_access_control
+   /plugin install fgac@fine_grain_access_control
    ```
 
 3. Verify install:
@@ -21,19 +21,19 @@
    ```
 
 ### Verify Install
-- `[ ]` `fgac-gmail` appears in `/plugin list`
-- `[ ]` `.claude/skills/gmail-fgac/SKILL.md` exists
-- `[ ]` `node .claude/skills/gmail-fgac/scripts/gmail.js --help` works (exits 0)
+- `[ ]` `fgac` appears in `/plugin list`
+- `[ ]` `.claude/skills/fgac/SKILL.md` exists
+- `[ ]` `node .claude/skills/fgac/scripts/gmail.js --help` works (exits 0)
 
 ## Auth
 
 ```bash
-node .claude/skills/gmail-fgac/scripts/auth.js --action login
+node .claude/skills/fgac/scripts/auth.js --action login
 ```
 - `[ ]` Browser opens to `https://fgac.ai` OAuth consent
 - `[ ]` Token saved locally after consent
 - `[ ]` Connection approved in production dashboard (`https://fgac.ai/dashboard?tab=connections`)
-- `[ ]` `node .claude/skills/gmail-fgac/scripts/auth.js --action status` returns proxy key
+- `[ ]` `node .claude/skills/fgac/scripts/auth.js --action status` returns proxy key
 
 ## Run ALL Capabilities
 

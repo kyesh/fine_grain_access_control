@@ -12,7 +12,7 @@ This skill enables Claude Code to interact with Gmail securely via the fgac.ai M
 Add the FGAC.ai MCP server to Claude Code:
 
 ```bash
-claude mcp add --transport http fgac-gmail https://gmail.fgac.ai/api/mcp
+claude mcp add --transport http fgac https://gmail.fgac.ai/api/mcp
 ```
 
 After running:
@@ -33,7 +33,7 @@ After running:
 
 ## Instructions for Claude Code
 
-When the user asks you to interact with Gmail, use the `fgac-gmail` MCP tools directly.
+When the user asks you to interact with Gmail, use the `fgac` MCP tools directly.
 All requests route through `gmail.fgac.ai` — never use `googleapis.com` directly.
 Authentication is handled automatically via the MCP OAuth flow.
 
@@ -44,11 +44,11 @@ A single proxy key can access multiple inboxes if the key owner has delegated ac
 
 ## Alternative: CLI Mode
 
-For users who prefer local scripts over MCP, install the `fgac-gmail` plugin:
+For users who prefer local scripts over MCP, install the `fgac` plugin:
 
 ```
 /plugin marketplace add kyesh/fine_grain_access_control
-/plugin install fgac-gmail@fine_grain_access_control
+/plugin install fgac@fine_grain_access_control
 ```
 
 This installs local scripts that Claude can invoke directly, giving you full control over the code.

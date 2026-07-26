@@ -15,10 +15,10 @@ services:
     volumes:
       # OpenClaw state (persist between runs)
       - ./data:/home/node/.openclaw
-      # gmail-fgac skill (from repo)
-      - ../../docs/skills/gmail-fgac:/home/node/.openclaw/skills/gmail-fgac
+      # fgac skill (from repo)
+      - ../../docs/skills/fgac:/home/node/.openclaw/skills/fgac
       # FGAC credentials (pre-provisioned)
-      - ./credentials:/home/node/.openclaw/gmail-fgac
+      - ./credentials:/home/node/.openclaw/fgac
     # Use host network so container can reach localhost:3000
     network_mode: host
     init: true

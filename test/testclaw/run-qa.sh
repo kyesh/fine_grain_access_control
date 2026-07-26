@@ -54,14 +54,14 @@ fi
 
 # ─── Test 3: Proxy Key Auth (via Bearer token) ──────────────────────────────
 
-CRED_FILE="/home/node/.openclaw/gmail-fgac/fgac-credentials.json"
+CRED_FILE="/home/node/.openclaw/fgac/fgac-credentials.json"
 if [ -f "$CRED_FILE" ]; then
   PROXY_KEY=$(jq -r '.proxy_key // empty' "$CRED_FILE")
   if [ -n "$PROXY_KEY" ]; then
     log_info "Test 3: Proxy key auth via gmail.js"
 
     # Test gmail.js list with the saved credentials
-    GMAIL_OUTPUT=$(FGAC_ROOT_URL="$FGAC_URL" node /home/node/.openclaw/skills/gmail-fgac/scripts/gmail.js --action list 2>&1 || echo "FAIL")
+    GMAIL_OUTPUT=$(FGAC_ROOT_URL="$FGAC_URL" node /home/node/.openclaw/skills/fgac/scripts/gmail.js --action list 2>&1 || echo "FAIL")
 
     if echo "$GMAIL_OUTPUT" | grep -q '"messages"'; then
       log_pass "gmail.js --action list returns messages"
@@ -82,7 +82,7 @@ fi
 if [ -f "$CRED_FILE" ]; then
   log_info "Test 4: auth.js --action status"
 
-  AUTH_STATUS=$(FGAC_ROOT_URL="$FGAC_URL" node /home/node/.openclaw/skills/gmail-fgac/scripts/auth.js --action status 2>&1 || echo "FAIL")
+  AUTH_STATUS=$(FGAC_ROOT_URL="$FGAC_URL" node /home/node/.openclaw/skills/fgac/scripts/auth.js --action status 2>&1 || echo "FAIL")
 
   if echo "$AUTH_STATUS" | grep -qi "approved\|Connection approved"; then
     log_pass "auth.js --action status shows approved"

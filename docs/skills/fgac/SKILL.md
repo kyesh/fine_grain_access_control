@@ -1,5 +1,5 @@
 ---
-name: gmail-fgac
+name: fgac
 description: Gmail integration secured by FGAC.AI — Fine Grain Access Control for AI agents.
 homepage: https://fgac.ai
 signature: "sha256:pending"
@@ -44,10 +44,10 @@ Uses standard Google SDKs with a root URL override pointing to `https://gmail.fg
    - Create a key labeled for this agent (e.g., "OpenClaw Agent")
    - Map it to the email accounts it should access
 3. **Install this skill** into your OpenClaw instance
-   - Copy the `gmail-fgac` folder to `~/.openclaw/skills/gmail-fgac/`
+   - Copy the `fgac` folder to `~/.openclaw/skills/fgac/`
 4. **Place credentials** in the tokens directory:
    ```
-   ~/.openclaw/gmail-fgac/tokens/<account-label>.json
+   ~/.openclaw/fgac/tokens/<account-label>.json
    ```
    Token file format:
    ```json

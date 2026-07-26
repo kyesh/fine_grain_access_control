@@ -153,13 +153,13 @@ async function authenticateMCP() {
 
   // Check for MCP menu
   let output = tmuxCapture();
-  if (!output.includes('fgac-gmail')) {
-    fail('MCP server list', 'fgac-gmail not found in /mcp menu');
+  if (!output.includes('fgac')) {
+    fail('MCP server list', 'fgac not found in /mcp menu');
     return false;
   }
-  pass('fgac-gmail found in /mcp menu');
+  pass('fgac found in /mcp menu');
 
-  // Select fgac-gmail (should be first/highlighted) and press Enter
+  // Select fgac (should be first/highlighted) and press Enter
   tmuxSend('');  // Enter to select
   await sleep(3000);
 
@@ -256,7 +256,7 @@ async function verifyTools() {
   log('Phase 4: Tool verification via tmux');
 
   // Test 1: list_accounts
-  tmuxClearAndSend('Call list_accounts from fgac-gmail MCP server and show the raw result');
+  tmuxClearAndSend('Call list_accounts from fgac MCP server and show the raw result');
   await sleep(15000);
 
   let output = tmuxCapture(100);
@@ -280,7 +280,7 @@ async function verifyTools() {
   }
 
   // Test 2: get_my_permissions
-  tmuxClearAndSend('Call get_my_permissions from fgac-gmail MCP server');
+  tmuxClearAndSend('Call get_my_permissions from fgac MCP server');
   await sleep(15000);
   output = tmuxCapture(100);
 
@@ -291,7 +291,7 @@ async function verifyTools() {
   }
 
   // Test 3: gmail_list (expected to fail with no email access)
-  tmuxClearAndSend('Call gmail_list from fgac-gmail MCP server');
+  tmuxClearAndSend('Call gmail_list from fgac MCP server');
   await sleep(15000);
   output = tmuxCapture(100);
 

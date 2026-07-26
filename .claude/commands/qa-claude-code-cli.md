@@ -20,12 +20,12 @@ The OAuth DCR + PKCE flow needs interactive browser consent. Do this once before
    ```
 2. **Authenticate**:
    ```bash
-   FGAC_ROOT_URL=http://localhost:3000 node test/qa-envs/cc-cli/.claude/skills/gmail-fgac/scripts/auth.js --action login
+   FGAC_ROOT_URL=http://localhost:3000 node test/qa-envs/cc-cli/.claude/skills/fgac/scripts/auth.js --action login
    ```
 3. **Approve** the connection in the dashboard via `/browser-agent`.
 4. **Verify** credentials are stored:
    ```bash
-   cat ~/.openclaw/gmail-fgac/fgac-credentials.json | jq '.proxy_key, .key_label'
+   cat ~/.openclaw/fgac/fgac-credentials.json | jq '.proxy_key, .key_label'
    ```
 
 ### Phase 2: Headless Capability Eval (`claude -p`)
@@ -76,7 +76,7 @@ Add entries to `test/qa-envs/cc-cli/evals/test_cases.json`:
   "id": "A5",
   "capability": "02_read_blacklist",
   "name": "Read blocked competitor email",
-  "prompt": "Using gmail-fgac, search for emails from spy@competitor.com",
+  "prompt": "Using fgac, search for emails from spy@competitor.com",
   "assert_pattern": "blocked|filtered|no results",
   "expect_exit": 0,
   "max_turns": 5

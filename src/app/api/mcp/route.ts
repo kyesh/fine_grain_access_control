@@ -725,7 +725,7 @@ const handler = createMcpHandler(
   },
   {
     serverInfo: {
-      name: 'fgac-gmail',
+      name: 'fgac',
       version: '1.0.0',
     },
   },

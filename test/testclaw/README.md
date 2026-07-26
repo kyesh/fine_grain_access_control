@@ -10,7 +10,7 @@ npm run dev  # from the FGAC repo root
 
 # 2. Copy credentials
 mkdir -p test/testclaw/credentials
-cp ~/.openclaw/gmail-fgac/fgac-credentials.json test/testclaw/credentials/
+cp ~/.openclaw/fgac/fgac-credentials.json test/testclaw/credentials/
 
 # 3. Build and run
 cd test/testclaw

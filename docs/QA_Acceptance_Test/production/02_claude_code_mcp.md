@@ -13,19 +13,19 @@ Search for "fgac" → Install
 
 ### Option B: Manual MCP Add
 ```bash
-claude mcp add --transport http fgac-gmail https://fgac.ai/api/mcp
+claude mcp add --transport http fgac https://fgac.ai/api/mcp
 ```
 
 ### Verify Install
 ```bash
 claude mcp list
 ```
-- [ ] `fgac-gmail` listed with URL `https://fgac.ai/api/mcp`
+- [ ] `fgac` listed with URL `https://fgac.ai/api/mcp`
 
 ## Auth
 
 1. Start Claude Code in tmux
-2. `/mcp` → select `fgac-gmail` → Authenticate
+2. `/mcp` → select `fgac` → Authenticate
 3. Complete OAuth flow via browser → consent → approve in production dashboard
 
 ## Run ALL Capabilities

@@ -5,14 +5,14 @@
     "email": "support@fgac.ai"
   },
   "metadata": {
-    "description": "Official FGAC.ai plugins for Claude Code — secure Gmail access with fine-grained access control",
+    "description": "Official FGAC.ai plugins for Claude Code — secure Google Workspace access with fine-grained access control",
     "version": "1.0.0"
   },
   "plugins": [
     {
-      "name": "fgac-gmail",
+      "name": "fgac",
       "source": "./public/skills/claude-code-cli",
-      "description": "Secure Gmail access via FGAC.ai proxy with fine-grained access control"
+      "description": "Secure Google Workspace access (Gmail, Sheets) via the FGAC.ai proxy with fine-grained access control"
     }
   ]
 }

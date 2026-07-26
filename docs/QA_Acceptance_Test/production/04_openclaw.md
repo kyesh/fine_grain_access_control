@@ -1,26 +1,26 @@
 # Production: OpenClaw (ClawHub)
 
-> Install: Via `clawhub skill install gmail-fgac`
+> Install: Via `clawhub skill install fgac`
 > Runs ALL capabilities against `https://gmail.fgac.ai`
 
 ## Install from Distribution Channel
 
 ```bash
-clawhub skill install gmail-fgac
+clawhub skill install fgac
 ```
 
 ### Verify Install
-- [ ] Skill installed at `~/.openclaw/skills/gmail-fgac/`
+- [ ] Skill installed at `~/.openclaw/skills/fgac/`
 - [ ] SKILL.md present with correct production URLs (`gmail.fgac.ai`)
 - [ ] Scripts directory contains `gmail.js`, `auth.js`, `accounts.js`
 
 ## Auth
 
 ```bash
-node ~/.openclaw/skills/gmail-fgac/scripts/auth.js --action login
+node ~/.openclaw/skills/fgac/scripts/auth.js --action login
 ```
 - [ ] Browser opens to `https://fgac.ai` OAuth consent
-- [ ] Token saved to `~/.openclaw/gmail-fgac/tokens/`
+- [ ] Token saved to `~/.openclaw/fgac/tokens/`
 - [ ] Connection approved in production dashboard
 
 ## Run ALL Capabilities
@@ -35,7 +35,7 @@ openclaw gateway --port 18789
 curl -X POST http://localhost:18789/api/chat \
   -H "Authorization: Bearer $GATEWAY_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"message": "List my recent emails using gmail-fgac"}'
+  -d '{"message": "List my recent emails using fgac"}'
 ```
 
 > **CRITICAL**: Production testing MUST validate full end-to-end plumbing. Do not just verify installation.

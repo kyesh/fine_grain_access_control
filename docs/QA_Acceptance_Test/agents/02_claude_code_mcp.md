@@ -8,13 +8,13 @@
 1. **Run reset**: `bash test/qa-envs/cc-mcp/reset.sh`
 2. Configure MCP Server using the Claude CLI:
    ```bash
-   cd test/qa-envs/cc-mcp && claude mcp add --transport http fgac-gmail http://localhost:3000/api/mcp
+   cd test/qa-envs/cc-mcp && claude mcp add --transport http fgac http://localhost:3000/api/mcp
    ```
 3. Launch Claude Code IN the workspace:
    ```bash
    tmux new-session -d -s fgac-qa -x 200 -y 50 "cd test/qa-envs/cc-mcp && claude --dangerously-skip-permissions"
    ```
-4. Verify Discovery: Enter `/mcp` in Claude Code and confirm `fgac-gmail` is listed.
+4. Verify Discovery: Enter `/mcp` in Claude Code and confirm `fgac` is listed.
 
 ## Auth Setup
 
@@ -31,7 +31,7 @@
 1. Start MCP auth:
    ```bash
    tmux send-keys -t fgac-qa "/mcp" Enter
-   # Select fgac-gmail → Authenticate
+   # Select fgac → Authenticate
    ```
 4. Extract auth URL from tmux output:
    ```bash
@@ -57,7 +57,7 @@
 > The following evidence proves Claude Code (not a script) processes requests:
 
 - [ ] `tmux capture-pane` output shows Claude Code's TUI rendering the tool call
-- [ ] Screenshot of Claude Code session showing `fgac-gmail` tool invocation
+- [ ] Screenshot of Claude Code session showing `fgac` tool invocation
 - [ ] Output is from Claude's natural language processing, not a raw `node gmail.js` call
 
 ---
@@ -74,7 +74,7 @@ tmux send-keys -t fgac-qa "Send an email to $USER_B_EMAIL with subject 'QA CC MC
 ```bash
 tmux send-keys -t fgac-qa "Send an email to blocked@untrusted.com with subject 'Blocked'" Enter
 ```
-- [ ] Claude Code reports whitelist error from fgac-gmail
+- [ ] Claude Code reports whitelist error from fgac
 
 ---
 
