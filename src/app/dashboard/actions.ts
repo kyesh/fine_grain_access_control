@@ -30,17 +30,15 @@ export async function createDelegation(formData: FormData) {
   const dbUser = await getDbUser();
   const delegateEmail = (formData.get("delegateEmail") as string)?.trim().toLowerCase();
 
+  // These throw rather than returning silently: the caller renders the message,
+  // and a quiet return made the form close as if the delegation had succeeded.
   if (!delegateEmail) {
-    console.error("[createDelegation] Missing delegate email");
-    revalidatePath("/dashboard");
-    return;
+    throw new Error("Enter the email address of the person you want to delegate to.");
   }
 
   // Can't delegate to yourself
   if (delegateEmail === dbUser.email.toLowerCase()) {
-    console.error("[createDelegation] Cannot delegate to yourself");
-    revalidatePath("/dashboard");
-    return;
+    throw new Error("You already have full access to your own mailbox.");
   }
 
   // Find the delegate user in our DB
@@ -52,9 +50,9 @@ export async function createDelegation(formData: FormData) {
     .limit(1).then(res => res[0]);
 
   if (!delegateUser) {
-    console.error("[createDelegation] Delegate user not found:", delegateEmail);
-    revalidatePath("/dashboard");
-    return;
+    // There is deliberately no invite flow — the delegate must already have an
+    // FGAC account. Say so, instead of closing the form as if it worked.
+    throw new Error(`No FGAC account found for ${delegateEmail}. Ask them to sign up at fgac.ai with that Google account first.`);
   }
 
   // Check for existing active delegation
