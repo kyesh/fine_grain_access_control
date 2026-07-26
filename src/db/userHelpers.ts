@@ -1,6 +1,6 @@
 import { db } from '@/db';
 import { users, proxyKeys, keyEmailAccess } from '@/db/schema';
-import { eq, desc } from 'drizzle-orm';
+import { eq, and, desc, isNull } from 'drizzle-orm';
 import * as jose from 'jose';
 
 /**
@@ -36,25 +36,38 @@ export async function resolveDbUser(clerkUserId: string, email: string) {
     return byClerkId;
   }
 
-  // No row for this Clerk id. Adopt the existing row for this email rather than
-  // creating a second one — this is the case that used to orphan accounts.
-  // Newest first, since historical data already contains duplicates.
-  const byEmail = await db.select().from(users)
-    .where(eq(users.email, email))
+  // No row for this Clerk id. There are two very different reasons for that,
+  // and they must not be treated the same:
+  //
+  //   1. The previous Clerk account was DELETED and someone signed up again
+  //      with the same address. That is a NEW account. Inheriting the old row's
+  //      proxy keys, rules and delegations would resurrect a deleted identity's
+  //      access — and if the address were ever reassigned, hand it to someone
+  //      else entirely. Tombstoned rows are therefore skipped.
+  //
+  //   2. Clerk reissued an id while the account is still live. Same person,
+  //      same account: adopt the row so their profiles and the delegations
+  //      pointing at them keep working.
+  //
+  // Only live (non-tombstoned) rows are adoptable. Newest first, because
+  // historical data already contains duplicates.
+  const adoptable = await db.select().from(users)
+    .where(and(eq(users.email, email), isNull(users.deletedAt)))
     .orderBy(desc(users.createdAt))
     .limit(1).then(res => res[0]);
 
-  if (byEmail) {
+  if (adoptable) {
     console.warn(
-      `[resolveDbUser] Adopting existing row for ${email}: clerkUserId ${byEmail.clerkUserId} -> ${clerkUserId}`,
+      `[resolveDbUser] Adopting live row for ${email}: clerkUserId ${adoptable.clerkUserId} -> ${clerkUserId}`,
     );
     const [adopted] = await db.update(users)
       .set({ clerkUserId })
-      .where(eq(users.id, byEmail.id))
+      .where(eq(users.id, adoptable.id))
       .returning();
     return adopted;
   }
 
+  // Either no row at all, or only tombstoned ones — start fresh.
   return createDbUser(clerkUserId, email);
 }
 

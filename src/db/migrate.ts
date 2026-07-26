@@ -5,6 +5,13 @@ import * as dotenv from 'dotenv';
 
 import { execSync } from 'child_process';
 
+// Load .env.local before anything reads process.env. Without this the branch
+// guard below saw an empty connection string, skipped provisioning, and the
+// script exited with "No database connection string found" — so `npm run
+// db:migrate` silently did nothing locally (CLAUDE.md Database Rule 8 requires
+// verifying it succeeds against your dev branch).
+dotenv.config({ path: '.env.local' });
+
 const getGitBranch = () => {
   if (process.env.VERCEL_GIT_COMMIT_REF) {
     return process.env.VERCEL_GIT_COMMIT_REF;

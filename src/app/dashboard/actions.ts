@@ -2,7 +2,7 @@
 
 import { db } from "@/db";
 import { users, proxyKeys, emailDelegations, keyEmailAccess, accessRules, keyRuleAssignments } from "@/db/schema";
-import { eq, and, desc } from "drizzle-orm";
+import { eq, and, desc, isNull } from "drizzle-orm";
 import { findActiveDelegation } from "@/db/delegationQueries";
 import { currentUser } from "@clerk/nextjs/server";
 import { revalidatePath } from "next/cache";
@@ -42,11 +42,12 @@ export async function createDelegation(formData: FormData) {
     throw new Error("You already have full access to your own mailbox.");
   }
 
-  // Find the delegate user in our DB
-  // Order by createdAt DESC to get the most recently created user record
-  // when duplicate email rows exist (from Clerk session re-creations)
+  // Find the delegate user in our DB. Tombstoned rows (Clerk account deleted)
+  // are excluded — delegating to a retired identity would grant access nobody
+  // can exercise, and would be resurrected if that address signed up again.
+  // Newest first, since historical data contains duplicate rows per email.
   const delegateUser = await db.select().from(users)
-    .where(eq(users.email, delegateEmail))
+    .where(and(eq(users.email, delegateEmail), isNull(users.deletedAt)))
     .orderBy(desc(users.createdAt))
     .limit(1).then(res => res[0]);
 
