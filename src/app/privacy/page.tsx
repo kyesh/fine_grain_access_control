@@ -73,7 +73,7 @@ export default function PrivacyPolicy() {
             <h2 className="text-xl font-bold text-gray-900 mb-3">7. Contact Us</h2>
             <p>
               If you have any questions or concerns about this privacy policy, or want to exercise your rights over your data, contact us at{' '}
-              <a href="mailto:support@fgac.ai" className="text-blue-600 hover:text-blue-800 underline">support@fgac.ai</a>.
+              <a href="mailto:fgac-ai@googlegroups.com" className="text-blue-600 hover:text-blue-800 underline">fgac-ai@googlegroups.com</a>.
             </p>
           </section>
         </div>
