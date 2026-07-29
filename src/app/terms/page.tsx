@@ -72,6 +72,14 @@ export default function TermsOfService() {
               We reserve the right to modify these terms at any time. We will provide notice of significant changes by updating the date at the top of this page. Your continued use of the Service after such changes constitutes your acceptance of the new Terms of Service.
             </p>
           </section>
+
+          <section>
+            <h2 className="text-xl font-bold text-gray-900 mb-3">9. Contact</h2>
+            <p>
+              Questions about these terms or the Service can be sent to{' '}
+              <a href="mailto:fgac-ai@googlegroups.com" className="text-blue-600 hover:text-blue-800 underline">fgac-ai@googlegroups.com</a>.
+            </p>
+          </section>
         </div>
         
         <div className="mt-12 pt-8 border-t border-gray-100">

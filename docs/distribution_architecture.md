@@ -60,6 +60,35 @@ Each proxy key can access multiple email accounts via `key_email_access`:
 - **Delegated emails:** Resolved via `email_delegations` table; Google token fetched from the email owner's Clerk account
 - **Account parameter:** All tools accept an optional `account` param. `"me"` = key owner's primary email
 
+## Hosted MCP Tool Surface
+
+Tool metadata (names, titles, descriptions, `readOnlyHint`/`destructiveHint`
+annotations) lives in `src/app/api/mcp/toolDefs.ts` and is linted by
+`npm run mcp:lint` (also run at the start of every build) against the Anthropic
+Connectors Directory requirements: every tool titled and annotated, names ≤ 64
+chars, no tool forwarding both safe and unsafe HTTP methods.
+
+- **Read-only tools** (`readOnlyHint: true` — MCP clients may auto-run these):
+  `list_accounts`, `gmail_list`, `gmail_read`, `gmail_get_attachment`,
+  `gmail_labels`, `sheets_get_spreadsheet`, `sheets_read_range`,
+  `get_my_permissions`, `google_api_get`
+- **Write tools** (`destructiveHint` set — MCP clients prompt before running):
+  `gmail_send`, `sheets_update_range`, `sheets_append_rows`, `google_api_modify`
+
+**Raw Google API pair.** The former `raw_google_api_call` (one tool spanning
+GET→DELETE — an automatic directory rejection) is split into `google_api_get`
+(GET only) and `google_api_modify` (POST/PUT/PATCH). Both classify the request
+deny-by-default in `src/app/api/mcp/googleApiPolicy.ts`:
+
+- Gmail GETs are forwarded, then the **full response** passes the same
+  label/content read-restriction checks as `gmail_read` (labels are collected
+  recursively, so thread/list responses are covered).
+- The only Gmail write is `messages/send`, with recipients parsed out of the
+  RFC 2822 payload and checked against the send whitelist (unparseable → deny).
+- Sheets calls require a per-spreadsheet rule; writes require Read & Write.
+- Batch endpoints, spreadsheet creation, all other Gmail writes, and every
+  other Google API are denied. DELETE is not exposed at all.
+
 ## API Surfaces
 
 | Surface | URL | Auth | Used By |

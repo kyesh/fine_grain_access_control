@@ -5,9 +5,10 @@
   "scripts": {
     "dev": "NODE_OPTIONS='--max-old-space-size=8192' next dev",
     "dev:qa": "rm -rf .next/dev && NODE_OPTIONS='--max-old-space-size=8192' next dev --webpack",
-    "build": "tsx src/db/migrate.ts && next build",
+    "build": "npm run mcp:lint && tsx src/db/migrate.ts && next build",
     "start": "next start",
-    "lint": "eslint .",
+    "lint": "npm run mcp:lint && eslint .",
+    "mcp:lint": "tsx scripts/mcp-tool-lint.ts && tsx scripts/test-google-api-policy.ts",
     "db:branch": "tsx scripts/branch-db.ts",
     "db:push": "drizzle-kit push",
     "db:migrate": "tsx src/db/migrate.ts",

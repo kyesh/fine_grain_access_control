@@ -53,16 +53,27 @@ export default function PrivacyPolicy() {
           </section>
 
           <section>
-            <h2 className="text-xl font-bold text-gray-900 mb-3">5. Deletion of Data</h2>
+            <h2 className="text-xl font-bold text-gray-900 mb-3">5. Data Retention and Deletion</h2>
             <p>
-              You can revoke FGAC.ai's access to your Google account at any time via your Google Account Security settings. If you delete your FGAC.ai account, all associated API keys, defined security rules, access logs, and metadata will be permanently deleted from our databases.
+              We retain the account information, API keys, and security rules described in Section 4 for as long as your account is active, because they are required to operate the service. Request metadata shown in your dashboard logs (timestamps, matched rule names, success/failure status — never message content) is retained for up to 90 days and then deleted automatically.
+            </p>
+            <p className="mt-4">
+              You can revoke FGAC.ai's access to your Google account at any time via your Google Account Security settings. If you delete your FGAC.ai account, all associated API keys, defined security rules, access logs, and metadata will be permanently deleted from our databases within 30 days.
             </p>
           </section>
 
           <section>
-            <h2 className="text-xl font-bold text-gray-900 mb-3">6. Contact Us</h2>
+            <h2 className="text-xl font-bold text-gray-900 mb-3">6. Third-Party Sharing</h2>
             <p>
-              If you have any questions or concerns about this privacy policy, please contact support.
+              We do not sell your data or share it with third parties for their own purposes. Data is processed only by the infrastructure providers we use to run the service — Clerk (authentication and OAuth token management), Neon (database hosting), and Vercel (application hosting) — each acting on our behalf under their own data processing terms.
+            </p>
+          </section>
+
+          <section>
+            <h2 className="text-xl font-bold text-gray-900 mb-3">7. Contact Us</h2>
+            <p>
+              If you have any questions or concerns about this privacy policy, or want to exercise your rights over your data, contact us at{' '}
+              <a href="mailto:fgac-ai@googlegroups.com" className="text-blue-600 hover:text-blue-800 underline">fgac-ai@googlegroups.com</a>.
             </p>
           </section>
         </div>

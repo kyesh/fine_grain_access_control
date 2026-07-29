@@ -6,6 +6,11 @@
  *
  * Auth chain: OAuth token → userId + clientId → agent_connections →
  *   proxy_key → key_email_access → Clerk Google token → Gmail API
+ *
+ * Tool metadata (names, titles, annotations) lives in ./toolDefs.ts and is
+ * linted by scripts/mcp-tool-lint.ts against the Anthropic Connectors
+ * Directory requirements. Raw Google API calls are classified deny-by-default
+ * in ./googleApiPolicy.ts.
  */
 import { createMcpHandler, experimental_withMcpAuth } from 'mcp-handler';
 import { verifyClerkToken } from '@clerk/mcp-tools/next';
@@ -21,6 +26,10 @@ import { filterLiveDelegatedAccess } from '@/db/delegationQueries';
 import { clerkClient } from '@clerk/nextjs/server';
 import safeRegex from 'safe-regex';
 import { resolveDbUser } from '@/db/userHelpers';
+import { TOOL_DEFS, toolAnnotations, type FgacToolDef } from './toolDefs';
+import {
+  classifyGoogleApiCall, extractSendRecipients, collectLabelIds,
+} from './googleApiPolicy';
 
 const DASHBOARD_URL = process.env.NEXT_PUBLIC_APP_URL
   || (process.env.VERCEL_PROJECT_PRODUCTION_URL ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}` : null)
@@ -60,11 +69,11 @@ async function resolveConnection(userId: string, clientId: string | undefined): 
       const client = await clerkClient();
       const clerkUser = await client.users.getUser(userId);
       const email = clerkUser.emailAddresses[0]?.emailAddress;
-      
+
       if (!email) {
         return { authorized: false, reason: 'user_not_found' };
       }
-      
+
       user = await resolveDbUser(userId, email);
       console.log(`[MCP] Auto-created DB user for ${email}`);
     } catch (err) {
@@ -134,15 +143,27 @@ async function resolveConnection(userId: string, clientId: string | undefined): 
   };
 }
 
+// ─── Tool Result Helpers ────────────────────────────────────────────────────
+
+/** Successful tool response, including FGAC policy denials — a denial is the
+ * tool working as designed, not a tool failure. */
+const textResult = (text: string) => ({ content: [{ type: 'text' as const, text }] });
+
+/** Upstream/auth failure: marked isError so clients (and the directory's
+ * health metrics) see it as a genuine tool error. */
+const errorResult = (text: string) => ({ content: [{ type: 'text' as const, text }], isError: true });
+
+const jsonResult = (data: unknown) => textResult(JSON.stringify(data, null, 2));
+
 // ─── Pending Approval Message ───────────────────────────────────────────────
 
 function pendingMessage(result: ConnectionDenied) {
   switch (result.reason) {
     case 'pending_approval':
       return [
-        'Please share this exact error message with the user:',
-        `You have not assigned this client ${result.connectionId} to a permission profile please assign a profile by visiting:`,
-        `${result.dashboardUrl}`,
+        '⏳ This connection is awaiting user approval, so tools cannot run yet.',
+        `Connection ID: ${result.connectionId}`,
+        `The user can approve it by attaching it to a permission profile at: ${result.dashboardUrl}`,
       ].join('\n');
     case 'blocked':
       return '🚫 This connection has been blocked by the user.';
@@ -219,22 +240,25 @@ async function loadApplicableRules(userId: string, proxyKeyId: string, targetEma
   });
 }
 
+type ApplicableRules = Awaited<ReturnType<typeof loadApplicableRules>>;
+
 /**
  * Read-time enforcement, shared by every path that returns message content.
  * Policy: messages may APPEAR in listings, but reading content must respect
  * label blacklists (checked first — precedence), label whitelists, and content
  * read-blacklists — identically on MCP and the raw API proxy.
+ *
+ * Label rules consider every labelIds array in the response (thread and list
+ * responses nest messages). Whitelists only apply when the response carries
+ * labels at all — ID-only listings stay visible, matching the policy above.
  * Returns a user-facing restriction message, or null if the read is allowed.
  */
 function checkReadRestrictions(
-  rules: Awaited<ReturnType<typeof loadApplicableRules>>,
+  rules: ApplicableRules,
   message: unknown,
 ): string | null {
   const gmailRules = rules.filter(r => r.service === 'gmail');
-  const labelIds: string[] =
-    message && typeof message === 'object' && Array.isArray((message as { labelIds?: unknown }).labelIds)
-      ? (message as { labelIds: string[] }).labelIds
-      : [];
+  const labelIds = collectLabelIds(message);
 
   for (const rule of gmailRules.filter(r => r.actionType === 'label_blacklist')) {
     if (rule.regexPattern && labelIds.includes(rule.regexPattern)) {
@@ -243,7 +267,7 @@ function checkReadRestrictions(
   }
 
   const whitelists = gmailRules.filter(r => r.actionType === 'label_whitelist' && !!r.regexPattern);
-  if (whitelists.length > 0 && !whitelists.some(r => labelIds.includes(r.regexPattern!))) {
+  if (whitelists.length > 0 && labelIds.length > 0 && !whitelists.some(r => labelIds.includes(r.regexPattern!))) {
     return '🚫 Access restricted: Email lacks a required whitelisted label.';
   }
 
@@ -260,38 +284,95 @@ function checkReadRestrictions(
   return null;
 }
 
-// ─── Gmail API Helpers ──────────────────────────────────────────────────────
+/**
+ * Send-whitelist enforcement shared by gmail_send and google_api_modify.
+ * Every recipient must match a whitelist pattern; unknown recipients deny.
+ * Returns a user-facing denial message, or null if sending is allowed.
+ */
+function checkSendWhitelist(rules: ApplicableRules, recipients: string[] | null): string | null {
+  const sendRules = rules.filter(r => r.service === 'gmail' && r.actionType === 'send_whitelist');
 
-async function gmailFetch(token: string, email: string, path: string, method = 'GET', body?: string) {
+  if (sendRules.length === 0) {
+    return '🚫 No send whitelist rules configured. Ask the user to add the recipient to the sending whitelist in the FGAC dashboard.';
+  }
+
+  if (!recipients || recipients.length === 0) {
+    return '🚫 Could not determine the message recipients, so sending was denied. Provide a standard RFC 2822 message with To/Cc/Bcc headers.';
+  }
+
+  for (const recipient of recipients) {
+    let isWhitelisted = false;
+    for (const rule of sendRules) {
+      if (!rule.regexPattern) continue;
+      const regexStr = rule.regexPattern.replace(/\*/g, '.*');
+      if (!safeRegex(regexStr)) continue;
+      if (new RegExp(regexStr, 'i').test(recipient)) { isWhitelisted = true; break; }
+    }
+    if (!isWhitelisted) {
+      return `🚫 Unauthorized recipient. '${recipient}' is not in the send whitelist. Ask the user to add it in the FGAC dashboard.`;
+    }
+  }
+
+  return null;
+}
+
+// ─── Google API Helpers ─────────────────────────────────────────────────────
+
+type GoogleFetchResult =
+  | { ok: true; data: unknown }
+  | { ok: false; error: string };
+
+function describeGoogleError(status: number, data: unknown, targetEmail: string): string {
+  const detail = (data as { error?: { message?: string } })?.error?.message
+    || (typeof data === 'string' ? data.slice(0, 300) : '');
+  switch (status) {
+    case 401:
+      return `❌ Google authorization expired for '${targetEmail}'. The account owner needs to reconnect Google in the FGAC dashboard, then retry.`;
+    case 403:
+      return `❌ Google denied the request (403): ${detail || 'insufficient permissions or missing OAuth scope for this operation'}.`;
+    case 404:
+      return `❌ Google resource not found (404)${detail ? `: ${detail}` : ''}. Check the ID and try again.`;
+    case 429:
+      return '❌ Google API rate limit exceeded (429). Wait a moment and retry.';
+    default:
+      return `❌ Google API error (${status})${detail ? `: ${detail}` : ''}.`;
+  }
+}
+
+async function googleFetch(
+  url: string, token: string, method = 'GET', body?: string, targetEmail = '',
+): Promise<GoogleFetchResult> {
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method,
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body,
+    });
+  } catch (err) {
+    return { ok: false, error: `❌ Could not reach the Google API: ${err instanceof Error ? err.message : 'network error'}.` };
+  }
+
+  const text = await res.text();
+  let data: unknown = text;
+  try { data = text ? JSON.parse(text) : {}; } catch { /* non-JSON body: keep text */ }
+
+  if (!res.ok) {
+    return { ok: false, error: describeGoogleError(res.status, data, targetEmail) };
+  }
+  return { ok: true, data };
+}
+
+async function gmailFetch(token: string, email: string, path: string, method = 'GET', body?: string): Promise<GoogleFetchResult> {
   const userId = email === 'me' ? 'me' : encodeURIComponent(email);
-  const url = `https://www.googleapis.com/gmail/v1/users/${userId}/${path}`;
-  const res = await fetch(url, {
-    method,
-    headers: {
-      'Authorization': `Bearer ${token}`,
-      'Content-Type': 'application/json',
-    },
-    body,
-  });
-  return res.json();
+  return googleFetch(`https://www.googleapis.com/gmail/v1/users/${userId}/${path}`, token, method, body, email);
 }
 
-function extractSheetsSpreadsheetId(path: string): string | null {
-  const match = path.match(/(?:v4\/spreadsheets|sheets\/v4\/spreadsheets|spreadsheets)\/([^/?:#]+)/);
-  return match ? decodeURIComponent(match[1]) : null;
-}
-
-async function sheetsFetch(token: string, path: string, method = 'GET', body?: string) {
-  const url = `https://sheets.googleapis.com/v4/spreadsheets/${path}`;
-  const res = await fetch(url, {
-    method,
-    headers: {
-      'Authorization': `Bearer ${token}`,
-      'Content-Type': 'application/json',
-    },
-    body,
-  });
-  return res.json();
+async function sheetsFetch(token: string, path: string, method = 'GET', body?: string, targetEmail = ''): Promise<GoogleFetchResult> {
+  return googleFetch(`https://sheets.googleapis.com/v4/spreadsheets/${path}`, token, method, body, targetEmail);
 }
 
 async function checkSheetsPermission(userId: string, proxyKeyId: string, spreadsheetId: string, isMutating: boolean) {
@@ -327,6 +408,83 @@ async function checkSheetsPermission(userId: string, proxyKeyId: string, spreads
   return { allowed: true };
 }
 
+// ─── Gmail Message Parsing (token-frugal responses) ─────────────────────────
+
+const MAX_BODY_CHARS = 20_000;
+const MAX_ATTACHMENT_CHARS = 200_000; // base64url chars ≈ 150 KB decoded
+
+function decodeB64Url(s: string): string {
+  try { return Buffer.from(s, 'base64url').toString('utf8'); } catch { return ''; }
+}
+
+interface GmailPart {
+  mimeType?: string;
+  filename?: string;
+  body?: { data?: string; attachmentId?: string; size?: number };
+  parts?: GmailPart[];
+}
+
+/**
+ * Reduce a Gmail `format=full` message to headers, decoded body text, and
+ * attachment metadata. The full payload (nested base64 parts, redundant
+ * headers) routinely runs 10-50x the size of the content the model needs.
+ */
+function parseGmailMessage(msg: Record<string, unknown>) {
+  const payload = msg.payload as (GmailPart & { headers?: Array<{ name?: string; value?: string }> }) | undefined;
+  const headersArr = payload?.headers ?? [];
+  const header = (name: string) =>
+    headersArr.find(h => h.name?.toLowerCase() === name)?.value;
+
+  let bodyText = '';
+  let htmlFallback = '';
+  const attachments: Array<{ filename: string; mimeType?: string; attachmentId: string; sizeBytes?: number }> = [];
+
+  const stack: GmailPart[] = payload ? [payload] : [];
+  while (stack.length) {
+    const part = stack.pop()!;
+    if (part.parts) stack.push(...part.parts);
+    if (part.filename && part.body?.attachmentId) {
+      attachments.push({
+        filename: part.filename,
+        mimeType: part.mimeType,
+        attachmentId: part.body.attachmentId,
+        sizeBytes: part.body.size,
+      });
+    } else if (part.mimeType === 'text/plain' && part.body?.data) {
+      bodyText += decodeB64Url(part.body.data);
+    } else if (part.mimeType === 'text/html' && part.body?.data && !htmlFallback) {
+      htmlFallback = decodeB64Url(part.body.data);
+    }
+  }
+
+  if (!bodyText && htmlFallback) {
+    bodyText = htmlFallback
+      .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  const truncated = bodyText.length > MAX_BODY_CHARS;
+  return {
+    id: msg.id,
+    threadId: msg.threadId,
+    labelIds: msg.labelIds,
+    snippet: msg.snippet,
+    headers: {
+      from: header('from'),
+      to: header('to'),
+      cc: header('cc'),
+      subject: header('subject'),
+      date: header('date'),
+    },
+    body: truncated
+      ? `${bodyText.slice(0, MAX_BODY_CHARS)}\n…[truncated ${bodyText.length - MAX_BODY_CHARS} characters — use gmail_read with format "metadata" or narrow the request]`
+      : bodyText,
+    attachments,
+  };
+}
+
 // ─── Require Approval Wrapper ───────────────────────────────────────────────
 
 type AuthInfo = { extra?: { userId?: string }; clientId?: string };
@@ -336,12 +494,12 @@ async function requireApproval(authInfo: AuthInfo | undefined): Promise<Connecti
   const clientId = authInfo?.clientId;
 
   if (!userId) {
-    return { content: [{ type: 'text' as const, text: '❌ Authentication failed.' }] };
+    return textResult('❌ Authentication failed.');
   }
 
   const result = await resolveConnection(userId, clientId);
   if (!result.authorized) {
-    return { content: [{ type: 'text' as const, text: pendingMessage(result) }] };
+    return textResult(pendingMessage(result));
   }
   return result;
 }
@@ -376,370 +534,393 @@ async function resolveAccountAndToken(
   return { targetEmail, token, proxyKeyId: conn.proxyKeyId };
 }
 
+// ─── Raw Google API Execution ───────────────────────────────────────────────
+
+function serializeBody(body?: string | Record<string, unknown>): string | undefined {
+  if (body === undefined) return undefined;
+  return typeof body === 'string' ? body : JSON.stringify(body);
+}
+
+/**
+ * Shared executor for google_api_get / google_api_modify. Classification is
+ * deny-by-default (see googleApiPolicy.ts); every allowed family maps onto
+ * the same FGAC enforcement the dedicated tools use.
+ */
+async function executeRawGoogleCall(
+  conn: ConnectionApproved,
+  resolved: ResolvedAccount,
+  path: string,
+  method: 'GET' | 'POST' | 'PUT' | 'PATCH',
+  body?: string | Record<string, unknown>,
+) {
+  const cls = classifyGoogleApiCall(path, method);
+  if (cls.kind === 'denied') return textResult(cls.reason);
+
+  const cleanPath = path.replace(/^\/+/, '');
+
+  if (cls.kind === 'sheets') {
+    const perm = await checkSheetsPermission(conn.user.id, resolved.proxyKeyId, cls.spreadsheetId, cls.isMutating);
+    if (!perm.allowed) return textResult(perm.reason!);
+
+    const url = `https://sheets.googleapis.com/${cleanPath.replace(/^sheets\//, '')}`;
+    const result = await googleFetch(url, resolved.token, method, serializeBody(body), resolved.targetEmail);
+    if (!result.ok) return errorResult(result.error);
+    return jsonResult(result.data);
+  }
+
+  const rules = await loadApplicableRules(conn.user.id, resolved.proxyKeyId, resolved.targetEmail);
+
+  if (cls.kind === 'gmail_send') {
+    const denial = checkSendWhitelist(rules, extractSendRecipients(body));
+    if (denial) return textResult(denial);
+  }
+
+  const url = `https://www.googleapis.com/${cleanPath}`;
+  const result = await googleFetch(url, resolved.token, method, serializeBody(body), resolved.targetEmail);
+  if (!result.ok) return errorResult(result.error);
+
+  if (cls.kind === 'gmail_read') {
+    const restriction = checkReadRestrictions(rules, result.data);
+    if (restriction) return textResult(restriction);
+  }
+
+  return jsonResult(result.data);
+}
+
 // ─── MCP Handler ────────────────────────────────────────────────────────────
+
+function toolConfig<S extends z.ZodRawShape>(def: FgacToolDef, inputSchema: S) {
+  return {
+    title: def.title,
+    description: def.description,
+    inputSchema,
+    annotations: toolAnnotations(def),
+  };
+}
 
 const handler = createMcpHandler(
   (server) => {
 
     // ── list_accounts ─────────────────────────────────────────────────
-    server.tool(
-      'list_accounts',
-      'Lists all email accounts this agent can access.',
-      {},
+    server.registerTool(
+      TOOL_DEFS.list_accounts.name,
+      toolConfig(TOOL_DEFS.list_accounts, {}),
       async (_params, { authInfo }) => {
         const conn = await requireApproval(authInfo);
         if ('content' in conn) return conn;
         if (!conn.proxyKeyId) {
-          return { content: [{ type: 'text' as const, text: '❌ No proxy key assigned.' }] };
+          return textResult('❌ No proxy key assigned.');
         }
         const emails = await getAccessibleEmails(conn.proxyKeyId);
-        return {
-          content: [{
-            type: 'text' as const,
-            text: JSON.stringify({
-              accounts: emails.map(e => e.targetEmail),
-              default: conn.user.email,
-              nickname: conn.nickname,
-            }, null, 2),
-          }],
-        };
+        return jsonResult({
+          accounts: emails.map(e => e.targetEmail),
+          default: conn.user.email,
+          nickname: conn.nickname,
+        });
       }
     );
 
     // ── gmail_list ────────────────────────────────────────────────────
-    server.tool(
-      'gmail_list',
-      'List recent emails. Optionally filter by query.',
-      {
+    server.registerTool(
+      TOOL_DEFS.gmail_list.name,
+      toolConfig(TOOL_DEFS.gmail_list, {
         account: z.string().optional().describe('Email account to use. Defaults to primary.'),
         query: z.string().optional().describe('Gmail search query (e.g., "is:unread")'),
         max: z.number().optional().describe('Max results (default: 10)'),
-      },
+      }),
       async ({ account, query, max }, { authInfo }) => {
         const conn = await requireApproval(authInfo);
         if ('content' in conn) return conn;
 
         const resolved = await resolveAccountAndToken(conn, account);
-        if ('error' in resolved) return { content: [{ type: 'text' as const, text: resolved.error }] };
+        if ('error' in resolved) return textResult(resolved.error);
 
         const params = new URLSearchParams();
         if (query) params.set('q', query);
         params.set('maxResults', String(max || 10));
 
-        const data = await gmailFetch(resolved.token, resolved.targetEmail, `messages?${params}`);
-        return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
+        const result = await gmailFetch(resolved.token, resolved.targetEmail, `messages?${params}`);
+        if (!result.ok) return errorResult(result.error);
+        return jsonResult(result.data);
       }
     );
 
     // ── gmail_read ────────────────────────────────────────────────────
-    server.tool(
-      'gmail_read',
-      'Read a specific email by message ID.',
-      {
+    server.registerTool(
+      TOOL_DEFS.gmail_read.name,
+      toolConfig(TOOL_DEFS.gmail_read, {
         account: z.string().optional().describe('Email account to use.'),
         messageId: z.string().describe('Gmail message ID'),
-        format: z.enum(['full', 'metadata', 'minimal']).optional().describe('Response format'),
-      },
+        format: z.enum(['full', 'metadata', 'minimal']).optional().describe('Response format. "full" (default) returns parsed headers, body text, and attachment metadata.'),
+      }),
       async ({ account, messageId, format }, { authInfo }) => {
         const conn = await requireApproval(authInfo);
         if ('content' in conn) return conn;
 
         const resolved = await resolveAccountAndToken(conn, account);
-        if ('error' in resolved) return { content: [{ type: 'text' as const, text: resolved.error }] };
+        if ('error' in resolved) return textResult(resolved.error);
 
         // Read-time enforcement: label blacklist/whitelist + content blacklist
         const rules = await loadApplicableRules(conn.user.id, resolved.proxyKeyId, resolved.targetEmail);
-        const data = await gmailFetch(resolved.token, resolved.targetEmail, `messages/${messageId}?format=${format || 'full'}`);
+        const result = await gmailFetch(resolved.token, resolved.targetEmail, `messages/${messageId}?format=${format || 'full'}`);
+        if (!result.ok) return errorResult(result.error);
 
-        const restriction = checkReadRestrictions(rules, data);
+        const restriction = checkReadRestrictions(rules, result.data);
         if (restriction) {
-          return { content: [{ type: 'text' as const, text: restriction }] };
+          return textResult(restriction);
         }
 
-        return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
+        // Rules were evaluated on the complete payload; the response is the
+        // parsed, token-frugal view unless a lighter format was requested.
+        if (!format || format === 'full') {
+          return jsonResult(parseGmailMessage(result.data as Record<string, unknown>));
+        }
+        return jsonResult(result.data);
       }
     );
 
     // ── gmail_get_attachment ──────────────────────────────────────────
-    server.tool(
-      'gmail_get_attachment',
-      'Download and retrieve an email attachment by message ID and attachment ID.',
-      {
+    server.registerTool(
+      TOOL_DEFS.gmail_get_attachment.name,
+      toolConfig(TOOL_DEFS.gmail_get_attachment, {
         messageId: z.string().describe('Gmail message ID containing the attachment'),
-        attachmentId: z.string().describe('Attachment ID (found in message details payload.parts)'),
+        attachmentId: z.string().describe('Attachment ID (from gmail_read attachments list)'),
         account: z.string().optional().describe('Email account to use.'),
-      },
+      }),
       async ({ messageId, attachmentId, account }, { authInfo }) => {
         const conn = await requireApproval(authInfo);
         if ('content' in conn) return conn;
 
         const resolved = await resolveAccountAndToken(conn, account);
-        if ('error' in resolved) return { content: [{ type: 'text' as const, text: resolved.error }] };
+        if ('error' in resolved) return textResult(resolved.error);
 
         // Read-time enforcement on the parent message (labels + content rules):
         // an attachment is only as readable as the email that carries it
         const rules = await loadApplicableRules(conn.user.id, resolved.proxyKeyId, resolved.targetEmail);
-        const parentMsg = await gmailFetch(resolved.token, resolved.targetEmail, `messages/${messageId}?format=full`);
+        const parentResult = await gmailFetch(resolved.token, resolved.targetEmail, `messages/${messageId}?format=full`);
+        if (!parentResult.ok) return errorResult(parentResult.error);
 
-        const restriction = checkReadRestrictions(rules, parentMsg);
+        const restriction = checkReadRestrictions(rules, parentResult.data);
         if (restriction) {
-          return { content: [{ type: 'text' as const, text: restriction }] };
+          return textResult(restriction);
         }
 
-        // Fetch attachment body from Gmail API
-        const attachmentData = await gmailFetch(
+        const attachmentResult = await gmailFetch(
           resolved.token,
           resolved.targetEmail,
           `messages/${messageId}/attachments/${attachmentId}`
         );
+        if (!attachmentResult.ok) return errorResult(attachmentResult.error);
 
-        return { content: [{ type: 'text' as const, text: JSON.stringify(attachmentData, null, 2) }] };
+        const attachment = attachmentResult.data as { size?: number; data?: string };
+        if (attachment.data && attachment.data.length > MAX_ATTACHMENT_CHARS) {
+          const approxKb = Math.round((attachment.data.length * 3) / 4 / 1024);
+          return textResult(`⚠️ Attachment is ~${approxKb} KB, which exceeds the ~150 KB limit for MCP responses. Ask the user to retrieve it directly from Gmail.`);
+        }
+        return jsonResult(attachment);
       }
     );
 
     // ── gmail_send ────────────────────────────────────────────────────
-    server.tool(
-      'gmail_send',
-      'Send an email. Subject to send whitelist rules.',
-      {
+    server.registerTool(
+      TOOL_DEFS.gmail_send.name,
+      toolConfig(TOOL_DEFS.gmail_send, {
         account: z.string().optional().describe('Email account to send from.'),
         to: z.string().describe('Recipient email address'),
         subject: z.string().describe('Email subject line'),
         body: z.string().describe('Email body (plain text)'),
-      },
+      }),
       async ({ account, to, subject, body }, { authInfo }) => {
         const conn = await requireApproval(authInfo);
         if ('content' in conn) return conn;
 
         const resolved = await resolveAccountAndToken(conn, account);
-        if ('error' in resolved) return { content: [{ type: 'text' as const, text: resolved.error }] };
+        if ('error' in resolved) return textResult(resolved.error);
 
         // Enforce send whitelist
         const rules = await loadApplicableRules(conn.user.id, resolved.proxyKeyId, resolved.targetEmail);
-        const sendRules = rules.filter(r => r.service === 'gmail' && r.actionType === 'send_whitelist');
-
-        if (sendRules.length === 0) {
-          return { content: [{ type: 'text' as const, text: `🚫 No send whitelist rules configured. Ask the user to add '${to}' to the sending whitelist.` }] };
-        }
-
-        let isWhitelisted = false;
-        for (const rule of sendRules) {
-          if (!rule.regexPattern) continue;
-          const regexStr = rule.regexPattern.replace(/\*/g, '.*');
-          if (!safeRegex(regexStr)) continue;
-          if (new RegExp(regexStr, 'i').test(to)) { isWhitelisted = true; break; }
-        }
-
-        if (!isWhitelisted) {
-          return { content: [{ type: 'text' as const, text: `🚫 Unauthorized recipient. '${to}' is not in the send whitelist. Ask the user to add it.` }] };
-        }
+        const denial = checkSendWhitelist(rules, [to]);
+        if (denial) return textResult(denial);
 
         // Build RFC 2822 message
         const raw = Buffer.from(
           `To: ${to}\r\nSubject: ${subject}\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n${body}`
         ).toString('base64url');
 
-        const data = await gmailFetch(resolved.token, resolved.targetEmail, 'messages/send', 'POST', JSON.stringify({ raw }));
-        return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
+        const result = await gmailFetch(resolved.token, resolved.targetEmail, 'messages/send', 'POST', JSON.stringify({ raw }));
+        if (!result.ok) return errorResult(result.error);
+        return jsonResult(result.data);
       }
     );
 
     // ── gmail_labels ──────────────────────────────────────────────────
-    server.tool(
-      'gmail_labels',
-      'List all Gmail labels for an account.',
-      { account: z.string().optional().describe('Email account to use.') },
+    server.registerTool(
+      TOOL_DEFS.gmail_labels.name,
+      toolConfig(TOOL_DEFS.gmail_labels, {
+        account: z.string().optional().describe('Email account to use.'),
+      }),
       async ({ account }, { authInfo }) => {
         const conn = await requireApproval(authInfo);
         if ('content' in conn) return conn;
 
         const resolved = await resolveAccountAndToken(conn, account);
-        if ('error' in resolved) return { content: [{ type: 'text' as const, text: resolved.error }] };
+        if ('error' in resolved) return textResult(resolved.error);
 
-        const data = await gmailFetch(resolved.token, resolved.targetEmail, 'labels');
-        return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
+        const result = await gmailFetch(resolved.token, resolved.targetEmail, 'labels');
+        if (!result.ok) return errorResult(result.error);
+        return jsonResult(result.data);
       }
     );
 
     // ── sheets_get_spreadsheet ────────────────────────────────────────
-    server.tool(
-      'sheets_get_spreadsheet',
-      'Get metadata and sheet tabs for an exposed Google Spreadsheet.',
-      {
+    server.registerTool(
+      TOOL_DEFS.sheets_get_spreadsheet.name,
+      toolConfig(TOOL_DEFS.sheets_get_spreadsheet, {
         spreadsheetId: z.string().describe('Google Spreadsheet ID (e.g. 1BxiMVs0...)'),
         account: z.string().optional().describe('Email account to use.'),
-      },
+      }),
       async ({ spreadsheetId, account }, { authInfo }) => {
         const conn = await requireApproval(authInfo);
         if ('content' in conn) return conn;
 
         const resolved = await resolveAccountAndToken(conn, account);
-        if ('error' in resolved) return { content: [{ type: 'text' as const, text: resolved.error }] };
+        if ('error' in resolved) return textResult(resolved.error);
 
         const perm = await checkSheetsPermission(conn.user.id, resolved.proxyKeyId, spreadsheetId, false);
-        if (!perm.allowed) return { content: [{ type: 'text' as const, text: perm.reason! }] };
+        if (!perm.allowed) return textResult(perm.reason!);
 
-        const data = await sheetsFetch(resolved.token, `${spreadsheetId}`);
-        return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
+        const result = await sheetsFetch(resolved.token, `${spreadsheetId}`, 'GET', undefined, resolved.targetEmail);
+        if (!result.ok) return errorResult(result.error);
+        return jsonResult(result.data);
       }
     );
 
     // ── sheets_read_range ─────────────────────────────────────────────
-    server.tool(
-      'sheets_read_range',
-      'Read cell values from a specific sheet tab and range in a Google Spreadsheet.',
-      {
+    server.registerTool(
+      TOOL_DEFS.sheets_read_range.name,
+      toolConfig(TOOL_DEFS.sheets_read_range, {
         spreadsheetId: z.string().describe('Google Spreadsheet ID'),
         range: z.string().describe("Cell range (e.g. 'Sheet1'!A1:D20 or 'Sheet1')"),
         account: z.string().optional().describe('Email account to use.'),
-      },
+      }),
       async ({ spreadsheetId, range, account }, { authInfo }) => {
         const conn = await requireApproval(authInfo);
         if ('content' in conn) return conn;
 
         const resolved = await resolveAccountAndToken(conn, account);
-        if ('error' in resolved) return { content: [{ type: 'text' as const, text: resolved.error }] };
+        if ('error' in resolved) return textResult(resolved.error);
 
         const perm = await checkSheetsPermission(conn.user.id, resolved.proxyKeyId, spreadsheetId, false);
-        if (!perm.allowed) return { content: [{ type: 'text' as const, text: perm.reason! }] };
+        if (!perm.allowed) return textResult(perm.reason!);
 
         const encodedRange = encodeURIComponent(range);
-        const data = await sheetsFetch(resolved.token, `${spreadsheetId}/values/${encodedRange}`);
-        return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
+        const result = await sheetsFetch(resolved.token, `${spreadsheetId}/values/${encodedRange}`, 'GET', undefined, resolved.targetEmail);
+        if (!result.ok) return errorResult(result.error);
+        return jsonResult(result.data);
       }
     );
 
     // ── sheets_update_range ───────────────────────────────────────────
-    server.tool(
-      'sheets_update_range',
-      'Update cell values in a range within a Google Spreadsheet (requires Read & Write permission).',
-      {
+    server.registerTool(
+      TOOL_DEFS.sheets_update_range.name,
+      toolConfig(TOOL_DEFS.sheets_update_range, {
         spreadsheetId: z.string().describe('Google Spreadsheet ID'),
         range: z.string().describe("Cell range (e.g. 'Sheet1'!A1:B2)"),
         values: z.array(z.array(z.any())).describe('2D array of cell values'),
         account: z.string().optional().describe('Email account to use.'),
-      },
+      }),
       async ({ spreadsheetId, range, values, account }, { authInfo }) => {
         const conn = await requireApproval(authInfo);
         if ('content' in conn) return conn;
 
         const resolved = await resolveAccountAndToken(conn, account);
-        if ('error' in resolved) return { content: [{ type: 'text' as const, text: resolved.error }] };
+        if ('error' in resolved) return textResult(resolved.error);
 
         const perm = await checkSheetsPermission(conn.user.id, resolved.proxyKeyId, spreadsheetId, true);
-        if (!perm.allowed) return { content: [{ type: 'text' as const, text: perm.reason! }] };
+        if (!perm.allowed) return textResult(perm.reason!);
 
         const encodedRange = encodeURIComponent(range);
         const body = JSON.stringify({ values, range });
-        const data = await sheetsFetch(resolved.token, `${spreadsheetId}/values/${encodedRange}?valueInputOption=USER_ENTERED`, 'PUT', body);
-        return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
+        const result = await sheetsFetch(resolved.token, `${spreadsheetId}/values/${encodedRange}?valueInputOption=USER_ENTERED`, 'PUT', body, resolved.targetEmail);
+        if (!result.ok) return errorResult(result.error);
+        return jsonResult(result.data);
       }
     );
 
     // ── sheets_append_rows ────────────────────────────────────────────
-    server.tool(
-      'sheets_append_rows',
-      'Append data rows to a sheet in a Google Spreadsheet (requires Read & Write permission).',
-      {
+    server.registerTool(
+      TOOL_DEFS.sheets_append_rows.name,
+      toolConfig(TOOL_DEFS.sheets_append_rows, {
         spreadsheetId: z.string().describe('Google Spreadsheet ID'),
         range: z.string().describe("Sheet tab or range to append to (e.g. 'Sheet1')"),
         values: z.array(z.array(z.any())).describe('2D array of rows to append'),
         account: z.string().optional().describe('Email account to use.'),
-      },
+      }),
       async ({ spreadsheetId, range, values, account }, { authInfo }) => {
         const conn = await requireApproval(authInfo);
         if ('content' in conn) return conn;
 
         const resolved = await resolveAccountAndToken(conn, account);
-        if ('error' in resolved) return { content: [{ type: 'text' as const, text: resolved.error }] };
+        if ('error' in resolved) return textResult(resolved.error);
 
         const perm = await checkSheetsPermission(conn.user.id, resolved.proxyKeyId, spreadsheetId, true);
-        if (!perm.allowed) return { content: [{ type: 'text' as const, text: perm.reason! }] };
+        if (!perm.allowed) return textResult(perm.reason!);
 
         const encodedRange = encodeURIComponent(range);
         const body = JSON.stringify({ values });
-        const data = await sheetsFetch(resolved.token, `${spreadsheetId}/values/${encodedRange}:append?valueInputOption=USER_ENTERED`, 'POST', body);
-        return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
+        const result = await sheetsFetch(resolved.token, `${spreadsheetId}/values/${encodedRange}:append?valueInputOption=USER_ENTERED`, 'POST', body, resolved.targetEmail);
+        if (!result.ok) return errorResult(result.error);
+        return jsonResult(result.data);
       }
     );
 
-    // ── raw_google_api_call ───────────────────────────────────────────
-    server.tool(
-      'raw_google_api_call',
-      'Execute any raw Google API request (Gmail or Google Sheets) through FGAC access control rules. Guarantees access to any API endpoint even if no dedicated tool exists.',
-      {
-        path: z.string().describe('API path (e.g. "v4/spreadsheets/1BxiM.../values/Sheet1" or "gmail/v1/users/me/messages")'),
-        method: z.enum(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']).optional().describe('HTTP method (default: GET)'),
-        body: z.union([z.string(), z.record(z.string(), z.any())]).optional().describe('Request body (JSON object or string)'),
+    // ── google_api_get ────────────────────────────────────────────────
+    server.registerTool(
+      TOOL_DEFS.google_api_get.name,
+      toolConfig(TOOL_DEFS.google_api_get, {
+        path: z.string().describe('API path (e.g. "gmail/v1/users/me/messages" or "v4/spreadsheets/1BxiM.../values/Sheet1")'),
         account: z.string().optional().describe('Email account to use.'),
-      },
-      async ({ path, method = 'GET', body, account }, { authInfo }) => {
+      }),
+      async ({ path, account }, { authInfo }) => {
         const conn = await requireApproval(authInfo);
         if ('content' in conn) return conn;
 
         const resolved = await resolveAccountAndToken(conn, account);
-        if ('error' in resolved) return { content: [{ type: 'text' as const, text: resolved.error }] };
+        if ('error' in resolved) return textResult(resolved.error);
 
-        const isMutating = method !== 'GET';
-        let googleUrl = '';
+        return executeRawGoogleCall(conn, resolved, path, 'GET');
+      }
+    );
 
-        // Evaluate FGAC rules based on path
-        if (path.includes('spreadsheets')) {
-          const spreadsheetId = extractSheetsSpreadsheetId(path);
-          if (spreadsheetId) {
-            const perm = await checkSheetsPermission(conn.user.id, resolved.proxyKeyId, spreadsheetId, isMutating);
-            if (!perm.allowed) {
-              return { content: [{ type: 'text' as const, text: perm.reason! }] };
-            }
-          }
-          const cleanPath = path.replace(/^sheets\//, '');
-          googleUrl = `https://sheets.googleapis.com/${cleanPath}`;
-        } else {
-          // Gmail / general Google API
-          const rules = await loadApplicableRules(conn.user.id, resolved.proxyKeyId, resolved.targetEmail);
+    // ── google_api_modify ─────────────────────────────────────────────
+    server.registerTool(
+      TOOL_DEFS.google_api_modify.name,
+      toolConfig(TOOL_DEFS.google_api_modify, {
+        path: z.string().describe('API path (e.g. "gmail/v1/users/me/messages/send" or "v4/spreadsheets/1BxiM.../values/Sheet1:append")'),
+        method: z.enum(['POST', 'PUT', 'PATCH']).optional().describe('HTTP method (default: POST)'),
+        body: z.union([z.string(), z.record(z.string(), z.any())]).optional().describe('Request body (JSON object or string)'),
+        account: z.string().optional().describe('Email account to use.'),
+      }),
+      async ({ path, method = 'POST', body, account }, { authInfo }) => {
+        const conn = await requireApproval(authInfo);
+        if ('content' in conn) return conn;
 
-          if (isMutating && path.includes('messages/send')) {
-            const sendRules = rules.filter(r => r.service === 'gmail' && r.actionType === 'send_whitelist');
-            if (sendRules.length === 0) {
-              return { content: [{ type: 'text' as const, text: '🚫 Access Denied: No send whitelist rules configured.' }] };
-            }
-          }
+        const resolved = await resolveAccountAndToken(conn, account);
+        if ('error' in resolved) return textResult(resolved.error);
 
-          if (method === 'DELETE' && (path.includes('messages/trash') || path.includes('emptyTrash'))) {
-            return { content: [{ type: 'text' as const, text: '🚫 Access Denied: Safeguard prevents deletion of emails.' }] };
-          }
-
-          googleUrl = `https://www.googleapis.com/${path}`;
-        }
-
-        const bodyString = typeof body === 'object' ? JSON.stringify(body) : body;
-        const res = await fetch(googleUrl, {
-          method,
-          headers: {
-            'Authorization': `Bearer ${resolved.token}`,
-            'Content-Type': 'application/json',
-          },
-          body: isMutating ? bodyString : undefined,
-        });
-
-        const resText = await res.text();
-        let parsedData: any = resText;
-        try { parsedData = JSON.parse(resText); } catch {}
-
-        return { content: [{ type: 'text' as const, text: typeof parsedData === 'string' ? parsedData : JSON.stringify(parsedData, null, 2) }] };
+        return executeRawGoogleCall(conn, resolved, path, method, body);
       }
     );
 
     // ── get_my_permissions ────────────────────────────────────────────
-    server.tool(
-      'get_my_permissions',
-      'Shows the current access rules and permissions for this agent.',
-      {},
+    server.registerTool(
+      TOOL_DEFS.get_my_permissions.name,
+      toolConfig(TOOL_DEFS.get_my_permissions, {}),
       async (_params, { authInfo }) => {
         const conn = await requireApproval(authInfo);
         if ('content' in conn) return conn;
         if (!conn.proxyKeyId) {
-          return { content: [{ type: 'text' as const, text: '❌ No proxy key assigned.' }] };
+          return textResult('❌ No proxy key assigned.');
         }
 
         const emails = await getAccessibleEmails(conn.proxyKeyId);
@@ -760,35 +941,30 @@ const handler = createMcpHandler(
           !rulesWithAssignments.has(r.id) || assignedToThisKey.has(r.id),
         );
 
-        return {
-          content: [{
-            type: 'text' as const,
-            text: JSON.stringify({
-              connection: { id: conn.connectionId, nickname: conn.nickname },
-              proxyKey: { id: key?.id, label: key?.label },
-              accessibleEmails: emails.map(e => e.targetEmail),
-              rules: applicableRules.map(r => ({
-                name: r.ruleName,
-                type: r.actionType,
-                pattern: r.regexPattern,
-                email: r.targetEmail || 'all',
-                scope: rulesWithAssignments.has(r.id) ? 'this-key' : 'global',
-                // Sheets rules are per-file: without the spreadsheet id an
-                // agent cannot locate the file it was granted access to.
-                ...(r.service === 'sheets'
-                  ? { spreadsheetId: r.targetResourceId, resourceName: r.resourceName }
-                  : {}),
-              })),
-            }, null, 2),
-          }],
-        };
+        return jsonResult({
+          connection: { id: conn.connectionId, nickname: conn.nickname },
+          proxyKey: { id: key?.id, label: key?.label },
+          accessibleEmails: emails.map(e => e.targetEmail),
+          rules: applicableRules.map(r => ({
+            name: r.ruleName,
+            type: r.actionType,
+            pattern: r.regexPattern,
+            email: r.targetEmail || 'all',
+            scope: rulesWithAssignments.has(r.id) ? 'this-key' : 'global',
+            // Sheets rules are per-file: without the spreadsheet id an
+            // agent cannot locate the file it was granted access to.
+            ...(r.service === 'sheets'
+              ? { spreadsheetId: r.targetResourceId, resourceName: r.resourceName }
+              : {}),
+          })),
+        });
       }
     );
   },
   {
     serverInfo: {
       name: 'fgac',
-      version: '1.0.0',
+      version: '1.1.0',
     },
   },
   {
@@ -797,9 +973,30 @@ const handler = createMcpHandler(
   }
 );
 
+// ─── Authentication ─────────────────────────────────────────────────────────
+
+/**
+ * The only issuer this server accepts tokens from: the Clerk frontend API
+ * derived from our own publishable key. Deriving the JWKS location from the
+ * token's `iss` claim would let ANY issuer mint accepted tokens.
+ */
+function expectedClerkIssuer(): string | null {
+  const pk = process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
+  if (!pk) return null;
+  try {
+    const domain = Buffer.from(pk.replace(/^pk_(test|live)_/, ''), 'base64')
+      .toString('utf8')
+      .replace(/\$$/, '');
+    return domain ? `https://${domain}` : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Direct JWT verification fallback for CLI/non-browser OAuth tokens.
  * Used when Clerk's auth()+verifyClerkToken fails to extract userId/clientId.
+ * Fails closed unless the token's issuer is exactly our Clerk instance.
  */
 async function verifyClerkJwtDirect(token: string) {
   try {
@@ -808,7 +1005,12 @@ async function verifyClerkJwtDirect(token: string) {
     if (!payloadB64) return undefined;
     const rawPayload = JSON.parse(Buffer.from(payloadB64, 'base64url').toString());
     const issuer = rawPayload.iss;
-    if (!issuer) return undefined;
+
+    const expected = expectedClerkIssuer();
+    if (!expected || issuer !== expected) {
+      console.error(`[MCP] Rejecting token from unexpected issuer '${issuer}' (expected '${expected ?? 'unavailable'}')`);
+      return undefined;
+    }
 
     const JWKS = createRemoteJWKSet(new URL(`${issuer}/.well-known/jwks.json`));
     const { payload: verified } = await jwtVerify(token, JWKS, { issuer, clockTolerance: 30 });
@@ -828,46 +1030,52 @@ async function verifyClerkJwtDirect(token: string) {
   }
 }
 
-export const POST = experimental_withMcpAuth(
+const verifyMcpAuth = async (_req: Request, bearerToken?: string) => {
+  let authInfo: ReturnType<typeof verifyClerkToken> | Awaited<ReturnType<typeof verifyClerkJwtDirect>> | undefined;
+
+  // Strategy 1: Try Clerk's built-in auth() + verifyClerkToken
+  try {
+    const clerkAuth = await auth({ acceptsToken: 'oauth_token' });
+    const result = verifyClerkToken(clerkAuth, bearerToken);
+    if (result?.extra?.userId) authInfo = result;
+  } catch (error) {
+    console.warn('[MCP] Clerk auth() failed, will try direct JWT:', error);
+  }
+
+  // Strategy 2: Direct JWT verification (fallback for CLI/non-browser contexts)
+  if (!authInfo && bearerToken) {
+    console.log('[MCP] Falling back to direct JWT verification');
+    authInfo = await verifyClerkJwtDirect(bearerToken);
+  }
+
+  // Eagerly create/touch agent_connection on ANY authenticated request
+  // (including initialize), so connections appear in the dashboard immediately.
+  // Tool handlers still call requireApproval() as a fallback safety net.
+  if (authInfo) {
+    const userId = authInfo.extra?.userId as string | undefined;
+    const clientId = (authInfo as Record<string, unknown>).clientId as string | undefined;
+    if (userId && clientId) {
+      resolveConnection(userId, clientId).catch((err) =>
+        console.error('[MCP] Eager connection creation failed:', err)
+      );
+    }
+  }
+
+  return authInfo;
+};
+
+// All verbs run behind auth: unauthenticated requests — including the
+// streamable-HTTP GET (SSE) and DELETE (session teardown) — must get the
+// 401 + WWW-Authenticate handshake, not an unauthenticated handler.
+const authedHandler = experimental_withMcpAuth(
   handler,
-  async (_req, bearerToken) => {
-    let authInfo: ReturnType<typeof verifyClerkToken> | Awaited<ReturnType<typeof verifyClerkJwtDirect>> | undefined;
-
-    // Strategy 1: Try Clerk's built-in auth() + verifyClerkToken
-    try {
-      const clerkAuth = await auth({ acceptsToken: 'oauth_token' });
-      const result = verifyClerkToken(clerkAuth, bearerToken);
-      if (result?.extra?.userId) authInfo = result;
-    } catch (error) {
-      console.warn('[MCP] Clerk auth() failed, will try direct JWT:', error);
-    }
-
-    // Strategy 2: Direct JWT verification (fallback for CLI/non-browser contexts)
-    if (!authInfo && bearerToken) {
-      console.log('[MCP] Falling back to direct JWT verification');
-      authInfo = await verifyClerkJwtDirect(bearerToken);
-    }
-
-    // Eagerly create/touch agent_connection on ANY authenticated request
-    // (including initialize), so connections appear in the dashboard immediately.
-    // Tool handlers still call requireApproval() as a fallback safety net.
-    if (authInfo) {
-      const userId = authInfo.extra?.userId as string | undefined;
-      const clientId = (authInfo as Record<string, unknown>).clientId as string | undefined;
-      if (userId && clientId) {
-        resolveConnection(userId, clientId).catch((err) =>
-          console.error('[MCP] Eager connection creation failed:', err)
-        );
-      }
-    }
-
-    return authInfo;
-  },
+  verifyMcpAuth,
   {
     required: true,
     resourceMetadataPath: '/.well-known/oauth-protected-resource/mcp',
   }
 );
 
-export const GET = handler;
-export const DELETE = handler;
+export const POST = authedHandler;
+export const GET = authedHandler;
+export const DELETE = authedHandler;
