@@ -1,77 +1,282 @@
-import { SignInButton, SignUpButton, Show } from '@clerk/nextjs';
+import { SignUpButton, Show } from '@clerk/nextjs';
 import Link from 'next/link';
+import { Shield } from 'lucide-react';
+
+/* ─── Landing ─────────────────────────────────────────────────────────────
+   Nav and footer come from the root layout, so this file is the page body
+   only. All colors are design tokens (globals.css) — no raw hex. */
+
+const heroCta =
+  'rounded-sm bg-primary px-7 py-3 text-[15px] font-semibold text-primary-foreground hover:opacity-90';
 
 export default async function LandingPage() {
   return (
-    <div className="flex flex-col items-center justify-center min-h-[calc(100vh-64px)] p-8">
-      <div className="max-w-3xl text-center space-y-8">
-        <h1 className="text-5xl font-extrabold tracking-tight sm:text-7xl bg-clip-text text-transparent bg-gradient-to-r from-brand-purple to-brand-glow">
-          Agent Security, Solved.
-        </h1>
-        <p className="text-xl text-gray-800 max-w-2xl mx-auto">
-          Give your AI agents access to Google APIs safely. 
-          Use standard Google SDKs while strictly controlling their read, write, and delete permissions.
-        </p>
-        
-        <div className="flex gap-4 justify-center pt-8">
-          <Show when="signed-out">
-            <SignUpButton mode="modal" fallbackRedirectUrl="/dashboard" signInFallbackRedirectUrl="/dashboard">
-              <button className="rounded-full bg-brand-purple px-8 py-3.5 text-sm font-semibold text-white shadow-sm hover:opacity-90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-purple transition-all">
-                Get Started
-              </button>
-            </SignUpButton>
-          </Show>
-          <Show when="signed-in">
+    <>
+      {/* ── Hero ──────────────────────────────────────────────────────── */}
+      <section className="px-6 pt-16 pb-16 text-center sm:px-8 sm:pt-20">
+        <div className="mx-auto flex max-w-[880px] flex-col items-center gap-6">
+          <div className="flex flex-wrap justify-center gap-2.5">
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-gmail-border bg-gmail-bg px-3 py-1 text-[13px] font-semibold text-gmail">
+              <span className="h-[7px] w-[7px] rounded-full bg-gmail" />
+              Gmail
+            </span>
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-sheets-border bg-sheets-bg px-3 py-1 text-[13px] font-semibold text-sheets">
+              <span className="h-[7px] w-[7px] rounded-full bg-sheets" />
+              Google Sheets — new
+            </span>
+          </div>
+
+          <h1 className="text-[40px] font-extrabold leading-[1.05] tracking-[-0.03em] text-foreground sm:text-[60px]">
+            Your agents can work your{' '}
+            <span className="text-primary">Sheets and Gmail.</span>
+            <br />
+            You hold the keys.
+          </h1>
+
+          <p className="mx-auto max-w-[640px] text-[17px] leading-[1.55] text-muted-foreground sm:text-[19px]">
+            Read and write Google Sheets. Send email from Gmail — even across
+            multiple accounts. Every request passes through your rules first.
+          </p>
+
+          <div className="flex flex-col gap-3 pt-1 sm:flex-row sm:justify-center">
+            <Show when="signed-out">
+              <SignUpButton
+                mode="modal"
+                fallbackRedirectUrl="/dashboard"
+                signInFallbackRedirectUrl="/dashboard"
+              >
+                <button className={heroCta}>Get Started — it&apos;s free</button>
+              </SignUpButton>
+            </Show>
+            <Show when="signed-in">
+              <Link href="/dashboard" className={`${heroCta} inline-block`}>
+                Go to Dashboard
+              </Link>
+            </Show>
             <Link
-              href="/dashboard"
-              className="rounded-full bg-brand-purple px-8 py-3.5 text-sm font-semibold text-white shadow-sm hover:opacity-90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-purple transition-all"
+              href="/setup"
+              className="rounded-sm border border-border bg-card px-7 py-3 text-[15px] font-semibold text-foreground hover:border-ring"
             >
-              Go to Dashboard
+              Setup Guide
             </Link>
-          </Show>
-          <Link href="/setup" className="rounded-full px-8 py-3.5 text-sm font-semibold text-gray-900 ring-1 ring-inset ring-brand-purple/20 hover:ring-brand-purple/40">
-            Setup Guide
-          </Link>
-        </div>
+          </div>
 
-        <div className="mt-16 grid grid-cols-1 gap-8 sm:grid-cols-3 text-left">
-          <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
-            <h3 className="font-semibold text-gray-900 mb-2">Standard Google SDKs</h3>
-            <p className="text-sm text-gray-800">Works with official Python and Node.js Google SDKs. Just point the endpoint at your proxy and go.</p>
-          </div>
-          <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
-            <h3 className="font-semibold text-gray-900 mb-2">Content Filtering</h3>
-            <p className="text-sm text-gray-800">Use regular expressions to block agents from reading sensitive emails like 2FA or Password Resets.</p>
-          </div>
-          <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
-            <h3 className="font-semibold text-gray-900 mb-2">Deletion Safeguards</h3>
-            <p className="text-sm text-gray-800">Whitelist specific domains for deletion and globally block &quot;Empty Trash&quot; commands.</p>
-          </div>
-        </div>
-
-        {/* Google Data Usage Section */}
-        <div className="mt-16 bg-brand-purple/5 border border-brand-purple/20 p-8 rounded-3xl text-left shadow-sm">
-          <div className="flex items-start gap-4">
-            <div className="bg-brand-purple/10 p-3 rounded-2xl">
-              <svg className="w-6 h-6 text-brand-purple" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-              </svg>
+          {/* Demo video, framed as a browser window */}
+          <div className="mt-6 w-full max-w-[800px] rounded-lg border border-border bg-card p-2.5 shadow-lg">
+            <div className="flex items-center gap-1.5 px-1.5 pb-2.5 pt-0.5">
+              <span className="h-2.5 w-2.5 rounded-full bg-secondary" />
+              <span className="h-2.5 w-2.5 rounded-full bg-secondary" />
+              <span className="h-2.5 w-2.5 rounded-full bg-secondary" />
+              <span className="flex-1 text-center font-mono text-[12px] text-subtle">
+                FGAC × Google Sheets — demo
+              </span>
             </div>
-            <div>
-              <h3 className="text-lg font-semibold text-gray-900 mb-2">How we use Google Data</h3>
-              <p className="text-gray-600 mb-4 leading-relaxed">
-              FGAC.ai requires access to your Gmail account (via scopes like <code className="bg-brand-purple/10 px-1.5 py-0.5 rounded text-brand-purple text-sm">gmail.readonly</code>, <code className="bg-brand-purple/10 px-1.5 py-0.5 rounded text-brand-purple text-sm">gmail.send</code>, and <code className="bg-brand-purple/10 px-1.5 py-0.5 rounded text-brand-purple text-sm">gmail.modify</code>) to act as a secure proxy between your inbox and your AI agents.
+            <div className="relative aspect-video w-full overflow-hidden rounded-sm bg-surface-inverse">
+              <iframe
+                src="https://share.descript.com/embed/Fv9pwXugLUa"
+                title="FGAC Google Sheets demo"
+                allowFullScreen
+                className="absolute inset-0 h-full w-full border-0"
+              />
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* ── What it does ──────────────────────────────────────────────── */}
+      <section className="px-6 pb-16 pt-4 sm:px-8">
+        <div className="mx-auto grid max-w-[1120px] gap-5 md:grid-cols-3">
+          <div className="flex flex-col gap-3 rounded-lg border border-border bg-card p-7">
+            <span className="self-start rounded-full border border-sheets-border bg-sheets-bg px-2.5 py-0.5 text-[12px] font-semibold text-sheets">
+              Sheets
+            </span>
+            <h3 className="text-[19px] font-bold tracking-[-0.01em] text-foreground">
+              Read &amp; write Sheets — only the ones you pick
+            </h3>
+            <p className="text-sm leading-relaxed text-muted-foreground">
+              Expose individual spreadsheets with the Google Picker. Grant
+              read-only or read/write per sheet, per agent. Everything else stays
+              invisible.
+            </p>
+            <div className="mt-auto flex flex-wrap items-center gap-2 rounded-sm bg-surface-inverse px-3.5 py-3 font-mono text-[13px] text-surface-inverse-foreground">
+              <span className="font-semibold text-primary">sheets_write</span>
+              <span>Q3 Pipeline</span>
+              <span className="rounded-xs bg-success px-1.5 py-px text-[11px] text-success-foreground">
+                ✓ allowed
+              </span>
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-3 rounded-lg border border-border bg-card p-7">
+            <span className="self-start rounded-full border border-gmail-border bg-gmail-bg px-2.5 py-0.5 text-[12px] font-semibold text-gmail">
+              Gmail
+            </span>
+            <h3 className="text-[19px] font-bold tracking-[-0.01em] text-foreground">
+              Send with Gmail — to an allowlist you control
+            </h3>
+            <p className="text-sm leading-relaxed text-muted-foreground">
+              Agents send real email from your address, but only to recipients
+              and domains you approve. 2FA codes and password resets are never
+              readable.
+            </p>
+            <div className="mt-auto flex flex-wrap items-center gap-2 rounded-sm bg-surface-inverse px-3.5 py-3 font-mono text-[13px] text-surface-inverse-foreground">
+              <span className="font-semibold text-primary">gmail_send</span>
+              <span>→ intern@evil.co</span>
+              <span className="rounded-xs bg-error px-1.5 py-px text-[11px] text-error-foreground">
+                ✕ blocked
+              </span>
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-3 rounded-lg border border-border bg-card p-7">
+            <span className="self-start rounded-full border border-brand-purple/25 bg-brand-purple/10 px-2.5 py-0.5 text-[12px] font-semibold text-brand-purple">
+              Multi-account
+            </span>
+            <h3 className="text-[19px] font-bold tracking-[-0.01em] text-foreground">
+              Many inboxes, one agent
+            </h3>
+            <p className="text-sm leading-relaxed text-muted-foreground">
+              Family or teammates delegate their Gmail from their own dashboard.
+              Your agent switches inboxes with a single parameter — each under
+              its own rules.
+            </p>
+            <div className="mt-auto flex flex-wrap items-center gap-2 rounded-sm bg-surface-inverse px-3.5 py-3 font-mono text-[13px] text-surface-inverse-foreground">
+              <span className="font-semibold text-primary">gmail_list</span>
+              <span>account=mom@gmail.com</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* ── Three steps ───────────────────────────────────────────────── */}
+      <section className="border-y border-border bg-card px-6 py-16 sm:px-8">
+        <div className="mx-auto max-w-[1120px]">
+          <h2 className="mb-10 text-center text-[28px] font-extrabold tracking-[-0.02em] text-foreground">
+            Live in three steps
+          </h2>
+          <div className="grid gap-8 md:grid-cols-3">
+            <div className="flex flex-col gap-2.5">
+              <span className="flex h-8 w-8 items-center justify-center rounded-full bg-primary-muted text-sm font-bold text-primary">
+                1
+              </span>
+              <h3 className="text-base font-bold text-foreground">
+                Add one MCP URL
+              </h3>
+              <p className="text-sm leading-relaxed text-muted-foreground">
+                Claude Code, Cursor, Windsurf, Claude Desktop — same URL
+                everywhere:{' '}
+                <code className="rounded-xs border border-border bg-background px-1.5 py-0.5 font-mono text-xs">
+                  fgac.ai/api/mcp
+                </code>
               </p>
-              <p className="text-gray-600 leading-relaxed">
-              When your AI agent makes an API request, we strictly enforce your custom allowlists and blocklists before forwarding the exact request to the Google API. We never permanently store your email content, and your data is never used to train our AI models. No humans read your emails.
-            </p>
-            <p className="text-sm">
-              Our use of information received from Google APIs will adhere to the <Link href="/privacy" className="underline text-brand-purple hover:text-brand-purple/80">Google API Services User Data Policy</Link>, including the <strong>Limited Use</strong> requirements.
-            </p>
+            </div>
+            <div className="flex flex-col gap-2.5">
+              <span className="flex h-8 w-8 items-center justify-center rounded-full bg-primary-muted text-sm font-bold text-primary">
+                2
+              </span>
+              <h3 className="text-base font-bold text-foreground">
+                Sign in with Google
+              </h3>
+              <p className="text-sm leading-relaxed text-muted-foreground">
+                Your agent opens a browser to link your account. New connections
+                wait as pending until you approve them.
+              </p>
+            </div>
+            <div className="flex flex-col gap-2.5">
+              <span className="flex h-8 w-8 items-center justify-center rounded-full bg-primary-muted text-sm font-bold text-primary">
+                3
+              </span>
+              <h3 className="text-base font-bold text-foreground">
+                Set your rules
+              </h3>
+              <p className="text-sm leading-relaxed text-muted-foreground">
+                Pick sheets to expose, allowlist send targets, block sensitive
+                reads. Rules are reusable across agent profiles.
+              </p>
             </div>
           </div>
         </div>
-      </div>
-    </div>
+      </section>
+
+      {/* ── Google data usage ─────────────────────────────────────────── */}
+      <section className="px-6 py-16 sm:px-8">
+        <div className="mx-auto max-w-[1120px]">
+          <div className="mb-9 text-center">
+            <div className="mb-3.5 inline-flex h-11 w-11 items-center justify-center rounded-md bg-primary-muted">
+              <Shield className="h-[22px] w-[22px] text-primary" />
+            </div>
+            <h2 className="mb-2.5 text-[28px] font-extrabold tracking-[-0.02em] text-foreground">
+              How we use Google Data
+            </h2>
+            <p className="mx-auto max-w-[720px] text-[15px] leading-[1.65] text-muted-foreground">
+              FGAC.ai requests Gmail and Sheets scopes to act as a secure proxy
+              between Google and your AI agents. Every request is checked against
+              your rules before it is forwarded — verbatim — to Google.
+            </p>
+          </div>
+          <div className="grid gap-5 md:grid-cols-3">
+            <div className="rounded-lg border border-border bg-card p-6">
+              <h3 className="mb-1.5 text-[15px] font-bold text-foreground">
+                Nothing stored
+              </h3>
+              <p className="text-sm leading-relaxed text-muted-foreground">
+                We never permanently store your email or spreadsheet content.
+                Requests pass through; your data doesn&apos;t stay.
+              </p>
+            </div>
+            <div className="rounded-lg border border-border bg-card p-6">
+              <h3 className="mb-1.5 text-[15px] font-bold text-foreground">
+                Never trained on
+              </h3>
+              <p className="text-sm leading-relaxed text-muted-foreground">
+                Your data is never used to train AI models, and no humans read
+                your mail or sheets. Ever.
+              </p>
+            </div>
+            <div className="rounded-lg border border-border bg-card p-6">
+              <h3 className="mb-1.5 text-[15px] font-bold text-foreground">
+                Limited Use compliant
+              </h3>
+              <p className="text-sm leading-relaxed text-muted-foreground">
+                Our use of Google API data adheres to the{' '}
+                <Link href="/privacy" className="text-primary underline">
+                  Google API Services User Data Policy
+                </Link>
+                , including the Limited Use requirements.
+              </p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* ── Closing CTA ───────────────────────────────────────────────── */}
+      <section className="px-6 pb-20 pt-2 text-center sm:px-8">
+        <h2 className="mb-2 text-[30px] font-extrabold tracking-[-0.02em] text-foreground">
+          Deny by default. Allow on your terms.
+        </h2>
+        <p className="mb-6 text-base text-muted-foreground">
+          Free for personal use. Connected in under a minute.
+        </p>
+        <Show when="signed-out">
+          <SignUpButton
+            mode="modal"
+            fallbackRedirectUrl="/dashboard"
+            signInFallbackRedirectUrl="/dashboard"
+          >
+            <button className="rounded-sm bg-primary px-8 py-3.5 text-[15px] font-semibold text-primary-foreground hover:opacity-90">
+              Get Started
+            </button>
+          </SignUpButton>
+        </Show>
+        <Show when="signed-in">
+          <Link
+            href="/dashboard"
+            className="inline-block rounded-sm bg-primary px-8 py-3.5 text-[15px] font-semibold text-primary-foreground hover:opacity-90"
+          >
+            Go to Dashboard
+          </Link>
+        </Show>
+      </section>
+    </>
   );
 }
