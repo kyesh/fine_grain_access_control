@@ -26,6 +26,7 @@ import { filterLiveDelegatedAccess } from '@/db/delegationQueries';
 import { clerkClient } from '@clerk/nextjs/server';
 import safeRegex from 'safe-regex';
 import { resolveDbUser } from '@/db/userHelpers';
+import { captureServerEvent } from '@/lib/posthogServer';
 import { TOOL_DEFS, toolAnnotations, type FgacToolDef } from './toolDefs';
 import {
   classifyGoogleApiCall, extractSendRecipients, collectLabelIds,
@@ -504,6 +505,53 @@ async function requireApproval(authInfo: AuthInfo | undefined): Promise<Connecti
   return result;
 }
 
+// ─── Analytics Instrumentation ──────────────────────────────────────────────
+
+type ToolAnalyticsResult = { isError?: boolean; content?: Array<{ type?: string; text?: string }> };
+
+/**
+ * Tool responses follow a strict convention (textResult/errorResult above):
+ * isError marks upstream/auth failures, and policy outcomes carry a leading
+ * ⏳ (pending approval), 🚫 (denied by FGAC policy), or ❌/⚠️ (failed).
+ */
+function classifyToolOutcome(result: ToolAnalyticsResult): string {
+  if (result.isError) return 'error';
+  const text = result.content?.[0]?.text ?? '';
+  if (text.startsWith('⏳')) return 'pending_approval';
+  if (text.startsWith('🚫')) return 'denied_by_policy';
+  if (text.startsWith('❌') || text.startsWith('⚠️')) return 'failed';
+  return 'success';
+}
+
+function withToolAnalytics<R extends ToolAnalyticsResult>(
+  tool: string,
+  fn: (params: unknown, extra: { authInfo?: AuthInfo }) => Promise<R> | R,
+) {
+  return async (params: unknown, extra: { authInfo?: AuthInfo }): Promise<R> => {
+    const started = Date.now();
+    // Distinct id = the caller's Clerk user id, matching the dashboard's
+    // identify() — MCP usage lands on the same PostHog person.
+    const track = (outcome: string) => captureServerEvent(
+      extra?.authInfo?.extra?.userId ?? 'anonymous-mcp',
+      'mcp_tool_call',
+      {
+        tool,
+        client_id: extra?.authInfo?.clientId,
+        outcome,
+        duration_ms: Date.now() - started,
+      },
+    );
+    try {
+      const result = await fn(params, extra);
+      track(classifyToolOutcome(result));
+      return result;
+    } catch (err) {
+      track('exception');
+      throw err;
+    }
+  };
+}
+
 type ResolvedAccount = { targetEmail: string; token: string; proxyKeyId: string };
 type ResolvedError = { error: string };
 
@@ -600,6 +648,15 @@ function toolConfig<S extends z.ZodRawShape>(def: FgacToolDef, inputSchema: S) {
 
 const handler = createMcpHandler(
   (server) => {
+    // Every registered tool is wrapped with a PostHog `mcp_tool_call` capture.
+    // Patching registerTool here keeps the registrations below untouched (their
+    // schema-inferred param types intact) and instruments future tools too.
+    const rawRegisterTool = server.registerTool.bind(server) as (
+      name: string, config: unknown, cb: unknown,
+    ) => ReturnType<typeof server.registerTool>;
+    server.registerTool = ((name: string, config: unknown, cb: unknown) =>
+      rawRegisterTool(name, config, withToolAnalytics(name, cb as Parameters<typeof withToolAnalytics>[1]))
+    ) as unknown as typeof server.registerTool;
 
     // ── list_accounts ─────────────────────────────────────────────────
     server.registerTool(
