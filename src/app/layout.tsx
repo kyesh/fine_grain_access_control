@@ -1,6 +1,5 @@
 import {
   ClerkProvider,
-  SignUpButton,
   Show,
   UserButton
 } from '@clerk/nextjs';
@@ -10,6 +9,8 @@ import './globals.css';
 import Link from 'next/link';
 import { PostHogProviderWrapper } from './providers';
 import SuspendedPostHogPageView from './PostHogPageView';
+import PostHogIdentify from './PostHogIdentify';
+import { SignUpCta } from './SignUpCta';
 import { NavLink } from './NavLink';
 
 const geist = Geist({
@@ -63,9 +64,7 @@ export default function RootLayout({
 
                   <div className="flex items-center gap-4 shrink-0">
                     <Show when="signed-out">
-                      <SignUpButton mode="modal" fallbackRedirectUrl="/dashboard" signInFallbackRedirectUrl="/dashboard">
-                        <button className="rounded-sm bg-primary px-3 py-1.5 text-sm font-semibold text-primary-foreground hover:opacity-90">Sign Up</button>
-                      </SignUpButton>
+                      <SignUpCta location="nav" className="rounded-sm bg-primary px-3 py-1.5 text-sm font-semibold text-primary-foreground hover:opacity-90">Sign Up</SignUpCta>
                     </Show>
                     <Show when="signed-in">
                       <UserButton
@@ -97,6 +96,7 @@ export default function RootLayout({
             <main className="flex-1">
               <PostHogProviderWrapper>
                 <SuspendedPostHogPageView />
+                <PostHogIdentify />
                 {children}
               </PostHogProviderWrapper>
             </main>
