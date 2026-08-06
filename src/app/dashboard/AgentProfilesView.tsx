@@ -41,6 +41,9 @@ interface Connection {
   proxyKeyId: string | null;
   createdAt: string;
   lastUsedAt: string | null;
+  // Set when the connection was provisioned via the partner handoff
+  // (/oauth/authorize consent) rather than agent-initiated DCR.
+  partnerApp?: { name: string; logoUrl: string | null } | null;
 }
 
 interface AccessibleEmail {
@@ -911,7 +914,10 @@ function ApprovedAgentCard({
             {conn.nickname || conn.clientName || conn.clientId}
           </button>
         )}
-        <Badge tone="success">Approved</Badge>
+        <span className="flex items-center gap-1.5">
+          {conn.partnerApp && <Badge tone="info">Partner · {conn.partnerApp.name}</Badge>}
+          <Badge tone="success">Approved</Badge>
+        </span>
       </div>
       <div className="mt-2 flex items-center justify-between gap-2">
         <span className="text-[11px] text-subtle">Last used {timeAgo(conn.lastUsedAt)}</span>

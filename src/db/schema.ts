@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, uuid, uniqueIndex } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, uuid, uniqueIndex, jsonb, integer } from 'drizzle-orm/pg-core';
 
 // ─── Users ───────────────────────────────────────────────────────────────────
 // Core user table. proxyKey removed — keys now live in proxy_keys table.
@@ -124,9 +124,80 @@ export const agentConnections = pgTable('agent_connections', {
   nickname: text('nickname'),                      // User-assigned label (e.g., "My Work Agent")
   proxyKeyId: uuid('proxy_key_id').references(() => proxyKeys.id, { onDelete: 'set null' }), // NULL = pending
   status: text('status').notNull().default('pending'), // 'pending', 'approved', 'blocked'
+  // Partner-app provenance: set when the connection was provisioned through the
+  // /oauth/authorize consent interstitial for a registered partner app. The
+  // manifestVersion pins which manifest revision the user consented to — a
+  // registry manifest bump must NOT widen this connection until re-consent.
+  partnerAppId: uuid('partner_app_id').references(() => partnerApps.id, { onDelete: 'set null' }),
+  manifestVersion: integer('manifest_version'),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   approvedAt: timestamp('approved_at'),
   lastUsedAt: timestamp('last_used_at'),
 }, (table) => [
   uniqueIndex('connection_user_client_unique').on(table.userId, table.clientId),
+]);
+
+// ─── Partner Apps ───────────────────────────────────────────────────────────
+// Registry of third-party applications that hand their users off to FGAC via
+// the /oauth/authorize consent interstitial. Registered out-of-band by
+// scripts/register-partner-app.ts (which also creates the pre-registered Clerk
+// OAuth application with consent_screen_enabled=false — FGAC's interstitial is
+// the ONLY consent screen). The manifest declares the app's requested "agent
+// role"; consent-time provisioning copies it into concrete keys/rules so later
+// manifest edits can never silently widen existing grants.
+export const partnerApps = pgTable('partner_apps', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  clientId: text('client_id').notNull().unique(),  // Clerk OAuth app client_id
+  clerkOauthAppId: text('clerk_oauth_app_id'),     // Clerk "oa_..." id, for admin ops
+  name: text('name').notNull(),                    // e.g. "Data Driven Job Search"
+  logoUrl: text('logo_url'),
+  // { services: ['gmail'], access: 'read_only', rule_templates: [...],
+  //   notifications?: { trigger: 'new_email' } }
+  manifest: jsonb('manifest').notNull(),
+  manifestVersion: integer('manifest_version').notNull().default(1),
+  redirectUris: jsonb('redirect_uris').notNull(),  // string[] — validated on /oauth/authorize
+  webhookUrl: text('webhook_url'),                 // partner's notification receiver
+  webhookSecret: text('webhook_secret'),           // HMAC-SHA256 signing secret
+  status: text('status').notNull().default('active'), // 'active', 'suspended'
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+});
+
+// ─── Notification Subscriptions ─────────────────────────────────────────────
+// One row per (partner connection, watched mailbox). Created inside the consent
+// provisioning transaction when the partner's manifest requests notifications.
+// lastHistoryId is the Gmail history cursor the diff resumes from; the watch is
+// re-armed by /api/cron/renew-watches (Gmail watches expire after 7 days).
+export const notificationSubscriptions = pgTable('notification_subscriptions', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  connectionId: uuid('connection_id').references(() => agentConnections.id, { onDelete: 'cascade' }).notNull(),
+  targetEmail: text('target_email').notNull(),
+  lastHistoryId: text('last_history_id'),
+  watchExpiresAt: timestamp('watch_expires_at'),   // NULL = watch not armed (cron retries)
+  status: text('status').notNull().default('active'), // 'active', 'suspended', 'cancelled'
+  consecutiveFailures: integer('consecutive_failures').notNull().default(0),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex('subscription_connection_email_unique').on(table.connectionId, table.targetEmail),
+]);
+
+// ─── Webhook Deliveries ─────────────────────────────────────────────────────
+// The delivery outbox AND the user-facing audit trail. One row per
+// (subscription, Gmail message) — the unique index is what makes Pub/Sub's
+// at-least-once redelivery idempotent. The drainer groups due rows per
+// subscription into one thin ping (message IDs only, never content).
+// Backoff ladder: 1m, 5m, 15m, 1h, 6h, 24h → dead.
+export const webhookDeliveries = pgTable('webhook_deliveries', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  subscriptionId: uuid('subscription_id').references(() => notificationSubscriptions.id, { onDelete: 'cascade' }).notNull(),
+  messageId: text('message_id').notNull(),         // Gmail message id (opaque to us)
+  status: text('status').notNull().default('pending'), // 'pending', 'delivering', 'delivered', 'dead'
+  attempts: integer('attempts').notNull().default(0),
+  nextAttemptAt: timestamp('next_attempt_at').defaultNow().notNull(),
+  lastError: text('last_error'),
+  deliveredAt: timestamp('delivered_at'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex('delivery_subscription_message_unique').on(table.subscriptionId, table.messageId),
 ]);

@@ -9,8 +9,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@clerk/nextjs/server';
 import { db } from '@/db';
-import { agentConnections, users, proxyKeys } from '@/db/schema';
-import { eq, and } from 'drizzle-orm';
+import { agentConnections, users, proxyKeys, partnerApps } from '@/db/schema';
+import { eq, and, inArray } from 'drizzle-orm';
+import { cancelSubscriptionsForConnection } from '@/lib/notifications/subscriptions';
 
 export async function GET() {
   const { userId: clerkUserId } = await auth();
@@ -30,6 +31,13 @@ export async function GET() {
     where: eq(agentConnections.userId, user.id),
   });
 
+  // Partner provenance for the dashboard badge
+  const partnerIds = [...new Set(connections.map(c => c.partnerAppId).filter((id): id is string => !!id))];
+  const partners = partnerIds.length > 0
+    ? await db.select().from(partnerApps).where(inArray(partnerApps.id, partnerIds))
+    : [];
+  const partnerById = new Map(partners.map(p => [p.id, p]));
+
   // Also get user's proxy keys for the approval dropdown
   const keys = await db.query.proxyKeys.findMany({
     where: eq(proxyKeys.userId, user.id),
@@ -46,6 +54,12 @@ export async function GET() {
       createdAt: c.createdAt,
       approvedAt: c.approvedAt,
       lastUsedAt: c.lastUsedAt,
+      partnerApp: c.partnerAppId && partnerById.has(c.partnerAppId)
+        ? {
+            name: partnerById.get(c.partnerAppId)!.name,
+            logoUrl: partnerById.get(c.partnerAppId)!.logoUrl,
+          }
+        : null,
     })),
     availableKeys: keys.map(k => ({
       id: k.id,
@@ -133,9 +147,29 @@ export async function POST(req: NextRequest) {
     }
 
     case 'block': {
+      const detachedKeyId = connection.proxyKeyId;
+
       await db.update(agentConnections)
         .set({ status: 'blocked', proxyKeyId: null })
         .where(eq(agentConnections.id, connectionId));
+
+      // Partner-provisioned keys exist 1:1 for their connection (created by the
+      // consent interstitial, never user-shared) — detaching the connection
+      // must kill the REST-proxy path too, so revoke the key outright.
+      // Agent-profile keys (no partnerAppId) are user-owned and stay usable.
+      if (connection.partnerAppId && detachedKeyId) {
+        await db.update(proxyKeys)
+          .set({ revokedAt: new Date() })
+          .where(and(eq(proxyKeys.id, detachedKeyId), eq(proxyKeys.userId, user.id)));
+      }
+
+      // A blocked partner must also stop being NOTIFIED — cancel its
+      // subscriptions and stop the Gmail watch if no one else needs it.
+      try {
+        await cancelSubscriptionsForConnection(connectionId);
+      } catch (err) {
+        console.error(`[Connections] Subscription teardown failed for ${connectionId}:`, err);
+      }
 
       return NextResponse.json({ status: 'blocked' });
     }

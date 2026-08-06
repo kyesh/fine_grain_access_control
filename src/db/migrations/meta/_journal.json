@@ -43,6 +43,13 @@
       "when": 1785070083590,
       "tag": "0005_overconfident_vapor",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1786032376763,
+      "tag": "0006_cool_living_lightning",
+      "breakpoints": true
     }
   ]
 }

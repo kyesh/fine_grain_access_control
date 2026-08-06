@@ -14,6 +14,7 @@ We ship **4 distinct packages**, each designed for a different client and use ca
 | 2 | **OpenClaw Skill** | OAuth baked into local scripts | `SKILL.md` + local scripts (`auth.js`, `gmail.js`, etc.) | OpenClaw |
 | 3 | **Claude Code MCP Plugin** | OAuth (via hosted MCP server) | `claude mcp add` command | Claude Code (MCP users) |
 | 4 | **Claude Code CLI Plugin** | OAuth baked into local scripts (shared w/ #2) | `SKILL.md` + local scripts | Claude Code (CLI users) |
+| 5 | **Partner Handoff** | Pre-registered OAuth app → FGAC consent interstitial (consent-time provisioning, no pending step) | Nothing — `/oauth/authorize` + `/api/auth/partner-token`; optional signed webhooks | Third-party web apps with server-side agents |
 
 ## Key Design Principles
 
@@ -116,3 +117,31 @@ deny-by-default in `src/app/api/mcp/googleApiPolicy.ts`:
 | Dashboard connections | `src/app/dashboard/ConnectionsPanel.tsx` |
 | Connections API | `src/app/api/connections/route.ts` |
 
+
+## Partner Handoff (Package #5)
+
+Third-party apps registered in the `partner_apps` table (via
+`scripts/register-partner-app.ts`, per Clerk instance) hand signed-in users to
+FGAC's consent interstitial:
+
+```
+Partner site → fgac.ai/oauth/authorize?client_id=…
+  → [Clerk session check → sign-in if needed]
+  → FGAC consent (manifest-rendered permissions + mailbox picker)
+  → Approve = provisioning transaction (key + email access + rule copies +
+    approved connection pinned to manifestVersion [+ notification subscription])
+  → 303 into Clerk /oauth/authorize (consent_screen_enabled=false → silent code)
+  → partner callback → token exchange → optional /api/auth/partner-token → sk_proxy_
+```
+
+Bypassing the interstitial (driving Clerk's authorize directly) yields tokens
+whose connection is pending-by-default — tools refuse until dashboard approval.
+
+**Push notifications** (optional, manifest `notifications`): Gmail `users.watch`
+→ Pub/Sub (`GMAIL_PUBSUB_TOPIC`, same GCP project as the Google OAuth client —
+dev `dev-fgac-ai`, prod `fine-grain-access-control`) → `/api/webhooks/gmail`
+(OIDC-verified) → read-rule filter → `webhook_deliveries` outbox → HMAC-signed
+thin ping (message IDs only) → partner webhook. Crons: delivery drainer
+(per-minute) + watch renewal (daily) in `vercel.json`. Infra:
+`scripts/setup-gmail-push.ts`. Design + spike evidence:
+`docs/implementation_plans/third-party-handoff-permissions_v6.md`.
