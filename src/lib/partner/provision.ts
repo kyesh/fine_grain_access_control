@@ -1,0 +1,133 @@
+/**
+ * Consent-time provisioning: everything the user assembles by hand for an MCP
+ * agent today, executed as one transaction when they click Approve on the
+ * /oauth/authorize interstitial.
+ *
+ *  1. Proxy key labeled with the partner name
+ *  2. key_email_access for the selected mailboxes (delegation-backed for
+ *     non-own addresses — same invariant as createProxyKey)
+ *  3. COPIES of the manifest's rule templates bound to that key (copies, not
+ *     references: a later manifest edit must never widen an existing grant)
+ *  4. agent_connections row approved + pinned to the consented manifestVersion
+ *  5. (post-transaction) notification subscription + watch arm, if requested
+ */
+import crypto from 'crypto';
+import { db } from '@/db';
+import {
+  proxyKeys, keyEmailAccess, accessRules, keyRuleAssignments,
+  agentConnections, emailDelegations, users,
+} from '@/db/schema';
+import { and, eq } from 'drizzle-orm';
+import type { PartnerManifest } from './manifest';
+import { ensureSubscription } from '@/lib/notifications/subscriptions';
+
+interface PartnerAppRow {
+  id: string;
+  clientId: string;
+  name: string;
+  manifestVersion: number;
+  webhookUrl: string | null;
+}
+
+interface ProvisionInput {
+  user: { id: string; email: string };
+  partner: PartnerAppRow;
+  manifest: PartnerManifest;
+  selectedEmails: string[];
+}
+
+export interface ProvisionOutput {
+  connectionId: string;
+  proxyKeyId: string;
+}
+
+export async function provisionPartnerConnection(input: ProvisionInput): Promise<ProvisionOutput> {
+  const { user, partner, manifest, selectedEmails } = input;
+  if (selectedEmails.length === 0) throw new Error('No mailbox selected');
+
+  // Resolve delegation backing BEFORE the transaction (reads only).
+  const emailBindings: Array<{ email: string; delegationId: string | null }> = [];
+  for (const email of selectedEmails) {
+    if (email.toLowerCase() === user.email.toLowerCase()) {
+      emailBindings.push({ email, delegationId: null });
+      continue;
+    }
+    const owner = await db.select().from(users)
+      .where(eq(users.email, email)).limit(1).then(r => r[0]);
+    if (!owner) throw new Error(`No FGAC account owns ${email}`);
+    const delegation = await db.select().from(emailDelegations)
+      .where(and(
+        eq(emailDelegations.ownerUserId, owner.id),
+        eq(emailDelegations.delegateUserId, user.id),
+        eq(emailDelegations.status, 'active'),
+      )).limit(1).then(r => r[0]);
+    if (!delegation) throw new Error(`No active delegation grants you access to ${email}`);
+    emailBindings.push({ email, delegationId: delegation.id });
+  }
+
+  const output = await db.transaction(async (tx) => {
+    const [key] = await tx.insert(proxyKeys).values({
+      userId: user.id,
+      key: `sk_proxy_${crypto.randomUUID().replace(/-/g, '')}`,
+      label: partner.name,
+    }).returning();
+
+    for (const binding of emailBindings) {
+      await tx.insert(keyEmailAccess).values({
+        proxyKeyId: key.id,
+        delegationId: binding.delegationId,
+        targetEmail: binding.email,
+      });
+    }
+
+    for (const template of manifest.rule_templates ?? []) {
+      const [rule] = await tx.insert(accessRules).values({
+        userId: user.id,
+        ruleName: `${partner.name}: ${template.ruleName}`,
+        service: template.service,
+        actionType: template.actionType,
+        regexPattern: template.regexPattern ?? null,
+      }).returning();
+      // Binding the copy to the key keeps it scoped — never global.
+      await tx.insert(keyRuleAssignments).values({
+        proxyKeyId: key.id,
+        accessRuleId: rule.id,
+      });
+    }
+
+    const [connection] = await tx.insert(agentConnections).values({
+      userId: user.id,
+      clientId: partner.clientId,
+      clientName: partner.name,
+      nickname: partner.name,
+      proxyKeyId: key.id,
+      status: 'approved',
+      partnerAppId: partner.id,
+      manifestVersion: partner.manifestVersion,
+      approvedAt: new Date(),
+    }).onConflictDoUpdate({
+      target: [agentConnections.userId, agentConnections.clientId],
+      set: {
+        clientName: partner.name,
+        proxyKeyId: key.id,
+        status: 'approved',
+        partnerAppId: partner.id,
+        manifestVersion: partner.manifestVersion,
+        approvedAt: new Date(),
+      },
+    }).returning();
+
+    return { connectionId: connection.id, proxyKeyId: key.id };
+  });
+
+  // Outside the transaction: watch arming talks to Gmail and must not be able
+  // to roll back a completed consent. Failure leaves watchExpiresAt NULL for
+  // the renewal cron to retry.
+  if (manifest.notifications?.trigger === 'new_email' && partner.webhookUrl) {
+    for (const binding of emailBindings) {
+      await ensureSubscription(output.connectionId, binding.email);
+    }
+  }
+
+  return output;
+}

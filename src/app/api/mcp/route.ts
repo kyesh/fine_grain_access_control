@@ -26,9 +26,10 @@ import { filterLiveDelegatedAccess } from '@/db/delegationQueries';
 import { clerkClient } from '@clerk/nextjs/server';
 import safeRegex from 'safe-regex';
 import { resolveDbUser } from '@/db/userHelpers';
+import { loadApplicableRules, checkReadRestrictions, type ApplicableRules } from '@/lib/gmailRules';
 import { TOOL_DEFS, toolAnnotations, type FgacToolDef } from './toolDefs';
 import {
-  classifyGoogleApiCall, extractSendRecipients, collectLabelIds,
+  classifyGoogleApiCall, extractSendRecipients,
 } from './googleApiPolicy';
 
 const DASHBOARD_URL = process.env.NEXT_PUBLIC_APP_URL
@@ -220,69 +221,9 @@ async function getGoogleToken(targetEmail: string, keyOwner: { id: string; email
   return tokenResponse.data?.[0]?.token || null;
 }
 
-async function loadApplicableRules(userId: string, proxyKeyId: string, targetEmail: string) {
-  const allUserRules = await db.select().from(accessRules)
-    .where(eq(accessRules.userId, userId));
-
-  const keyAssignments = await db.select().from(keyRuleAssignments)
-    .where(eq(keyRuleAssignments.proxyKeyId, proxyKeyId));
-
-  const assignedRuleIds = new Set(keyAssignments.map(a => a.accessRuleId));
-  const allAssignments = await db.select().from(keyRuleAssignments);
-  const rulesWithAssignments = new Set(allAssignments.map(a => a.accessRuleId));
-
-  return allUserRules.filter(rule => {
-    const isGlobal = !rulesWithAssignments.has(rule.id);
-    const isAssignedToThisKey = assignedRuleIds.has(rule.id);
-    const emailMatches = !rule.targetEmail ||
-      rule.targetEmail.toLowerCase() === targetEmail.toLowerCase();
-    return (isGlobal || isAssignedToThisKey) && emailMatches;
-  });
-}
-
-type ApplicableRules = Awaited<ReturnType<typeof loadApplicableRules>>;
-
-/**
- * Read-time enforcement, shared by every path that returns message content.
- * Policy: messages may APPEAR in listings, but reading content must respect
- * label blacklists (checked first — precedence), label whitelists, and content
- * read-blacklists — identically on MCP and the raw API proxy.
- *
- * Label rules consider every labelIds array in the response (thread and list
- * responses nest messages). Whitelists only apply when the response carries
- * labels at all — ID-only listings stay visible, matching the policy above.
- * Returns a user-facing restriction message, or null if the read is allowed.
- */
-function checkReadRestrictions(
-  rules: ApplicableRules,
-  message: unknown,
-): string | null {
-  const gmailRules = rules.filter(r => r.service === 'gmail');
-  const labelIds = collectLabelIds(message);
-
-  for (const rule of gmailRules.filter(r => r.actionType === 'label_blacklist')) {
-    if (rule.regexPattern && labelIds.includes(rule.regexPattern)) {
-      return `🚫 Access restricted: Email contains blacklisted label '${rule.regexPattern}'.`;
-    }
-  }
-
-  const whitelists = gmailRules.filter(r => r.actionType === 'label_whitelist' && !!r.regexPattern);
-  if (whitelists.length > 0 && labelIds.length > 0 && !whitelists.some(r => labelIds.includes(r.regexPattern!))) {
-    return '🚫 Access restricted: Email lacks a required whitelisted label.';
-  }
-
-  const bodyStr = JSON.stringify(message);
-  for (const rule of gmailRules.filter(r => r.actionType === 'read_blacklist')) {
-    if (!rule.regexPattern) continue;
-    const regexStr = rule.regexPattern.replace(/\*/g, '.*');
-    if (!safeRegex(regexStr)) continue;
-    if (new RegExp(regexStr, 'i').test(bodyStr)) {
-      return `🚫 Access restricted: Content blocked by rule '${rule.ruleName}'.`;
-    }
-  }
-
-  return null;
-}
+// loadApplicableRules / checkReadRestrictions moved to src/lib/gmailRules.ts —
+// shared with the push-notification filter so read policy and notification
+// policy can never drift apart.
 
 /**
  * Send-whitelist enforcement shared by gmail_send and google_api_modify.

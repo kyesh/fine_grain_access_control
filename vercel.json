@@ -1,0 +1,6 @@
+{
+  "crons": [
+    { "path": "/api/cron/deliver-webhooks", "schedule": "* * * * *" },
+    { "path": "/api/cron/renew-watches", "schedule": "0 6 * * *" }
+  ]
+}
