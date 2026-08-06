@@ -1,5 +1,6 @@
-import { SignUpButton, Show } from '@clerk/nextjs';
+import { Show } from '@clerk/nextjs';
 import Link from 'next/link';
+import { SignUpCta } from './SignUpCta';
 import { Shield } from 'lucide-react';
 
 /* ─── Landing ─────────────────────────────────────────────────────────────
@@ -40,13 +41,7 @@ export default async function LandingPage() {
 
           <div className="flex flex-col gap-3 pt-1 sm:flex-row sm:justify-center">
             <Show when="signed-out">
-              <SignUpButton
-                mode="modal"
-                fallbackRedirectUrl="/dashboard"
-                signInFallbackRedirectUrl="/dashboard"
-              >
-                <button className={heroCta}>Get Started — it&apos;s free</button>
-              </SignUpButton>
+              <SignUpCta location="hero" className={heroCta}>Get Started — it&apos;s free</SignUpCta>
             </Show>
             <Show when="signed-in">
               <Link href="/dashboard" className={`${heroCta} inline-block`}>
@@ -258,15 +253,12 @@ export default async function LandingPage() {
           Free for personal use. Connected in under a minute.
         </p>
         <Show when="signed-out">
-          <SignUpButton
-            mode="modal"
-            fallbackRedirectUrl="/dashboard"
-            signInFallbackRedirectUrl="/dashboard"
+          <SignUpCta
+            location="bottom_cta"
+            className="rounded-sm bg-primary px-8 py-3.5 text-[15px] font-semibold text-primary-foreground hover:opacity-90"
           >
-            <button className="rounded-sm bg-primary px-8 py-3.5 text-[15px] font-semibold text-primary-foreground hover:opacity-90">
-              Get Started
-            </button>
-          </SignUpButton>
+            Get Started
+          </SignUpCta>
         </Show>
         <Show when="signed-in">
           <Link

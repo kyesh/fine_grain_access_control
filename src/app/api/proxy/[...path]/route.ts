@@ -4,29 +4,66 @@ import { users, proxyKeys, emailDelegations, keyEmailAccess, accessRules, keyRul
 import { eq, and } from 'drizzle-orm';
 import { clerkClient } from '@clerk/nextjs/server';
 import safeRegex from 'safe-regex';
+import { captureServerEvent } from '@/lib/posthogServer';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET(request: NextRequest, { params }: { params: Promise<{ path: string[] }> }) {
-  return handleProxyRequest(request, await params);
+  return trackedProxyRequest(request, await params);
 }
 
 export async function POST(request: NextRequest, { params }: { params: Promise<{ path: string[] }> }) {
-  return handleProxyRequest(request, await params);
+  return trackedProxyRequest(request, await params);
 }
 
 export async function DELETE(request: NextRequest, { params }: { params: Promise<{ path: string[] }> }) {
-  return handleProxyRequest(request, await params);
+  return trackedProxyRequest(request, await params);
 }
 
 // Sheets values:update and batchUpdate are PUT/PATCH-shaped; without these
 // exports Next.js answers 405 before FGAC's rules ever run.
 export async function PUT(request: NextRequest, { params }: { params: Promise<{ path: string[] }> }) {
-  return handleProxyRequest(request, await params);
+  return trackedProxyRequest(request, await params);
 }
 
 export async function PATCH(request: NextRequest, { params }: { params: Promise<{ path: string[] }> }) {
-  return handleProxyRequest(request, await params);
+  return trackedProxyRequest(request, await params);
+}
+
+/** Identity resolved inside handleProxyRequest, reported back for analytics. */
+type ProxyTelemetry = { clerkUserId?: string; proxyKeyId?: string };
+
+/**
+ * Captures one `proxy_request` PostHog event per pass-through call. Distinct id
+ * is the key owner's Clerk user id (same id the dashboard identifies), so API
+ * usage merges into the same PostHog person as their web activity. A 403 can be
+ * either an FGAC denial or an upstream Google 403 — the status is recorded
+ * as-is; the key/user attribution is what matters for usage analytics.
+ */
+async function trackedProxyRequest(request: NextRequest, params: { path: string[] }) {
+  const telemetry: ProxyTelemetry = {};
+  const started = Date.now();
+  const response = await handleProxyRequest(request, params, telemetry);
+
+  const fullPath = params.path.join('/');
+  const service = fullPath.includes('spreadsheets') ? 'sheets'
+    : /^drive\/v[23]\//.test(fullPath) ? 'drive'
+    : 'gmail';
+  const outcome = response.status < 400 ? 'success'
+    : response.status === 401 ? 'auth_failed'
+    : response.status === 403 ? 'denied'
+    : 'error';
+
+  captureServerEvent(telemetry.clerkUserId ?? 'anonymous-proxy', 'proxy_request', {
+    service,
+    method: request.method,
+    status: response.status,
+    outcome,
+    duration_ms: Date.now() - started,
+    proxy_key_id: telemetry.proxyKeyId,
+  });
+
+  return response;
 }
 
 /**
@@ -44,7 +81,7 @@ function extractSheetsSpreadsheetId(fullPath: string): string | null {
   return match ? decodeURIComponent(match[1]) : null;
 }
 
-async function handleProxyRequest(request: NextRequest, params: { path: string[] }) {
+async function handleProxyRequest(request: NextRequest, params: { path: string[] }, telemetry: ProxyTelemetry) {
   try {
     const authHeader = request.headers.get('authorization');
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -87,6 +124,9 @@ async function handleProxyRequest(request: NextRequest, params: { path: string[]
     if (!dbUser) {
       return NextResponse.json({ error: 'User not found.' }, { status: 401 });
     }
+
+    telemetry.proxyKeyId = dbKey.id;
+    telemetry.clerkUserId = dbUser.clerkUserId;
 
     // ─── GOOGLE DRIVE PER-FILE ACCESS GUARD ──────────────────────────────────
     // Policy: never override Google's native API behavior for discovery —

@@ -4,6 +4,7 @@ import { eq } from 'drizzle-orm';
 import { db } from '@/db';
 import { users } from '@/db/schema';
 import { tombstoneUser } from '@/db/tombstoneUser';
+import { captureServerEvent } from '@/lib/posthogServer';
 
 /**
  * Clerk webhook receiver.
@@ -14,8 +15,13 @@ import { tombstoneUser } from '@/db/tombstoneUser';
  * and delegations behind, owned by an identity that no longer exists — and the
  * next sign-up with that address could inherit them.
  *
+ * Handles `user.created` by capturing `sign_up_completed` in PostHog — the
+ * completion side of the sign-up funnel (`sign_up_started` fires client-side on
+ * CTA click; the drop-off between the two is the abandoned-sign-up rate).
+ *
  * Configure in the Clerk dashboard: endpoint `/api/webhooks/clerk`, subscribed
- * to `user.deleted`, with the signing secret in CLERK_WEBHOOK_SIGNING_SECRET.
+ * to `user.deleted` AND `user.created`, with the signing secret in
+ * CLERK_WEBHOOK_SIGNING_SECRET.
  */
 export async function POST(req: NextRequest) {
   const secret = process.env.CLERK_WEBHOOK_SIGNING_SECRET;
@@ -33,12 +39,26 @@ export async function POST(req: NextRequest) {
 
   // Verify before trusting anything in the body — this endpoint is public and
   // an unverified `user.deleted` would be a free way to revoke someone's access.
-  let event: { type: string; data: { id?: string } };
+  let event: {
+    type: string;
+    data: { id?: string; email_addresses?: Array<{ email_address?: string }> };
+  };
   try {
     event = new Webhook(secret).verify(payload, headers) as typeof event;
   } catch (err) {
     console.error('[clerk-webhook] Signature verification failed:', err);
     return NextResponse.json({ error: 'Invalid signature' }, { status: 400 });
+  }
+
+  if (event.type === 'user.created') {
+    const newUserId = event.data?.id;
+    if (newUserId) {
+      const email = event.data?.email_addresses?.[0]?.email_address;
+      // Distinct id = Clerk user id, same as the dashboard's identify() call,
+      // so this merges into the same PostHog person and closes the funnel.
+      captureServerEvent(newUserId, 'sign_up_completed', email ? { $set: { email } } : {});
+    }
+    return NextResponse.json({ ok: true });
   }
 
   if (event.type !== 'user.deleted') {

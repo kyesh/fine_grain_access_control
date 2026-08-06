@@ -9,6 +9,19 @@ if (typeof window !== 'undefined' && process.env.NEXT_PUBLIC_POSTHOG_KEY && proc
     person_profiles: 'identified_only',
     capture_pageview: false // Disable automatic pageview capture, as we capture manually
   })
+
+  // All three Vercel environments report into the same PostHog project, so every
+  // event is tagged with its deployment tier — dashboards filter on
+  // environment = production to exclude local/preview QA traffic.
+  const hostname = window.location.hostname
+  posthog.register({
+    environment:
+      hostname === 'localhost' || hostname === '127.0.0.1'
+        ? 'development'
+        : hostname.endsWith('.vercel.app')
+          ? 'preview'
+          : 'production',
+  })
 }
 
 export function PostHogProviderWrapper({ children }: { children: React.ReactNode }) {
