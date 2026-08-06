@@ -58,6 +58,7 @@ export default function RootLayout({
                         </div>
                       </Show>
                       <NavLink href="/setup">Setup Guide</NavLink>
+                      <NavLink href="/docs">Docs</NavLink>
                     </div>
                   </div>
 
@@ -87,6 +88,7 @@ export default function RootLayout({
                     </div>
                   </Show>
                   <NavLink href="/setup">Setup Guide</NavLink>
+                  <NavLink href="/docs">Docs</NavLink>
                 </div>
               </div>
             </nav>
@@ -103,6 +105,7 @@ export default function RootLayout({
               <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-8 flex flex-col sm:flex-row justify-between items-center text-sm text-muted-foreground gap-4 sm:gap-0">
                 <p>&copy; {new Date().getFullYear()} FGAC.ai. All rights reserved.</p>
                 <div className="flex space-x-8">
+                  <Link href="/docs" className="hover:text-foreground">Docs</Link>
                   <Link href="/privacy" className="hover:text-foreground">Privacy Policy</Link>
                   <Link href="/terms" className="hover:text-foreground">Terms of Service</Link>
                 </div>
