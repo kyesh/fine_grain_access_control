@@ -161,3 +161,14 @@ tmux send-keys -t fgac-qa "List my emails" Enter
 ```bash
 tmux kill-session -t fgac-qa
 ```
+
+## Capability: Partner Handoff (→ capabilities/11_partner_handoff.md)
+
+> Channel-inapplicable here: the handoff is a browser + REST surface, executed
+> once per cycle via agents/01_hosted_mcp.md. Record as skip with reason
+> "runs in hosted-mcp runbook".
+
+## Capability: Push Notifications (→ capabilities/12_push_notifications.md)
+
+> Channel-inapplicable here: server-side pipeline, executed once per cycle via
+> agents/01_hosted_mcp.md. Record as skip with reason "runs in hosted-mcp runbook".

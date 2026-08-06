@@ -148,3 +148,14 @@ claude -p "Using the fgac skill, what email accounts can I access?" \
 ## Cleanup
 
 No tmux sessions to clean up. Results are saved to `test/qa-envs/cc-cli/evals/results/`.
+
+## Capability: Partner Handoff (→ capabilities/11_partner_handoff.md)
+
+> Channel-inapplicable here: the handoff is a browser + REST surface, executed
+> once per cycle via agents/01_hosted_mcp.md. Record as skip with reason
+> "runs in hosted-mcp runbook".
+
+## Capability: Push Notifications (→ capabilities/12_push_notifications.md)
+
+> Channel-inapplicable here: server-side pipeline, executed once per cycle via
+> agents/01_hosted_mcp.md. Record as skip with reason "runs in hosted-mcp runbook".

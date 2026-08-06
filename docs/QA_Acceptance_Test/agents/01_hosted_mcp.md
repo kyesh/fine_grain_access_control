@@ -156,3 +156,50 @@ curl -s $BASE_URL/api/mcp -X POST \
 > Tested via browser agent — same for all agents. See capability doc.
 
 - [ ] Light mode enforced regardless of OS preference
+
+## Capability: Partner Handoff (→ capabilities/11_partner_handoff.md)
+
+> Primary runbook for this capability. Prereq: `setup/04_partner_app_registration.md`.
+
+- Build the authorize URL from `qa-test-agents.json` → `qa_partner` (client_id,
+  PKCE challenge, redirect_uri `http://localhost:3000/oauth/callback`).
+- A1: bogus client_id via browser agent → error page.
+- A2–A4: browser agent as USER_A — interstitial render, Deny round-trip,
+  Approve → callback lands with `code` (the QA `/oauth/callback` route
+  auto-exchanges and saves `qa-token-<client_id>.json`).
+- A5: token file has refresh_token; `curl /api/mcp` `list_accounts` with the
+  access token → data, no pending. Refresh grant against the Clerk token URL.
+- A6: `curl -X POST /api/auth/partner-token -H "Authorization: Bearer <at>"` →
+  `sk_proxy_...`; then `curl /gmail/v1/users/me/messages?maxResults=1` with it.
+- A7: use a plain DCR client (`scripts/qa-dcr-setup.ts`) driven straight at the
+  Clerk authorize URL → MCP call returns pending.
+- A8: `gmail_send` via MCP + `messages/send` via proxy with the partner key →
+  both 403/denied.
+- A9: browser agent — partner badge on the connection card; Detach; re-try MCP
+  + proxy calls → refused.
+- A10: re-run `register-partner-app.ts` with a changed manifest; verify
+  connection's pinned `manifestVersion` and rules unchanged.
+
+## Capability: Push Notifications (→ capabilities/12_push_notifications.md)
+
+> Server-side capability — run ONCE per QA cycle from this runbook. Prereqs:
+> setup/04 complete, receiver + bridge running, dev server restarted after
+> `setup-gmail-push.ts` wrote env vars.
+
+- A1: after the cap-11 Approve, query the dashboard/DB state via
+  `get_my_permissions` + `qa-webhook-log.json` baseline; subscription active.
+- A2/A3: `gmail_send` a self-email to USER_A (whitelist it first or send via
+  Gmail API using the vaulted token per spike method); bridge drains; assert
+  the receiver log entry (signature_valid=true, ids-only payload).
+- A4: add label blacklist rule via dashboard; labeled email → no ping;
+  unlabeled control email → ping.
+- A5: re-run `setup-gmail-push.ts --apply` (re-arms nothing) or re-arm watch;
+  assert `enqueued=0` behavior on the arm-time notification.
+- A6: re-POST the last drained envelope with the bridge secret → `enqueued: 0`.
+- A7/A8: touch `qa-webhook-fail`; email; drain; call
+  `/api/cron/deliver-webhooks` to walk the ladder; verify dead + suspension;
+  remove flag, re-enable, verify recovery.
+- A9: age `watchExpiresAt`; GET `/api/cron/renew-watches`; verify advance.
+- A10: Detach via browser agent; email again → silence.
+- A11: unauthenticated POST to `/api/webhooks/gmail` → 401.
+- A12: `setup-gmail-push.ts --project dev-fgac-ai` dry run → all ✔.
