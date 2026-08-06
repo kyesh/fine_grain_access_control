@@ -147,9 +147,21 @@ export async function POST(req: NextRequest) {
     }
 
     case 'block': {
+      const detachedKeyId = connection.proxyKeyId;
+
       await db.update(agentConnections)
         .set({ status: 'blocked', proxyKeyId: null })
         .where(eq(agentConnections.id, connectionId));
+
+      // Partner-provisioned keys exist 1:1 for their connection (created by the
+      // consent interstitial, never user-shared) — detaching the connection
+      // must kill the REST-proxy path too, so revoke the key outright.
+      // Agent-profile keys (no partnerAppId) are user-owned and stay usable.
+      if (connection.partnerAppId && detachedKeyId) {
+        await db.update(proxyKeys)
+          .set({ revokedAt: new Date() })
+          .where(and(eq(proxyKeys.id, detachedKeyId), eq(proxyKeys.userId, user.id)));
+      }
 
       // A blocked partner must also stop being NOTIFIED — cancel its
       // subscriptions and stop the Gmail watch if no one else needs it.

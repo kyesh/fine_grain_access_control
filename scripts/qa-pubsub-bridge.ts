@@ -27,7 +27,8 @@ if (!topic || !secret) {
   process.exit(1);
 }
 const BRIDGE_SECRET: string = secret!;
-const [, , project, , topicShort] = topic!.split('/');
+// "projects/<project>/topics/<name>"
+const [, project, , topicShort] = topic!.split('/');
 const pullSub = `${topicShort}-dev-pull`;
 
 async function drainOnce(): Promise<number> {

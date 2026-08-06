@@ -65,15 +65,23 @@ export async function provisionPartnerConnection(input: ProvisionInput): Promise
     emailBindings.push({ email, delegationId: delegation.id });
   }
 
-  const output = await db.transaction(async (tx) => {
-    const [key] = await tx.insert(proxyKeys).values({
-      userId: user.id,
-      key: `sk_proxy_${crypto.randomUUID().replace(/-/g, '')}`,
-      label: partner.name,
-    }).returning();
+  // The neon-http driver has no transaction support, so provisioning runs as
+  // ordered inserts with explicit compensation: if any later step fails, the
+  // key is deleted (cascading away email access + rule assignments) and the
+  // rule copies are removed — never leaving a partially-granted key behind.
+  // Order matters: the connection upsert is LAST, so approval only ever points
+  // at a fully-assembled key.
+  const [key] = await db.insert(proxyKeys).values({
+    userId: user.id,
+    key: `sk_proxy_${crypto.randomUUID().replace(/-/g, '')}`,
+    label: partner.name,
+  }).returning();
 
+  const createdRuleIds: string[] = [];
+  let output: ProvisionOutput;
+  try {
     for (const binding of emailBindings) {
-      await tx.insert(keyEmailAccess).values({
+      await db.insert(keyEmailAccess).values({
         proxyKeyId: key.id,
         delegationId: binding.delegationId,
         targetEmail: binding.email,
@@ -81,21 +89,22 @@ export async function provisionPartnerConnection(input: ProvisionInput): Promise
     }
 
     for (const template of manifest.rule_templates ?? []) {
-      const [rule] = await tx.insert(accessRules).values({
+      const [rule] = await db.insert(accessRules).values({
         userId: user.id,
         ruleName: `${partner.name}: ${template.ruleName}`,
         service: template.service,
         actionType: template.actionType,
         regexPattern: template.regexPattern ?? null,
       }).returning();
+      createdRuleIds.push(rule.id);
       // Binding the copy to the key keeps it scoped — never global.
-      await tx.insert(keyRuleAssignments).values({
+      await db.insert(keyRuleAssignments).values({
         proxyKeyId: key.id,
         accessRuleId: rule.id,
       });
     }
 
-    const [connection] = await tx.insert(agentConnections).values({
+    const [connection] = await db.insert(agentConnections).values({
       userId: user.id,
       clientId: partner.clientId,
       clientName: partner.name,
@@ -117,8 +126,19 @@ export async function provisionPartnerConnection(input: ProvisionInput): Promise
       },
     }).returning();
 
-    return { connectionId: connection.id, proxyKeyId: key.id };
-  });
+    output = { connectionId: connection.id, proxyKeyId: key.id };
+  } catch (err) {
+    try {
+      await db.delete(proxyKeys).where(eq(proxyKeys.id, key.id));
+      if (createdRuleIds.length > 0) {
+        const { inArray } = await import('drizzle-orm');
+        await db.delete(accessRules).where(inArray(accessRules.id, createdRuleIds));
+      }
+    } catch (cleanupErr) {
+      console.error('[Provision] Compensation cleanup failed:', cleanupErr);
+    }
+    throw err;
+  }
 
   // Outside the transaction: watch arming talks to Gmail and must not be able
   // to roll back a completed consent. Failure leaves watchExpiresAt NULL for

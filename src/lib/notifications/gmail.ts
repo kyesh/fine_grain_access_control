@@ -24,19 +24,33 @@ export function pubsubTopic(): string {
   return topic;
 }
 
-/** Google access token for the OWNER of a mailbox, via Clerk's token vault. */
+/** Google access token for the OWNER of a mailbox, via Clerk's token vault.
+ *
+ * The users table can hold duplicate rows per email with stale clerkUserIds
+ * (see src/db/userHelpers.ts — Clerk reissues ids). Trying candidates in
+ * recency order and taking the first that resolves a vaulted token is the
+ * same tolerance the rest of the app gets via resolveDbUser at sign-in. */
 export async function googleTokenForEmail(targetEmail: string): Promise<string> {
-  const owner = await db.query.users.findFirst({
-    where: eq(users.email, targetEmail),
-  });
-  if (!owner || owner.deletedAt) {
+  const candidates = (await db.select().from(users)
+    .where(eq(users.email, targetEmail)))
+    .filter(u => !u.deletedAt)
+    .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
+  if (candidates.length === 0) {
     throw new Error(`No live FGAC user owns mailbox ${targetEmail}`);
   }
   const client = await clerkClient();
-  const tokens = await client.users.getUserOauthAccessToken(owner.clerkUserId, 'google');
-  const token = tokens.data[0]?.token;
-  if (!token) throw new Error(`No Google token vaulted for ${targetEmail}`);
-  return token;
+  let lastErr: unknown;
+  for (const owner of candidates) {
+    try {
+      const tokens = await client.users.getUserOauthAccessToken(owner.clerkUserId, 'google');
+      const token = tokens.data[0]?.token;
+      if (token) return token;
+      lastErr = new Error('no google token on user');
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+  throw new Error(`No Google token vaulted for ${targetEmail}: ${lastErr instanceof Error ? lastErr.message : lastErr}`);
 }
 
 async function gmailFetch(token: string, path: string, init?: RequestInit): Promise<unknown> {

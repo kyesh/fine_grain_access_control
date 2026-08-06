@@ -90,8 +90,11 @@ export async function processGmailNotification(
         continue;
       }
       // Unique (subscriptionId, messageId) absorbs Pub/Sub at-least-once replays.
+      // nextAttemptAt uses the APP clock, not the DB default — the inline claim
+      // below compares against the app clock, and DB/app skew otherwise leaves
+      // fresh rows "not due" until the next cron tick.
       const inserted = await db.insert(webhookDeliveries)
-        .values({ subscriptionId: sub.id, messageId })
+        .values({ subscriptionId: sub.id, messageId, nextAttemptAt: new Date(Date.now() - 1000) })
         .onConflictDoNothing()
         .returning({ id: webhookDeliveries.id });
       if (inserted.length > 0) result.enqueued++;

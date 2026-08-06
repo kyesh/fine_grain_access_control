@@ -136,7 +136,8 @@ export async function deliverPending(subscriptionId?: string): Promise<DrainStat
         stats.dead++;
         groupWentDead = true;
       } else {
-        const delayMs = BACKOFF_S[Math.min(attempts, BACKOFF_S.length - 1)] * 1000;
+        // attempts is 1-based here (just incremented): first failure → 1m rung.
+        const delayMs = BACKOFF_S[Math.min(attempts - 1, BACKOFF_S.length - 1)] * 1000;
         await db.update(webhookDeliveries)
           .set({
             status: 'pending',
