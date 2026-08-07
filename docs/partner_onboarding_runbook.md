@@ -45,8 +45,24 @@ Before the FIRST partner in an environment can use notifications:
 
 ## 1. Intake & review
 
+**Channel & SLA (published in the guide — honor them):** registration requests
+and pre-registration questions arrive at **fgac-ai@googlegroups.com**; respond
+within 2 business days. Credentials go back to the ops contact via a
+**one-time secret link** (e.g. 1Password share) — never in email body, chat,
+issues, or any committed file.
+
 Collect from the partner (see the integration guide §1): name, logo URL,
-redirect URIs, webhook URL, requested access, ops contact.
+redirect URIs, webhook URL, requested access, ops contact. Partners should be
+offered a **sandbox registration** (dev Clerk instance) alongside production —
+sandbox testing runs against a dev deployment of the app, so coordinate which
+dev/preview URL they'll target.
+
+> **Known trap (documented in the guide, fix tracked):** the public discovery
+> document advertises Clerk's `authorization_endpoint`, which bypasses the
+> consent interstitial if a partner's OAuth library auto-configures from it
+> (RFC 8414). The guide warns against this; the durable fix — serving
+> `https://fgac.ai/oauth/authorize` as the advertised endpoint without
+> breaking the MCP/DCR channel that legitimately uses Clerk's — is backlog.
 
 Review gate — decline or escalate if any of these fail:
 
