@@ -23,6 +23,7 @@ const READ_TOOLS: Array<[string, string]> = [
   ["sheets_read_range", "Reads cell values from a range"],
   ["get_my_permissions", "Shows the rules that govern this connection"],
   ["google_api_get", "Any Gmail/Sheets read endpoint, rule-checked"],
+  ["request_access", "Asks you to approve a specific permission upgrade"],
 ];
 
 const WRITE_TOOLS: Array<[string, string]> = [
@@ -126,7 +127,14 @@ export default function DocsPage() {
             <Link href="/setup" className="text-primary underline underline-offset-2">
               Follow the three-step setup guide
             </Link>
-            .
+            . See also:{" "}
+            <Link href="/use-cases/multiple-gmail-accounts" className="text-primary underline underline-offset-2">
+              multiple Gmail accounts
+            </Link>{" "}
+            ·{" "}
+            <Link href="/use-cases/google-sheets-agent" className="text-primary underline underline-offset-2">
+              Google Sheets agents
+            </Link>
           </p>
         </div>
       </div>
@@ -239,8 +247,8 @@ export default function DocsPage() {
             {[
               ["Gmail and Google Sheets only.", "Other Google services (Drive, Calendar, Docs) are denied — support arrives service by service, each behind its own rules."],
               ["Agents can never delete.", "No tool exposes DELETE. Trash, empty-trash, and destructive Gmail settings are refused regardless of your rules."],
-              ["Sending requires a whitelist.", "With no send-whitelist rule configured, all outbound mail is refused. That's the default."],
-              ["New connections start Pending.", "An agent that connects can do nothing until you attach it to a profile in the dashboard."],
+              ["Sending requires a whitelist.", "With no send-whitelist rule configured, all outbound mail is refused. That's the default. When a send is denied, you get a one-click, single-use link to approve exactly that recipient — or the agent can ask via request_access."],
+              ["New connections start read-only.", "Connecting attaches the agent to your Default Profile: it can read this account's mail and nothing else — no sending, no Sheets, no other inboxes. You can review, re-scope, or block it from the dashboard at any time."],
               ["Attachments cap at ~150 KB", "through MCP responses. Larger files must be fetched from Gmail directly."],
               ["Delegated inboxes need an explicit delegation", "created by the inbox owner from their own FGAC account, revocable any time."],
             ].map(([lead, rest]) => (

@@ -1,8 +1,22 @@
-# Connectors Directory — Listing Copy & Portal Answers
+# Connectors Directory — Listing Copy & Portal Answers (v2, keyword-first)
 
 Draft answers for every step of the submission portal
 (claude.ai/admin-settings/directory/submissions/new). Paste-ready; edit taste,
-not facts.
+not facts. v2 rewrites the match-surface text (tagline, description, use
+cases) in the phrases users actually type — connector search matches
+conversation context against listing metadata, so these exact words are how
+we get surfaced.
+
+## Keyword map (phrase users say → where it appears)
+
+| User phrase | Placement |
+|---|---|
+| "multiple Gmail accounts" / "work and personal email" | tagline + description sentence 1 + use case 1 |
+| "check my other inbox" / "team inbox" / "boss's inbox" | description (multi-account bullet) + use case 4 |
+| "update my Google Sheet" / "add rows to a spreadsheet" | tagline + description sentence 2 + use case 3 |
+| "log data to a sheet" / "tracking spreadsheet" | use case 3 |
+| "email assistant" / "triage my inbox" | use case 1 |
+| "can't read my 2FA codes" / "safe email access" | description (guardrails paragraph) |
 
 ## Listing step
 
@@ -10,44 +24,46 @@ not facts.
 > FGAC.ai
 
 **Tagline** (≤55 chars — pick one)
-> 1. `Gmail & Sheets for agents — on your terms` (41)
-> 2. `A permission layer for agents in your inbox` (43)
-> 3. `Deny-by-default Gmail & Sheets access for AI` (44)
+> 1. `Multiple Gmail accounts & editable Sheets, safely` (49)
+> 2. `Gmail & Sheets for agents — on your terms` (41)
+> 3. `Read mail, update Sheets — with guardrails` (42)
 
-Recommended: #1 (leads with capability, ends with the differentiator).
+Recommended: #1 (both differentiators, then the safety hook).
 
 **Description** (≤2,000 chars)
 
-> FGAC.ai (Fine-Grained Access Control) lets AI agents work inside your Gmail
-> and Google Sheets without handing them your whole Google account.
+> Connect one or many Gmail accounts — work, personal, and delegated team
+> inboxes — and let Claude read mail, send guarded email, and update your
+> Google Sheets: read values, edit cells, and append rows on exactly the
+> spreadsheets you choose.
 >
-> Connect once, then decide exactly what agents can do. Every request an agent
-> makes passes through FGAC's rule engine before it touches Google — deny by
-> default, allow on your terms:
+> Every request passes through FGAC's rule engine before it touches Google —
+> deny by default, allow on your terms:
 >
-> • **Read rules** hide sensitive mail from agents: block by Gmail label, or
-> by content patterns (2FA codes, password resets, financial alerts) — the
-> agent sees an "access restricted" notice, never the message.
-> • **Send whitelist** — agents can only email addresses and domains you
-> approve. No whitelist, no outbound mail. Deletion is never possible: no
-> FGAC tool can delete anything.
-> • **Per-spreadsheet grants** — expose individual Sheets read-only or
-> read-write; everything else is invisible.
-> • **Agent profiles** — bundle rules into scoped identities. Your research
-> agent and your inbox agent don't share permissions.
-> • **Pending approval** — every new agent connection starts inert until you
-> approve it from your dashboard.
-> • **Multi-account** — teammates can delegate their inboxes to your agent
-> with their own rules, revocable in one click. No password sharing.
+> • **Instant start** — connect and your agent can read this account's mail
+> immediately. It cannot send, edit, or delete anything until you say so.
+> • **Multiple Gmail accounts** — teammates and your other accounts delegate
+> their inboxes to your agent from their own dashboard; your agent targets
+> any granted inbox ("check my work email", "summarize the support inbox").
+> Every delegation keeps its own rules and is revocable in one click.
+> • **Editable Google Sheets** — expose individual spreadsheets read-only or
+> read & write; agents can update cells and append rows there and nowhere
+> else. The rest of your Drive doesn't exist to them.
+> • **One-click approvals** — when an agent needs more (a new recipient, a
+> new sheet), it asks; you approve exactly that grant from a single-use
+> link. No settings spelunking.
+> • **Guardrails** — read rules hide sensitive mail (2FA codes, password
+> resets, financial alerts) by label or content pattern; send whitelists
+> limit outbound mail to recipients you approve; deletion is never possible.
 >
-> Under the hood, agents get read tools that run without friction
-> (annotated read-only), guarded write tools, and a rule-checked raw API
-> escape hatch covering the full Gmail and Sheets API surface. Your data is
-> never stored or used for training; see fgac.ai/privacy.
+> Under the hood: annotated read-only tools that run without friction,
+> guarded write tools, and a rule-checked raw API escape hatch covering the
+> full Gmail and Sheets API surface. Your data is never stored or used for
+> training; see fgac.ai/privacy.
 >
 > Free for personal use. Connected in under a minute.
 
-(~1,450 chars — room to grow.)
+(~1,750 chars.)
 
 **Categories** (1-5): Productivity; Email; Spreadsheets/Data; Developer Tools
 (pick what the portal's actual taxonomy offers — Productivity first).
@@ -70,12 +86,24 @@ exactly square and export at 512×512 before uploading.
 
 ## Use cases step
 
-- Primary use cases: inbox triage and summarization with sensitive mail
-  shielded; guarded email sending (whitelisted recipients only); reading and
-  updating exposed spreadsheets; delegated multi-inbox workflows for teams.
-- What users need first: a Google account (Gmail); sign-in happens during
-  OAuth. To grant access they visit their FGAC dashboard once to approve the
-  connection and set rules. Free tier — no plan required.
+- Primary use cases (each a distinct search-phrase cluster):
+  1. **Inbox triage across accounts** — "summarize my unread email", morning
+     triage across work and personal Gmail in one prompt, sensitive mail
+     shielded by rules.
+  2. **Guarded sending** — an email assistant that can only reply to
+     recipients and domains you approve; a denied send becomes a one-click
+     approval link.
+  3. **Sheets logging and updates** — "append today's totals to the tracking
+     sheet", "update the status column": read, edit, and append rows on
+     exposed spreadsheets, read-only or read & write per sheet.
+  4. **Delegated inboxes** — an EA-style agent over a boss's or team inbox,
+     delegated from the owner's own dashboard with independent rules and
+     one-click revocation. No password sharing.
+- What users need first: nothing but a Google account — sign-in happens
+  during connect, and the agent immediately gets safe read-only access to
+  that account's mail. Upgrades (sending, Sheets, other inboxes) are granted
+  from the dashboard or via one-click approval links. Free tier — no plan
+  required.
 - Reads data, writes data, or both: **Both** (reads mail/sheets; writes are
   limited to whitelisted sends and Read & Write spreadsheets).
 

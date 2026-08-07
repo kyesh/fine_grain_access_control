@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Card, CardHeader, Badge, EmptyState, buttonPrimary, buttonSecondary, buttonDanger } from '@/components/ui';
-import { assignRulesToKey, unassignRuleFromKey, revokeProxyKey, setSheetRulePermission, exposeSheetsFromPicker } from './actions';
+import { assignRulesToKey, unassignRuleFromKey, revokeProxyKey, setSheetRulePermission, exposeSheetsFromPicker, applyRecommendedSecurityRules } from './actions';
 import { useGooglePicker, PickedSheet } from './useGooglePicker';
 import { EditRuleButton } from './EditRuleButton';
 import { DeleteRuleButton } from './DeleteRuleButton';
@@ -143,6 +143,8 @@ export function AgentProfilesView({
         <PendingBanner count={pending.length} first={pending[0]} />
       )}
 
+      <RecentConnectionsBanner connections={connections} rules={rules} />
+
       <ProfileTabs
         profiles={activeProfiles}
         activeId={activeId}
@@ -244,6 +246,64 @@ function PendingBanner({ count, first }: { count: number; first: Connection }) {
       <a href="#connected-agents" className={`${buttonSecondary} shrink-0`}>
         Attach to a profile
       </a>
+    </div>
+  );
+}
+
+// ─── Recent auto-attached connections banner (instant-start) ────────────────
+// New MCP connections auto-attach to the Default Profile read-only. This
+// notice keeps the user informed after the fact and carries the one-click
+// sensitive-mail shield CTA (shield is OFF by default — decision log in
+// connector-growth_v1.md).
+
+function RecentConnectionsBanner({ connections, rules }: { connections: Connection[]; rules: Rule[] }) {
+  const [dismissed, setDismissed] = useState(false);
+  const [enabling, setEnabling] = useState(false);
+
+  const sevenDaysAgo = Date.now() - 7 * 86400_000;
+  const recent = connections.filter(
+    c => c.status === 'approved' && new Date(c.createdAt).getTime() > sevenDaysAgo,
+  );
+  const hasShield = rules.some(r => r.service !== 'sheets' && r.actionType === 'read_blacklist');
+
+  if (dismissed || recent.length === 0) return null;
+
+  const label = recent.length === 1
+    ? `"${recent[0].nickname || recent[0].clientName || recent[0].clientId}" connected ${timeAgo(recent[0].createdAt).toLowerCase()}`
+    : `${recent.length} agents connected recently`;
+
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-primary/30 bg-primary-muted px-5 py-3.5">
+      <div className="min-w-0">
+        <p className="text-[13px] font-bold text-foreground">
+          {label} with safe defaults: it can read this account&apos;s mail, and cannot send, edit, or delete.
+        </p>
+        <p className="mt-0.5 text-xs text-muted-foreground">
+          {hasShield
+            ? 'Your sensitive-mail shield rules apply to it. Review or block it below.'
+            : 'The sensitive-mail shield (blocks 2FA codes, password resets, sign-in alerts) is OFF. Enable it in one click, or review the agent below.'}
+        </p>
+      </div>
+      <div className="flex shrink-0 items-center gap-2.5">
+        {!hasShield && (
+          <button
+            onClick={async () => {
+              setEnabling(true);
+              try { await applyRecommendedSecurityRules(); } finally { setEnabling(false); }
+            }}
+            disabled={enabling}
+            className="rounded-sm bg-primary px-3.5 py-1.5 text-xs font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-50"
+          >
+            {enabling ? 'Enabling…' : 'Enable sensitive-mail shield'}
+          </button>
+        )}
+        <button
+          onClick={() => setDismissed(true)}
+          className="text-xs text-muted-foreground underline hover:text-foreground"
+        >
+          Dismiss
+        </button>
+      </div>
     </div>
   );
 }
@@ -1049,7 +1109,7 @@ function McpConnectCard({ endpoint, proxyKey }: { endpoint: string; proxyKey: st
     <Card>
       <CardHeader
         title="Connect a new agent via MCP"
-        subtitle="Point any MCP client at this endpoint. It will show up above as pending until you attach it to a profile."
+        subtitle="Point any MCP client at this endpoint. New agents attach to your Default Profile read-only; re-scope or block them above."
       />
       <div className="px-5 pb-5 space-y-3">
         {/* Endpoint and key sit together because configuring an agent needs
