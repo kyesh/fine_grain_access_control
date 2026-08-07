@@ -14,7 +14,19 @@
 
 ## 1. What you provide us (one-time registration)
 
-FGAC registers partners manually today. Send us:
+**How to register:** email the table below to **fgac-ai@googlegroups.com**
+(also the support channel for partners not yet registered). During the pilot
+phase expect a response within **2 business days**. Credentials are delivered
+to your ops contact via a **one-time secret link** — never over email body or
+chat.
+
+**Environments:** dev/sandbox and production are separate registrations with
+separate credentials — a localhost redirect URI implies a sandbox
+registration, not a flag on your production one. Request both up front:
+sandbox credentials let you run the §4 checklist against a test deployment
+before any production user is involved.
+
+Send us:
 
 | Item | Notes |
 |------|-------|
@@ -44,6 +56,15 @@ Plus these fixed endpoints:
 | MCP server (alternative surface) | `https://fgac.ai/api/mcp` |
 | OAuth discovery metadata | `https://fgac.ai/.well-known/oauth-authorization-server` |
 
+> ⚠️ **Do not auto-configure your OAuth client from the discovery document.**
+> It advertises the underlying identity provider's `authorization_endpoint`
+> (`clerk.fgac.ai/oauth/authorize`) — starting the flow there bypasses the
+> FGAC consent screen and produces a connection that is **pending forever**:
+> the handoff will appear to succeed, then every API call will refuse (see
+> §5). Use the discovery document for `token_endpoint` and `jwks_uri` only,
+> and always start the handoff at the literal URL
+> **`https://fgac.ai/oauth/authorize`** from the table above.
+
 ## 3. What you build
 
 ### 3.1 The handoff (OAuth 2.0 authorization code + PKCE)
@@ -63,6 +84,15 @@ https://fgac.ai/oauth/authorize
 
 The user sees **one** consent screen (ours), picks which mailbox to share, and
 approves or denies. You do not need to build any consent UI.
+
+**What must be true of the user:** nothing in advance. If they are not signed
+in to FGAC, they are routed through sign-in first and returned to the consent
+screen. A brand-new user completes the entire bootstrap mid-handoff — sign up
+with Google (which is also where FGAC obtains its Gmail authorization), then
+land on your consent screen; their FGAC account is created automatically. For
+your UX copy: "you'll sign in with Google, then approve access on FGAC" covers
+both new and existing users. The mailbox picker shows the user's own Gmail
+address plus any mailboxes delegated to them inside FGAC.
 
 **Step 2 — handle the callback** at your redirect URI:
 
@@ -157,17 +187,32 @@ Your receiver MUST:
 3. **Be idempotent.** Delivery is at-least-once; dedup on `delivery_id` (or
    `message_id` per account).
 
-Delivery semantics: a failed delivery (non-2xx or timeout) retries on a
-backoff ladder (1m → 5m → 15m → 1h → 6h → 24h, then dead-lettered; retry
-timing may be coarser depending on platform scheduling). Repeated dead
-deliveries **suspend the subscription** and we notify your ops contact —
-re-enabling triggers a catch-up sweep. Ordering is not guaranteed; because
-pings carry only IDs, out-of-order arrival is harmless.
+Delivery semantics: the **first delivery attempt is immediate** (seconds from
+mail arrival). If your endpoint fails (non-2xx or timeout), **retries are
+currently batched into a daily drain** — design your recovery around "a
+failed delivery retries within ~24h", not minutes. (The design target is a
+1m → 5m → 15m → 1h → 6h → 24h ladder and we expect to tighten to it; we will
+notify partners when the cadence changes.) After repeated failures a delivery
+is dead-lettered, and repeated dead deliveries **suspend the subscription** —
+we notify your ops contact, and re-enabling triggers a catch-up sweep, so no
+mail is silently lost. Ordering is not guaranteed; because pings carry only
+IDs, out-of-order arrival is harmless.
 
 **What you will never receive:** subject lines, bodies, snippets, or sender
 addresses in a webhook — and no ping at all for messages the user's rules
 exclude from your access. Content always comes from your own authenticated
 fetch, where rules are enforced again at read time.
+
+### 3.4 Rate limits & bulk operations
+
+No hard rate limits are enforced on the Gmail proxy or token endpoints today —
+underlying Google API quotas still apply and are shared, so be gentle:
+sustained request rates in the low single digits per second per user are safe.
+**Coordinate with us before bulk backfills** (e.g. "list and read the whole
+mailbox" on first connect — the most common first workload); we'd rather
+provision for it than have you discover a ceiling mid-migration. Explicit
+limits, when introduced, will be announced with lead time and signaled with
+standard `429` + `Retry-After`.
 
 ## 4. Testing your integration
 
@@ -208,8 +253,9 @@ Work through this checklist with us on a test account before going live:
 
 ## 6. Support
 
-Registration changes (redirect URIs, webhook URL, logo, requested access) go
-through your FGAC contact — access-broadening changes require your users to
-re-consent by design. Include your `connection_id` (from webhook payloads or
-`get_my_permissions`) in support requests; never send us your `client_secret`
-or `webhook_secret`.
+All support and registration changes go through **fgac-ai@googlegroups.com** —
+including questions from teams who have not registered yet. Registration
+changes (redirect URIs, webhook URL, logo, requested access) are handled
+there; access-broadening changes require your users to re-consent by design.
+Include your `connection_id` (from webhook payloads or `get_my_permissions`)
+in support requests; never send us your `client_secret` or `webhook_secret`.
