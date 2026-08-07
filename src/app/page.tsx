@@ -173,8 +173,8 @@ export default async function LandingPage() {
                 Sign in with Google
               </h3>
               <p className="text-sm leading-relaxed text-muted-foreground">
-                Your agent opens a browser to link your account. New connections
-                wait as pending until you approve them.
+                Your agent opens a browser to link your account. It connects
+                with safe defaults: read-only, nothing else until you allow it.
               </p>
             </div>
             <div className="flex flex-col gap-2.5">

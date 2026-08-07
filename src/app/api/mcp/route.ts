@@ -99,22 +99,35 @@ async function resolveConnection(userId: string, clientId: string | undefined): 
     // connection auto-attaches to the read-only Default Profile instead of
     // starting pending. Delegated mailboxes are still gated by delegation.
     const defaultKey = await ensureDefaultProfile(user.id, user.email);
-    const [newConn] = await db.insert(agentConnections).values({
-      userId: user.id,
-      clientId,
-      clientName: clientId,
-      status: 'approved',
-      proxyKeyId: defaultKey.id,
-      approvedAt: new Date(),
-    }).returning();
-    connection = newConn;
+    try {
+      const [newConn] = await db.insert(agentConnections).values({
+        userId: user.id,
+        clientId,
+        clientName: clientId,
+        status: 'approved',
+        proxyKeyId: defaultKey.id,
+        approvedAt: new Date(),
+      }).returning();
+      connection = newConn;
 
-    console.log(`[MCP] New connection: user=${user.email} client=${clientId} conn=${connection.id} auto-attached to default profile`);
-    captureServerEvent(user.clerkUserId, 'mcp_connection_created', {
-      connection_id: newConn.id,
-      client_id: clientId,
-      auto_attached: true,
-    });
+      console.log(`[MCP] New connection: user=${user.email} client=${clientId} conn=${connection.id} auto-attached to default profile`);
+      captureServerEvent(user.clerkUserId, 'mcp_connection_created', {
+        connection_id: newConn.id,
+        client_id: clientId,
+        auto_attached: true,
+      });
+    } catch (err) {
+      // The auth-layer eager resolve and the tool handler can race this
+      // insert on a client's very first request; the loser reads the
+      // winner's row instead of surfacing a SQL error (QA cap 06 A3).
+      connection = await db.query.agentConnections.findFirst({
+        where: and(
+          eq(agentConnections.userId, user.id),
+          eq(agentConnections.clientId, clientId),
+        ),
+      });
+      if (!connection) throw err;
+    }
   }
 
   await db.update(agentConnections)
@@ -1162,13 +1175,17 @@ const verifyMcpAuth = async (_req: Request, bearerToken?: string) => {
   // Eagerly create/touch agent_connection on ANY authenticated request
   // (including initialize), so connections appear in the dashboard immediately.
   // Tool handlers still call requireApproval() as a fallback safety net.
+  // Awaited: fire-and-forget raced the tool handler's own resolveConnection
+  // on a client's very first call and surfaced a SQL error (QA cap 06 A3).
   if (authInfo) {
     const userId = authInfo.extra?.userId as string | undefined;
     const clientId = (authInfo as Record<string, unknown>).clientId as string | undefined;
     if (userId && clientId) {
-      resolveConnection(userId, clientId).catch((err) =>
-        console.error('[MCP] Eager connection creation failed:', err)
-      );
+      try {
+        await resolveConnection(userId, clientId);
+      } catch (err) {
+        console.error('[MCP] Eager connection creation failed:', err);
+      }
     }
   }
 

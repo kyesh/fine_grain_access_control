@@ -13,34 +13,70 @@
  */
 import { db } from '@/db';
 import { proxyKeys, keyEmailAccess } from '@/db/schema';
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, asc, eq, isNull } from 'drizzle-orm';
 
 export const DEFAULT_PROFILE_LABEL = 'Default Profile';
 
-export async function ensureDefaultProfile(userId: string, email: string) {
-  const existing = await db.select().from(proxyKeys)
+async function findLiveDefault(userId: string) {
+  return db.select().from(proxyKeys)
     .where(and(
       eq(proxyKeys.userId, userId),
       eq(proxyKeys.isDefault, true),
       isNull(proxyKeys.revokedAt),
     ))
+    .orderBy(asc(proxyKeys.createdAt))
     .limit(1).then(r => r[0]);
-  if (existing) return existing;
+}
 
-  const [key] = await db.insert(proxyKeys).values({
-    userId,
-    key: `sk_proxy_${crypto.randomUUID().replace(/-/g, '')}`,
-    label: DEFAULT_PROFILE_LABEL,
-    isDefault: true,
-  }).returning();
-
-  // Own mailbox only — delegated addresses require an explicit delegation
-  // and are never part of instant-start.
+/** Own mailbox only — delegated addresses require an explicit delegation
+ * and are never part of instant-start. */
+async function ensureOwnEmailAccess(proxyKeyId: string, email: string) {
   await db.insert(keyEmailAccess).values({
-    proxyKeyId: key.id,
+    proxyKeyId,
     delegationId: null,
     targetEmail: email,
   }).onConflictDoNothing();
+}
 
-  return key;
+export async function ensureDefaultProfile(userId: string, email: string) {
+  const existing = await findLiveDefault(userId);
+  if (existing) return existing;
+
+  // Adopt a pre-existing profile the user already named "Default Profile"
+  // (the pre-instant-start signup flow created these). Creating a second,
+  // identically-named profile would silently split the user's configuration
+  // — QA capability 06 A3 caught exactly that.
+  const legacy = await db.select().from(proxyKeys)
+    .where(and(
+      eq(proxyKeys.userId, userId),
+      eq(proxyKeys.label, DEFAULT_PROFILE_LABEL),
+      isNull(proxyKeys.revokedAt),
+    ))
+    .orderBy(asc(proxyKeys.createdAt))
+    .limit(1).then(r => r[0]);
+  if (legacy) {
+    const [adopted] = await db.update(proxyKeys)
+      .set({ isDefault: true })
+      .where(eq(proxyKeys.id, legacy.id))
+      .returning();
+    await ensureOwnEmailAccess(adopted.id, email);
+    return adopted;
+  }
+
+  try {
+    const [key] = await db.insert(proxyKeys).values({
+      userId,
+      key: `sk_proxy_${crypto.randomUUID().replace(/-/g, '')}`,
+      label: DEFAULT_PROFILE_LABEL,
+      isDefault: true,
+    }).returning();
+    await ensureOwnEmailAccess(key.id, email);
+    return key;
+  } catch (err) {
+    // Two concurrent first requests can race the create; the loser adopts
+    // whatever the winner made.
+    const winner = await findLiveDefault(userId);
+    if (winner) return winner;
+    throw err;
+  }
 }
