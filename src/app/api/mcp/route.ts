@@ -28,6 +28,8 @@ import safeRegex from 'safe-regex';
 import { resolveDbUser } from '@/db/userHelpers';
 import { loadApplicableRules, checkReadRestrictions, type ApplicableRules } from '@/lib/gmailRules';
 import { captureServerEvent } from '@/lib/posthogServer';
+import { ensureDefaultProfile } from '@/db/defaultProfile';
+import { mintApprovalUrl, type ApprovalAction } from '@/lib/approvalLinks';
 import { TOOL_DEFS, toolAnnotations, type FgacToolDef } from './toolDefs';
 import {
   classifyGoogleApiCall, extractSendRecipients,
@@ -92,15 +94,27 @@ async function resolveConnection(userId: string, clientId: string | undefined): 
   });
 
   if (!connection) {
+    // Instant-start (connector-growth Phase B): the caller personally
+    // completed OAuth for this client, which is per-client consent — so the
+    // connection auto-attaches to the read-only Default Profile instead of
+    // starting pending. Delegated mailboxes are still gated by delegation.
+    const defaultKey = await ensureDefaultProfile(user.id, user.email);
     const [newConn] = await db.insert(agentConnections).values({
       userId: user.id,
       clientId,
       clientName: clientId,
-      status: 'pending',
+      status: 'approved',
+      proxyKeyId: defaultKey.id,
+      approvedAt: new Date(),
     }).returning();
     connection = newConn;
 
-    console.log(`[MCP] New connection: user=${user.email} client=${clientId} conn=${connection.id} status=PENDING`);
+    console.log(`[MCP] New connection: user=${user.email} client=${clientId} conn=${connection.id} auto-attached to default profile`);
+    captureServerEvent(user.clerkUserId, 'mcp_connection_created', {
+      connection_id: newConn.id,
+      client_id: clientId,
+      auto_attached: true,
+    });
   }
 
   await db.update(agentConnections)
@@ -229,17 +243,24 @@ async function getGoogleToken(targetEmail: string, keyOwner: { id: string; email
 /**
  * Send-whitelist enforcement shared by gmail_send and google_api_modify.
  * Every recipient must match a whitelist pattern; unknown recipients deny.
- * Returns a user-facing denial message, or null if sending is allowed.
+ * Returns a denial ({ message, deniedRecipient? }) or null if sending is
+ * allowed. deniedRecipient feeds the magic approval link — absent when we
+ * could not even parse who the mail was for (no link in that case).
  */
-function checkSendWhitelist(rules: ApplicableRules, recipients: string[] | null): string | null {
+type SendDenial = { message: string; deniedRecipient?: string };
+
+function checkSendWhitelist(rules: ApplicableRules, recipients: string[] | null): SendDenial | null {
   const sendRules = rules.filter(r => r.service === 'gmail' && r.actionType === 'send_whitelist');
 
-  if (sendRules.length === 0) {
-    return '🚫 No send whitelist rules configured. Ask the user to add the recipient to the sending whitelist in the FGAC dashboard.';
+  if (!recipients || recipients.length === 0) {
+    return { message: '🚫 Could not determine the message recipients, so sending was denied. Provide a standard RFC 2822 message with To/Cc/Bcc headers.' };
   }
 
-  if (!recipients || recipients.length === 0) {
-    return '🚫 Could not determine the message recipients, so sending was denied. Provide a standard RFC 2822 message with To/Cc/Bcc headers.';
+  if (sendRules.length === 0) {
+    return {
+      message: '🚫 Sending is disabled on this profile (no send whitelist configured). This is the safe default.',
+      deniedRecipient: recipients[0],
+    };
   }
 
   for (const recipient of recipients) {
@@ -251,11 +272,45 @@ function checkSendWhitelist(rules: ApplicableRules, recipients: string[] | null)
       if (new RegExp(regexStr, 'i').test(recipient)) { isWhitelisted = true; break; }
     }
     if (!isWhitelisted) {
-      return `🚫 Unauthorized recipient. '${recipient}' is not in the send whitelist. Ask the user to add it in the FGAC dashboard.`;
+      return {
+        message: `🚫 Unauthorized recipient. '${recipient}' is not in the send whitelist.`,
+        deniedRecipient: recipient,
+      };
     }
   }
 
   return null;
+}
+
+/**
+ * Magic-link denial (connector-growth Phase C): policy denials that a user
+ * would plausibly want to approve carry a signed, single-use, 15-minute link
+ * that pre-fills exactly that grant. Explicit blocks and read restrictions
+ * never get links — weakening those stays a deliberate dashboard act.
+ */
+async function policyDenialWithLink(
+  conn: ConnectionApproved,
+  proxyKeyId: string,
+  message: string,
+  action: ApprovalAction | null,
+) {
+  if (!action) return textResult(message);
+  try {
+    const url = await mintApprovalUrl(DASHBOARD_URL, conn.user.id, proxyKeyId, action);
+    captureServerEvent(conn.user.clerkUserId, 'approval_link_minted', { action: action.action });
+    return textResult(
+      `${message}\n👉 Share this link with the user to approve it in one click (single-use, expires in 15 minutes): ${url}`,
+    );
+  } catch (err) {
+    console.error('[MCP] Failed to mint approval link:', err);
+    return textResult(message);
+  }
+}
+
+function sendDenialAction(denial: SendDenial): ApprovalAction | null {
+  return denial.deniedRecipient
+    ? { action: 'send_whitelist', recipient: denial.deniedRecipient }
+    : null;
 }
 
 // ─── Google API Helpers ─────────────────────────────────────────────────────
@@ -333,21 +388,31 @@ async function checkSheetsPermission(userId: string, proxyKeyId: string, spreads
   });
 
   if (sheetsRules.length === 0) {
-    return { allowed: false, reason: `🚫 Access Denied: Spreadsheet '${spreadsheetId}' is not exposed in your FGAC rules.` };
+    return { allowed: false as const, denial: 'not_exposed' as const, reason: `🚫 Access Denied: Spreadsheet '${spreadsheetId}' is not exposed in your FGAC rules.` };
   }
 
   if (sheetsRules.some(r => r.actionType === 'sheet_block')) {
-    return { allowed: false, reason: `🚫 Access Denied: Access to spreadsheet '${spreadsheetId}' is explicitly blocked.` };
+    return { allowed: false as const, denial: 'blocked' as const, reason: `🚫 Access Denied: Access to spreadsheet '${spreadsheetId}' is explicitly blocked.` };
   }
 
   if (isMutating) {
     const hasReadWrite = sheetsRules.some(r => r.actionType === 'sheet_read_write');
     if (!hasReadWrite) {
-      return { allowed: false, reason: `🚫 Access Denied: Write access to spreadsheet '${spreadsheetId}' is restricted (Read Only).` };
+      return { allowed: false as const, denial: 'read_only' as const, reason: `🚫 Access Denied: Write access to spreadsheet '${spreadsheetId}' is restricted (Read Only).` };
     }
   }
 
-  return { allowed: true };
+  return { allowed: true as const };
+}
+
+type SheetsPermission = Awaited<ReturnType<typeof checkSheetsPermission>>;
+
+/** Map a sheets denial onto an approvable action (explicit blocks get none). */
+function sheetsDenialAction(perm: SheetsPermission, spreadsheetId: string): ApprovalAction | null {
+  if (perm.allowed) return null;
+  if (perm.denial === 'not_exposed') return { action: 'sheets_expose', spreadsheetId };
+  if (perm.denial === 'read_only') return { action: 'sheets_write', spreadsheetId };
+  return null;
 }
 
 // ─── Gmail Message Parsing (token-frugal responses) ─────────────────────────
@@ -549,7 +614,7 @@ async function executeRawGoogleCall(
 
   if (cls.kind === 'sheets') {
     const perm = await checkSheetsPermission(conn.user.id, resolved.proxyKeyId, cls.spreadsheetId, cls.isMutating);
-    if (!perm.allowed) return textResult(perm.reason!);
+    if (!perm.allowed) return policyDenialWithLink(conn, resolved.proxyKeyId, perm.reason, sheetsDenialAction(perm, cls.spreadsheetId));
 
     const url = `https://sheets.googleapis.com/${cleanPath.replace(/^sheets\//, '')}`;
     const result = await googleFetch(url, resolved.token, method, serializeBody(body), resolved.targetEmail);
@@ -561,7 +626,7 @@ async function executeRawGoogleCall(
 
   if (cls.kind === 'gmail_send') {
     const denial = checkSendWhitelist(rules, extractSendRecipients(body));
-    if (denial) return textResult(denial);
+    if (denial) return policyDenialWithLink(conn, resolved.proxyKeyId, denial.message, sendDenialAction(denial));
   }
 
   const url = `https://www.googleapis.com/${cleanPath}`;
@@ -570,7 +635,10 @@ async function executeRawGoogleCall(
 
   if (cls.kind === 'gmail_read') {
     const restriction = checkReadRestrictions(rules, result.data);
-    if (restriction) return textResult(restriction);
+    if (restriction) {
+      captureServerEvent(conn.user.clerkUserId, 'read_restriction_enforced', { via: 'google_api_get', restriction });
+      return textResult(restriction);
+    }
   }
 
   return jsonResult(result.data);
@@ -665,6 +733,7 @@ const handler = createMcpHandler(
 
         const restriction = checkReadRestrictions(rules, result.data);
         if (restriction) {
+          captureServerEvent(conn.user.clerkUserId, 'read_restriction_enforced', { via: 'gmail_read', restriction });
           return textResult(restriction);
         }
 
@@ -700,6 +769,7 @@ const handler = createMcpHandler(
 
         const restriction = checkReadRestrictions(rules, parentResult.data);
         if (restriction) {
+          captureServerEvent(conn.user.clerkUserId, 'read_restriction_enforced', { via: 'gmail_get_attachment', restriction });
           return textResult(restriction);
         }
 
@@ -738,7 +808,7 @@ const handler = createMcpHandler(
         // Enforce send whitelist
         const rules = await loadApplicableRules(conn.user.id, resolved.proxyKeyId, resolved.targetEmail);
         const denial = checkSendWhitelist(rules, [to]);
-        if (denial) return textResult(denial);
+        if (denial) return policyDenialWithLink(conn, resolved.proxyKeyId, denial.message, sendDenialAction(denial));
 
         // Build RFC 2822 message
         const raw = Buffer.from(
@@ -785,7 +855,7 @@ const handler = createMcpHandler(
         if ('error' in resolved) return textResult(resolved.error);
 
         const perm = await checkSheetsPermission(conn.user.id, resolved.proxyKeyId, spreadsheetId, false);
-        if (!perm.allowed) return textResult(perm.reason!);
+        if (!perm.allowed) return policyDenialWithLink(conn, resolved.proxyKeyId, perm.reason, sheetsDenialAction(perm, spreadsheetId));
 
         const result = await sheetsFetch(resolved.token, `${spreadsheetId}`, 'GET', undefined, resolved.targetEmail);
         if (!result.ok) return errorResult(result.error);
@@ -809,7 +879,7 @@ const handler = createMcpHandler(
         if ('error' in resolved) return textResult(resolved.error);
 
         const perm = await checkSheetsPermission(conn.user.id, resolved.proxyKeyId, spreadsheetId, false);
-        if (!perm.allowed) return textResult(perm.reason!);
+        if (!perm.allowed) return policyDenialWithLink(conn, resolved.proxyKeyId, perm.reason, sheetsDenialAction(perm, spreadsheetId));
 
         const encodedRange = encodeURIComponent(range);
         const result = await sheetsFetch(resolved.token, `${spreadsheetId}/values/${encodedRange}`, 'GET', undefined, resolved.targetEmail);
@@ -835,7 +905,7 @@ const handler = createMcpHandler(
         if ('error' in resolved) return textResult(resolved.error);
 
         const perm = await checkSheetsPermission(conn.user.id, resolved.proxyKeyId, spreadsheetId, true);
-        if (!perm.allowed) return textResult(perm.reason!);
+        if (!perm.allowed) return policyDenialWithLink(conn, resolved.proxyKeyId, perm.reason, sheetsDenialAction(perm, spreadsheetId));
 
         const encodedRange = encodeURIComponent(range);
         const body = JSON.stringify({ values, range });
@@ -862,7 +932,7 @@ const handler = createMcpHandler(
         if ('error' in resolved) return textResult(resolved.error);
 
         const perm = await checkSheetsPermission(conn.user.id, resolved.proxyKeyId, spreadsheetId, true);
-        if (!perm.allowed) return textResult(perm.reason!);
+        if (!perm.allowed) return policyDenialWithLink(conn, resolved.proxyKeyId, perm.reason, sheetsDenialAction(perm, spreadsheetId));
 
         const encodedRange = encodeURIComponent(range);
         const body = JSON.stringify({ values });
@@ -907,6 +977,49 @@ const handler = createMcpHandler(
         if ('error' in resolved) return textResult(resolved.error);
 
         return executeRawGoogleCall(conn, resolved, path, method, body);
+      }
+    );
+
+    // ── request_access ────────────────────────────────────────────────
+    server.registerTool(
+      TOOL_DEFS.request_access.name,
+      toolConfig(TOOL_DEFS.request_access, {
+        type: z.enum(['send', 'sheets_read', 'sheets_write']).describe('What to request: permission to send email to a recipient, or read / read-write access to a spreadsheet'),
+        recipient: z.string().optional().describe('Email address to whitelist (required for type "send")'),
+        spreadsheetId: z.string().optional().describe('Google Spreadsheet ID (required for sheets types)'),
+      }),
+      async ({ type, recipient, spreadsheetId }, { authInfo }) => {
+        const conn = await requireApproval(authInfo);
+        if ('content' in conn) return conn;
+        if (!conn.proxyKeyId) {
+          return textResult('❌ No proxy key assigned to this connection.');
+        }
+
+        let action: ApprovalAction;
+        if (type === 'send') {
+          if (!recipient || !/^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/.test(recipient)) {
+            return textResult('🚫 A valid "recipient" email address is required to request send access. Requestable permissions: sending to a specific recipient, or read/read-write access to a specific spreadsheet.');
+          }
+          action = { action: 'send_whitelist', recipient };
+        } else {
+          if (!spreadsheetId) {
+            return textResult('🚫 A "spreadsheetId" is required to request spreadsheet access. Requestable permissions: sending to a specific recipient, or read/read-write access to a specific spreadsheet.');
+          }
+          action = type === 'sheets_read'
+            ? { action: 'sheets_expose', spreadsheetId }
+            : { action: 'sheets_write', spreadsheetId };
+        }
+
+        const url = await mintApprovalUrl(DASHBOARD_URL, conn.user.id, conn.proxyKeyId, action);
+        captureServerEvent(conn.user.clerkUserId, 'approval_link_minted', { action: action.action, via: 'request_access' });
+        return jsonResult({
+          status: 'approval_required',
+          summary: action.action === 'send_whitelist'
+            ? `Requesting permission to send email to ${recipient}`
+            : `Requesting ${type === 'sheets_read' ? 'read-only' : 'read & write'} access to spreadsheet ${spreadsheetId}`,
+          approvalUrl: url,
+          note: 'Nothing has been granted. Share the approval link with the user — it is single-use, expires in 15 minutes, and only they can approve it. Retry the original operation after they approve.',
+        });
       }
     );
 

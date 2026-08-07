@@ -35,15 +35,19 @@
   `get_my_permissions` lists no content-block rules — confirming the
   documented default, not silently-enabled shield rules
 
-### A6: OAuth landing page shows onboarding state
-- Complete the OAuth flow in a browser and inspect the post-consent page
-- **Expected**: States the agent is connected; summarizes the posture (can
-  read mail; cannot send, edit, or delete); the top CTA is one-click
-  "enable sensitive-mail shield"; links to dashboard upgrades
+### A6: Dashboard shows instant-start onboarding state
+- After A1, open the dashboard as the connecting user
+- **Expected**: A recent-connection notice states the agent connected with
+  safe defaults (can read this account's mail; cannot send, edit, or
+  delete), and — when no shield rules exist — offers a one-click
+  "Enable sensitive-mail shield" CTA
+- **Note**: the DCR OAuth flow redirects straight back to the MCP client, so
+  onboarding lives on the dashboard banner rather than a post-consent
+  interstitial (deviation recorded in connector-growth_v2.md)
 
 ### A7: One-click shield enable works and takes effect
-- Click the shield CTA on the landing page (or its dashboard equivalent),
-  then re-read the A5 fixture message via MCP
+- Click the shield CTA on the dashboard notice, then re-read the A5 fixture
+  message via MCP
 - **Expected**: Shield rules now appear in `get_my_permissions`, and the
   fixture read is denied with a rule-named restriction message
 

@@ -34,13 +34,13 @@ export const TOOL_DEFS = {
   gmail_list: {
     name: 'gmail_list',
     title: 'List Gmail messages',
-    description: 'List recent Gmail message IDs, optionally filtered by a Gmail search query (e.g. "is:unread").',
+    description: 'List recent Gmail message IDs, optionally filtered by a Gmail search query (e.g. "is:unread"). Works across every connected or delegated Gmail inbox — pass the "account" parameter to target a specific mailbox (see list_accounts).',
     readOnly: true,
   },
   gmail_read: {
     name: 'gmail_read',
     title: 'Read a Gmail message',
-    description: 'Read a Gmail message by ID. Returns parsed headers, body text, and attachment metadata. Reads are evaluated against the user\'s FGAC access rules.',
+    description: 'Read a Gmail message by ID. Returns parsed headers, body text, and attachment metadata. Reads are evaluated against the user\'s FGAC access rules, and work across every connected or delegated Gmail inbox via the "account" parameter.',
     readOnly: true,
   },
   gmail_get_attachment: {
@@ -52,7 +52,7 @@ export const TOOL_DEFS = {
   gmail_send: {
     name: 'gmail_send',
     title: 'Send an email',
-    description: 'Send a plain-text email from the selected account. Recipients must match the user\'s FGAC send whitelist.',
+    description: 'Send a plain-text email from any connected or delegated account (via the "account" parameter). Recipients must match the user\'s FGAC send whitelist; denied sends include a link the user can use to approve the recipient.',
     readOnly: false,
     destructive: true,
     openWorld: true,
@@ -104,6 +104,12 @@ export const TOOL_DEFS = {
     destructive: true,
     openWorld: true,
     freeformMethods: ['POST', 'PUT', 'PATCH'],
+  },
+  request_access: {
+    name: 'request_access',
+    title: 'Request a permission upgrade',
+    description: 'Ask the user to grant this agent a specific permission: sending email to a recipient, or read/write access to a Google Spreadsheet. Returns a single-use approval link for the user — calling this tool grants nothing by itself; the user must open the link and approve.',
+    readOnly: true,
   },
   get_my_permissions: {
     name: 'get_my_permissions',

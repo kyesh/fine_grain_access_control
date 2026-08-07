@@ -545,5 +545,89 @@ export async function applyRecommendedSecurityRules() {
   ];
 
   await db.insert(accessRules).values(rulesToInsert);
+  const { captureServerEvent } = await import("@/lib/posthogServer");
+  captureServerEvent(dbUser.clerkUserId, "shield_enabled", { rules: rulesToInsert.length });
   revalidatePath("/dashboard");
+}
+
+// ─── Magic-Link Approvals (connector-growth Phase C) ───────────────────────
+
+export type MagicApprovalResult =
+  | { ok: true; description: string }
+  | { ok: false; reason: string };
+
+/**
+ * Consume a signed approval link and apply exactly the grant it describes.
+ * Security gates, in order: valid signature + not expired; the SIGNED-IN user
+ * is the user the token was minted for; the key belongs to them and is live;
+ * single-use (jti recorded in approval_consumptions — the PK makes replays
+ * impossible even under race).
+ */
+export async function approveMagicLink(
+  token: string,
+  sheetsWriteChoice?: boolean,
+): Promise<MagicApprovalResult> {
+  const { verifyApprovalToken, describeApproval } = await import("@/lib/approvalLinks");
+  const { approvalConsumptions } = await import("@/db/schema");
+  const { captureServerEvent } = await import("@/lib/posthogServer");
+
+  const dbUser = await getDbUser();
+
+  const verified = await verifyApprovalToken(token);
+  if (!verified.ok) {
+    return {
+      ok: false,
+      reason: verified.reason === "expired"
+        ? "This approval link has expired (links last 15 minutes). Ask the agent to request access again."
+        : "This approval link is invalid.",
+    };
+  }
+  const p = verified.payload;
+
+  if (p.userId !== dbUser.id) {
+    return { ok: false, reason: "This approval link belongs to a different account." };
+  }
+
+  const key = await db.select().from(proxyKeys)
+    .where(and(eq(proxyKeys.id, p.proxyKeyId), eq(proxyKeys.userId, dbUser.id), isNull(proxyKeys.revokedAt)))
+    .limit(1).then(r => r[0]);
+  if (!key) {
+    return { ok: false, reason: "The agent profile this link targets no longer exists or was revoked." };
+  }
+
+  // Single-use: the PK on jti turns a replay into a unique violation.
+  try {
+    await db.insert(approvalConsumptions).values({ jti: p.jti, userId: dbUser.id });
+  } catch {
+    return { ok: false, reason: "This approval link was already used. Each link works exactly once." };
+  }
+
+  if (p.action === "send_whitelist" && p.recipient) {
+    const escaped = p.recipient.replace(/[.+?^${}()|[\]\\]/g, "\\$&");
+    const [rule] = await db.insert(accessRules).values({
+      userId: dbUser.id,
+      ruleName: `Allow sending to ${p.recipient}`,
+      service: "gmail",
+      actionType: "send_whitelist",
+      regexPattern: `^${escaped}$`,
+    }).returning();
+    await db.insert(keyRuleAssignments).values({ proxyKeyId: key.id, accessRuleId: rule.id });
+  } else if ((p.action === "sheets_expose" || p.action === "sheets_write") && p.spreadsheetId) {
+    const readWrite = p.action === "sheets_write" || sheetsWriteChoice === true;
+    const [rule] = await db.insert(accessRules).values({
+      userId: dbUser.id,
+      ruleName: `${readWrite ? "Read & Write" : "Read Only"}: ${p.resourceName || p.spreadsheetId}`,
+      service: "sheets",
+      actionType: readWrite ? "sheet_read_write" : "sheet_read",
+      targetResourceId: p.spreadsheetId,
+      resourceName: p.resourceName || null,
+    }).returning();
+    await db.insert(keyRuleAssignments).values({ proxyKeyId: key.id, accessRuleId: rule.id });
+  } else {
+    return { ok: false, reason: "This approval link is malformed." };
+  }
+
+  captureServerEvent(dbUser.clerkUserId, "approval_link_approved", { action: p.action });
+  revalidatePath("/dashboard");
+  return { ok: true, description: describeApproval(p) };
 }

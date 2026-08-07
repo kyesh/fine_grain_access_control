@@ -48,8 +48,9 @@ Send the account ~8-10 emails so every demo prompt has something to find:
    - **Content read blacklist**: rule name `Block verification codes`, pattern
      `verification code` (blocks the 2FA fixture).
    - **Label blacklist**: label `Confidential`.
-4. Do NOT pre-approve a connection — the Pending → Approve flow is part of
-   what the reviewer should see (it's our core product moment).
+4. The reviewer's connection will auto-attach to the account's **Default
+   Profile** (instant-start). Configure the sheet exposure and rules on that
+   profile so they govern the reviewer's connection from the first call.
 
 ### 5. Dry-run before submitting
 
@@ -70,12 +71,11 @@ between this doc and reality before submission day.
 1. In Claude, add the connector (or as a custom connector:
    `https://fgac.ai/api/mcp`). When the OAuth window opens, choose
    **Sign in with Google** and use the credentials above.
-2. Ask Claude: *"List my email accounts."* — Expected: a notice that the
-   connection is **awaiting approval**, with a dashboard link. This is
-   deliberate: agents get no access until the user approves them.
-3. Open `https://fgac.ai/dashboard` (same Google sign-in). A yellow **pending
-   connection** card is visible. Attach it to the **Default Profile**.
-4. Re-ask Claude: *"List my email accounts."* — Expected: the account list.
+2. Ask Claude: *"List my email accounts."* — Expected: the account list,
+   immediately. Signing in attached the agent to the account's read-only
+   **Default Profile** — no manual approval step is needed, and the
+   dashboard (`https://fgac.ai/dashboard`) shows the new connection with
+   review/block controls.
 
 **Functional tests (~7 min)**
 
@@ -84,8 +84,9 @@ between this doc and reality before submission day.
 | 1 | "Summarize my unread email." | Summaries of the ordinary fixtures. The message whose subject contains a verification code, and the one labeled Confidential, are NOT readable — Claude reports an "Access restricted" notice for them. |
 | 2 | "Read the email about my verification code." | Denied: `🚫 Access restricted: Content blocked by rule 'Block verification codes'`. |
 | 3 | "Email fgac-ai@googlegroups.com that the review test succeeded." | Sends successfully (that address is whitelisted); Claude returns the Gmail message id. |
-| 4 | "Email anyone@example.com hello." | Denied: unauthorized recipient, with instructions that the user must whitelist it. Nothing is sent. |
+| 4 | "Email anyone@example.com hello." | Denied: unauthorized recipient. The denial includes a single-use approval link the account owner could use to whitelist that recipient in one click. Nothing is sent. |
 | 5 | "What's in the Budget tab of the Team Budget spreadsheet?" then "Append a row to the Tracking tab: today, 42." | Both succeed (sheet is exposed Read & Write). |
+| 6 | "Request permission to send email to demo@example.com." | The `request_access` tool returns an approval link and states nothing is granted until the user approves. A follow-up send to that address still fails (the link was not approved). |
 
 **Notes for the reviewer**
 

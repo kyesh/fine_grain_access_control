@@ -2,7 +2,7 @@
 
 > Phase D of `connector-growth_v1.md`. The agent negotiates permission
 > upgrades conversationally: `request_access(capability)` mints a magic
-> approval link (same machinery and security as capability 12); the human
+> approval link (same machinery and security as capability 14); the human
 > approves; the agent retries and succeeds. The tool grants nothing by
 > itself, so it is annotated read-only.
 
@@ -40,7 +40,7 @@
   approval link is minted
 
 ### A6: request_access links obey magic-link security
-- Repeat capability 12's A4 (single-use + expiry) and A5 (wrong user) checks
+- Repeat capability 14's A4 (single-use + expiry) and A5 (wrong user) checks
   against a link minted by `request_access`
 - **Expected**: Identical behavior — same signing, expiry, single-use, and
   owner-session requirements

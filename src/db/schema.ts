@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, uuid, uniqueIndex, jsonb, integer } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, uuid, uniqueIndex, jsonb, integer, boolean } from 'drizzle-orm/pg-core';
 
 // ─── Users ───────────────────────────────────────────────────────────────────
 // Core user table. proxyKey removed — keys now live in proxy_keys table.
@@ -23,9 +23,23 @@ export const proxyKeys = pgTable('proxy_keys', {
   key: text('key').notNull().unique(), // "sk_proxy_xxx"
   publicKey: text('public_key'), // RSA Public Key PEM
   label: text('label').notNull(), // "Claude Agent", "Work Bot"
+  // Marks the auto-created "Default Profile" that new MCP connections attach
+  // to (instant-start, connector-growth plan). At most one live default per
+  // user; found by flag, never by label.
+  isDefault: boolean('is_default').notNull().default(false),
   revokedAt: timestamp('revoked_at'), // NULL = active, set = revoked
   expiresAt: timestamp('expires_at'), // optional TTL
   createdAt: timestamp('created_at').defaultNow().notNull(),
+});
+
+// ─── Approval Link Consumptions ─────────────────────────────────────────────
+// Single-use enforcement for signed magic approval links (connector-growth
+// Phase C). Links are stateless JWTs; consuming one records its jti here, and
+// the primary key makes a second consumption impossible.
+export const approvalConsumptions = pgTable('approval_consumptions', {
+  jti: text('jti').primaryKey(),
+  userId: uuid('user_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
+  consumedAt: timestamp('consumed_at').defaultNow().notNull(),
 });
 
 // ─── Email Delegations ───────────────────────────────────────────────────────

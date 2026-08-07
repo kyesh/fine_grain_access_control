@@ -157,8 +157,8 @@ export default function SetupPage() {
         <section className="flex flex-col gap-6">
           <StepHeading
             number="2"
-            title={<>Sign in &amp; approve the connection</>}
-            subtitle="Your agent triggers an OAuth flow. Then approve it in your dashboard."
+            title={<>Sign in — you&apos;re connected</>}
+            subtitle="Your agent triggers an OAuth flow. Signing in attaches it to your read-only Default Profile."
           />
 
           <div className="rounded-lg border border-border bg-card p-6">
@@ -182,20 +182,20 @@ export default function SetupPage() {
                   B
                 </span>
                 <div>
-                  <strong>
-                    Approve in your{" "}
+                  <strong>Safe defaults apply instantly</strong>
+                  <span className="text-muted-foreground">
+                    {" "}
+                    — the agent attaches to your{" "}
+                    <strong>Default Profile</strong>: it can read this
+                    account&apos;s mail, and cannot send, edit, or delete.
+                    Upgrade, re-scope, or block it any time in your{" "}
                     <Link
                       href="/dashboard"
                       className="text-primary underline underline-offset-2"
                     >
                       FGAC Dashboard
                     </Link>
-                  </strong>
-                  <span className="text-muted-foreground">
-                    {" "}
-                    — new connections appear as{" "}
-                    <strong className="text-warning-foreground">Pending</strong>.
-                    Attach the connection to an agent profile to grant access.
+                    .
                   </span>
                 </div>
               </li>
