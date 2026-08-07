@@ -72,8 +72,8 @@ Recommended: #1 (both differentiators, then the safety hook).
 **Privacy policy URL**: `https://fgac.ai/privacy`
 **Support contact**: `fgac-ai@googlegroups.com`
 
-**Icon**: square PNG. `public/logo-square.png` is currently 376×379 — crop to
-exactly square and export at 512×512 before uploading.
+**Icon**: square PNG, 512×512, cropped from `public/logo-v2.png` (the current
+brand mark — the only logo asset in the repo; older variants were removed).
 
 **URL slug** (PERMANENT — cannot change after publication)
 > Recommended: `fgac` (short, matches domain). Alternative: `fgac-ai`.
