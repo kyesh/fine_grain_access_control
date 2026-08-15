@@ -23,14 +23,22 @@ we get surfaced.
 **Server name** (≤100 chars)
 > FGAC.ai
 
-**Tagline** (≤55 chars — pick one)
-> 1. `Multiple Gmail accounts & editable Sheets, safely` (49)
-> 2. `Gmail & Sheets for agents — on your terms` (41)
-> 3. `Read mail, update Sheets — with guardrails` (42)
+**Tagline** (≤55 chars) — DECIDED (user, 2026-08-15):
+> `Manage Multiple Gmail Accounts & Edit Google Sheets` (51)
 
-Recommended: #1 (both differentiators, then the safety hook).
+**Description** (≤2,000 chars) — DECIDED (user, 2026-08-15):
 
-**Description** (≤2,000 chars)
+> Connect Claude to Multiple Gmail Accounts, Work, School and Personal and
+> let it update Google Sheets for you! Through FGAC.ai you can give Claude
+> precise access to the specific sheets and senders you want.
+>
+> More Google Workspace Connections Coming Soon!
+
+(Earlier keyword-first draft kept below for reference — its bullet points
+remain useful raw material if the description is ever expanded; the
+use-cases step still carries the remaining search-phrase clusters.)
+
+<details><summary>Superseded draft (v2 keyword-first)</summary>
 
 > Connect one or many Gmail accounts — work, personal, and delegated team
 > inboxes — and let Claude read mail, send guarded email, and update your
@@ -63,7 +71,7 @@ Recommended: #1 (both differentiators, then the safety hook).
 >
 > Free for personal use. Connected in under a minute.
 
-(~1,750 chars.)
+</details>
 
 **Categories** (1-5): Productivity; Email; Spreadsheets/Data; Developer Tools
 (pick what the portal's actual taxonomy offers — Productivity first).
