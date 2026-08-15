@@ -78,6 +78,11 @@ brand mark — the only logo asset in the repo; older variants were removed).
 **URL slug** (PERMANENT — cannot change after publication)
 > Recommended: `fgac` (short, matches domain). Alternative: `fgac-ai`.
 
+**Allowed link URIs** (optional field): one entry — `https://fgac.ai`. We
+don't call `ui/open-link` today (links are plain text in tool results), but
+the declaration is inert, we own the origin, and it pre-clears any future
+embedded-approval-card upgrade. Never list domains we don't own.
+
 ## Connection step
 
 - Server URL: `https://fgac.ai/api/mcp` (https ✓)
@@ -135,8 +140,9 @@ brand mark — the only logo asset in the repo; older variants were removed).
 - Use docs/connector_submission/reviewer_runbook.md Part 2 verbatim, with real
   credentials filled in from 1Password.
 - Attestation "you have run every tool yourself": true — QA runs exercised all
-  13 tools through the MCP endpoint (docs/QA_Acceptance_Test/qa-results.json);
-  do one final custom-connector pass from Claude.ai before submitting.
+  14 tools (including request_access) through the MCP endpoint
+  (docs/QA_Acceptance_Test/qa-results.json); do one final custom-connector
+  pass from Claude.ai before submitting.
 
 ## Compliance step (7 acknowledgments)
 
@@ -147,10 +153,11 @@ collection beyond tool needs ✓; public documentation live at fgac.ai/docs ✓.
 
 ## Pre-submission checklist (final pass)
 
-- [ ] Google Group accepts posts from non-members (tested with an outside email)
-- [ ] fgac.ai/docs live in production
+- [ ] support@fgac.ai delivery tested with an email from an outside address
+- [x] fgac.ai/docs live in production
 - [ ] Reviewer account built + dry-run (reviewer_runbook.md Part 1, step 5)
-- [ ] Icon cropped square, 512×512 PNG
+- [x] Icon cropped square, 512×512 PNG (from logo-v2.png)
 - [ ] No Vercel firewall/challenge rules blocking 160.79.104.0/21
-- [ ] Final custom-connector smoke test from Claude.ai (all tools listed with
-      annotations; one read, one denied read, one send, one denied send)
+- [ ] Final custom-connector smoke test from Claude.ai (all 14 tools listed
+      with annotations; one read, one denied read, one send, one denied send,
+      one request_access)
