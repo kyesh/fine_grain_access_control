@@ -270,10 +270,10 @@ export default function DocsPage() {
           <p className="mx-auto mb-4 max-w-md text-sm leading-relaxed text-muted-foreground">
             Questions, bug reports, or access issues — email{" "}
             <a
-              href="mailto:fgac-ai@googlegroups.com"
+              href="mailto:support@fgac.ai"
               className="text-primary underline underline-offset-2"
             >
-              fgac-ai@googlegroups.com
+              support@fgac.ai
             </a>
             . See also the{" "}
             <Link href="/privacy" className="text-primary underline underline-offset-2">
