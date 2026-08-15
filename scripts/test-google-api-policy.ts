@@ -3,7 +3,7 @@
  * (src/app/api/mcp/googleApiPolicy.ts). Run: npx tsx scripts/test-google-api-policy.ts
  */
 import {
-  classifyGoogleApiCall, extractSendRecipients, collectLabelIds,
+  classifyGoogleApiCall, extractSendRecipients, collectLabelIds, sheetsApprovalAction,
 } from '../src/app/api/mcp/googleApiPolicy';
 
 let failures = 0;
@@ -88,6 +88,27 @@ expect('nested thread messages',
   collectLabelIds({ messages: [{ labelIds: ['INBOX'] }, { labelIds: ['SECRET'] }] }),
   (l: string[]) => l.includes('SECRET') && l.includes('INBOX'));
 expect('no labels → empty', collectLabelIds({ messages: [{ id: 'a' }] }), (l: string[]) => l.length === 0);
+
+console.log('sheetsApprovalAction (denial -> approval action matrix):');
+// Regression (tester finding 2026-08-15): a WRITE denied on an unexposed
+// sheet must mint a write-level token — a read-only exposure under-grants
+// and traps the user in an approve/retry/fail loop.
+expect('read on unexposed -> sheets_expose',
+  sheetsApprovalAction('not_exposed', 'ss1', false),
+  (a: { action: string } | null) => a?.action === 'sheets_expose');
+expect('WRITE on unexposed -> sheets_write',
+  sheetsApprovalAction('not_exposed', 'ss1', true),
+  (a: { action: string } | null) => a?.action === 'sheets_write');
+expect('write on read-only -> sheets_write',
+  sheetsApprovalAction('read_only', 'ss1', true),
+  (a: { action: string } | null) => a?.action === 'sheets_write');
+expect('blocked mints nothing (read)',
+  sheetsApprovalAction('blocked', 'ss1', false), (a: unknown) => a === null);
+expect('blocked mints nothing (write)',
+  sheetsApprovalAction('blocked', 'ss1', true), (a: unknown) => a === null);
+expect('spreadsheetId carried through',
+  sheetsApprovalAction('not_exposed', 'ss-42', true),
+  (a: { spreadsheetId?: string } | null) => a?.spreadsheetId === 'ss-42');
 
 if (failures > 0) {
   console.error(`\n${failures} test(s) FAILED`);

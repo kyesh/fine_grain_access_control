@@ -114,3 +114,25 @@ export function collectLabelIds(value: unknown, depth = 0): string[] {
   }
   return out;
 }
+
+// ─── Sheets denial → approval action (magic links) ──────────────────────────
+
+export type SheetsDenialKind = 'not_exposed' | 'blocked' | 'read_only';
+
+/**
+ * Which grant a denied Sheets operation should request. The action must match
+ * the access level the DENIED OPERATION requires — a write denied on an
+ * unexposed sheet must request write access; minting a read-only exposure
+ * there sends the user through an approval that cannot satisfy the retry
+ * (tester finding, 2026-08-15). Explicit blocks never mint an action:
+ * weakening a deliberate block stays a dashboard act.
+ */
+export function sheetsApprovalAction(
+  denial: SheetsDenialKind,
+  spreadsheetId: string,
+  isMutating: boolean,
+): { action: 'sheets_expose' | 'sheets_write'; spreadsheetId: string } | null {
+  if (denial === 'blocked') return null;
+  if (denial === 'read_only') return { action: 'sheets_write', spreadsheetId };
+  return { action: isMutating ? 'sheets_write' : 'sheets_expose', spreadsheetId };
+}

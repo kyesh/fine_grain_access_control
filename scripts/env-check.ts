@@ -119,4 +119,21 @@ if (strays.length) {
   console.log(`    Keep production credentials in .secrets/ instead (see CLAUDE.md).${RESET}`);
 }
 
+// ── Whitespace inside env values ────────────────────────────────────────────
+// Sibling of the quoted-value check above: a value pasted into Vercel with a
+// trailing newline survives `vercel env pull` and dotenv parsing, then breaks
+// whatever URL it gets concatenated into (approval links shipped as
+// "https://fgac.ai\n/dashboard/approve..." this way). Detect it at the source.
+const whitespaceOffenders = Object.entries(process.env)
+  .filter(([k]) => /URL|HOST|DOMAIN/i.test(k))
+  .filter(([, v]) => v !== undefined && v !== v.trim())
+  .map(([k]) => k);
+if (whitespaceOffenders.length) {
+  console.log('');
+  console.log(bad(`env values with leading/trailing whitespace or newlines: ${whitespaceOffenders.join(', ')}`));
+  console.log(`${DIM}    URLs built from these break at the stray character. Fix at the source:`);
+  console.log(`      npx vercel env rm <VAR> <environment>   # then re-add WITHOUT the newline`);
+  console.log(`      npx vercel env pull .env.local --environment=development${RESET}`);
+}
+
 console.log('');
