@@ -14,7 +14,7 @@
 
 ## 1. What you provide us (one-time registration)
 
-**How to register:** email the table below to **fgac-ai@googlegroups.com**
+**How to register:** email the table below to **support@fgac.ai**
 (also the support channel for partners not yet registered). During the pilot
 phase expect a response within **2 business days**. Credentials are delivered
 to your ops contact via a **one-time secret link** — never over email body or
@@ -253,7 +253,7 @@ Work through this checklist with us on a test account before going live:
 
 ## 6. Support
 
-All support and registration changes go through **fgac-ai@googlegroups.com** —
+All support and registration changes go through **support@fgac.ai** —
 including questions from teams who have not registered yet. Registration
 changes (redirect URIs, webhook URL, logo, requested access) are handled
 there; access-broadening changes require your users to re-consent by design.

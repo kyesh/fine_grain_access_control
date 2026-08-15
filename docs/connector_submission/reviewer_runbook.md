@@ -43,7 +43,7 @@ Send the account ~8-10 emails so every demo prompt has something to find:
 2. Default profile → **+ Expose a sheet** → pick "Team Budget (Demo)" → set
    **Read & Write**.
 3. Rules (create on the profile):
-   - **Send whitelist**: pattern `fgac-ai@googlegroups.com` (so a reviewer can
+   - **Send whitelist**: pattern `support@fgac.ai` (so a reviewer can
      send exactly one place — us; everything else demonstrates the deny).
    - **Content read blacklist**: rule name `Block verification codes`, pattern
      `verification code` (blocks the 2FA fixture).
@@ -83,7 +83,7 @@ between this doc and reality before submission day.
 |---|---|---|
 | 1 | "Summarize my unread email." | Summaries of the ordinary fixtures. The message whose subject contains a verification code, and the one labeled Confidential, are NOT readable — Claude reports an "Access restricted" notice for them. |
 | 2 | "Read the email about my verification code." | Denied: `🚫 Access restricted: Content blocked by rule 'Block verification codes'`. |
-| 3 | "Email fgac-ai@googlegroups.com that the review test succeeded." | Sends successfully (that address is whitelisted); Claude returns the Gmail message id. |
+| 3 | "Email support@fgac.ai that the review test succeeded." | Sends successfully (that address is whitelisted); Claude returns the Gmail message id. |
 | 4 | "Email anyone@example.com hello." | Denied: unauthorized recipient. The denial includes a single-use approval link the account owner could use to whitelist that recipient in one click. Nothing is sent. |
 | 5 | "What's in the Budget tab of the Team Budget spreadsheet?" then "Append a row to the Tracking tab: today, 42." | Both succeed (sheet is exposed Read & Write). |
 | 6 | "Request permission to send email to demo@example.com." | The `request_access` tool returns an approval link and states nothing is granted until the user approves. A follow-up send to that address still fails (the link was not approved). |
@@ -95,4 +95,4 @@ between this doc and reality before submission day.
   paths; try `google_api_get` with `drive/v3/files` to see the deny-by-default
   behavior (unsupported APIs are refused server-side).
 - Public docs: `https://fgac.ai/docs` · Privacy: `https://fgac.ai/privacy`
-- Support / questions: `fgac-ai@googlegroups.com`
+- Support / questions: `support@fgac.ai`

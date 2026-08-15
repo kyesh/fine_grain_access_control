@@ -46,7 +46,7 @@ Before the FIRST partner in an environment can use notifications:
 ## 1. Intake & review
 
 **Channel & SLA (published in the guide — honor them):** registration requests
-and pre-registration questions arrive at **fgac-ai@googlegroups.com**; respond
+and pre-registration questions arrive at **support@fgac.ai**; respond
 within 2 business days. Credentials go back to the ops contact via a
 **one-time secret link** (e.g. 1Password share) — never in email body, chat,
 issues, or any committed file.

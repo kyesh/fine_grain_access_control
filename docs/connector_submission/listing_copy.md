@@ -70,7 +70,7 @@ Recommended: #1 (both differentiators, then the safety hook).
 
 **Documentation URL**: `https://fgac.ai/docs`
 **Privacy policy URL**: `https://fgac.ai/privacy`
-**Support contact**: `fgac-ai@googlegroups.com`
+**Support contact**: `support@fgac.ai`
 
 **Icon**: square PNG, 512×512, cropped from `public/logo-v2.png` (the current
 brand mark — the only logo asset in the repo; older variants were removed).
