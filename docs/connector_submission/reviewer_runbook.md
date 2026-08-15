@@ -55,8 +55,8 @@ Send the account ~8-10 emails so every demo prompt has something to find:
 ### 5. Dry-run before submitting
 
 Run the whole Part 2 script ourselves from a clean Claude.ai account:
-connect → approve → all 5 prompts → confirm outcomes match. Fix any drift
-between this doc and reality before submission day.
+connect → all 6 prompts → confirm outcomes match. Fix any drift between this
+doc and reality before submission day.
 
 ---
 
