@@ -37,7 +37,7 @@ Current branch: !`git branch --show-current`
    builds. Identify deployments in `Building` or `Queued` state older than your push:
 
    ```bash
-   npx vercel ls googleapis-fine-grain-access-control
+   npx vercel ls fine-grain-access-control
    ```
    Then cancel each (this modifies state — confirm with the user if it isn't obviously yours):
    ```bash

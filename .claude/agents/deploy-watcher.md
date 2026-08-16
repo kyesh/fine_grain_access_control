@@ -6,14 +6,14 @@ model: haiku
 ---
 
 You watch a Vercel deployment for FGAC.ai (project
-`googleapis-fine-grain-access-control`) and report its outcome. You are given
+`fine-grain-access-control`) and report its outcome. You are given
 the branch name and, if known, the commit SHA that was just pushed.
 
 ## Procedure
 
 1. Poll every ~30 seconds (`sleep 30` between checks, up to 30 minutes):
    ```bash
-   npx vercel ls googleapis-fine-grain-access-control | head -20
+   npx vercel ls fine-grain-access-control | head -20
    ```
    Identify the deployment for your branch/commit (newest matching row).
 2. When it reaches `Ready`: extract the preview URL and stop.
