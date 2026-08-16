@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Card, CardHeader, Badge, EmptyState, buttonPrimary, buttonSecondary, buttonDanger } from '@/components/ui';
 import { assignRulesToKey, unassignRuleFromKey, revokeProxyKey, setSheetRulePermission, exposeSheetsFromPicker, applyRecommendedSecurityRules } from './actions';
@@ -15,6 +16,7 @@ export interface Profile {
   id: string;
   key: string;
   label: string;
+  isDefault: boolean;
   createdAt: string;
   revokedAt: string | null;
   emailAccess: string[];
@@ -1095,6 +1097,19 @@ function GmailAccessCard({
             );
           })
         )}
+        <p className="pt-1 text-xs leading-relaxed text-subtle">
+          {/* Legacy default keys are only flagged at their next MCP connection
+              (ensureDefaultProfile adoption), so match on the label too. */}
+          {profile.isDefault || profile.label === 'Default Profile'
+            ? 'Inboxes other people delegate to you are added here automatically.'
+            : 'Mailboxes are chosen when a profile is created; inboxes delegated to you attach to your Default Profile automatically.'}{' '}
+          <Link
+            href="/use-cases/multiple-gmail-accounts"
+            className="text-primary underline underline-offset-2 hover:opacity-80"
+          >
+            How to set up multiple Gmail accounts
+          </Link>
+        </p>
       </div>
     </Card>
   );
