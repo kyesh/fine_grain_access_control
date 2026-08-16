@@ -139,6 +139,7 @@ These are always active — no configuration needed:
 
 - **Permanent deletion is blocked**: `DELETE` requests to trash/emptyTrash endpoints are denied.
 - **Send requires a whitelist**: If any `send_whitelist` rules exist, sending is only allowed to matching addresses. If no send rules exist, **all sending is denied by default**.
+- **Don't want to whitelist one address at a time?** The Default Profile's Gmail Rules card offers a one-click **"Enable sending to anyone"** button, which creates a `Send to Anyone` rule (pattern `*`). Send denials also include a one-click approval link for the same grant, alongside the per-recipient link. Delete the rule to return to deny-by-default.
 
 ### Quick Add: 2FA Block
 
@@ -204,8 +205,17 @@ Owner (user_a@example.com)              Delegate (user_b@example.com)
 3. Under **"Accessible Gmail Accounts"**, you'll see:
    - Your own email (green **"You"** badge)
    - The delegated email (indigo **"Delegated"** badge)
-4. Create an API key and check both emails under **"Email Access"**.
-5. Your agent can now access both inboxes using a single key.
+4. **Your Default Profile picks up the delegated mailbox automatically** — agents
+   connected on the Default Profile can read it immediately, with the same
+   read-only default posture as your own mailbox (no sending, no Sheets, until
+   you add rules).
+5. For a **custom** API key/profile, mailbox access stays opt-in: check both
+   emails under **"Email Access"** when creating the key.
+6. Either way, one key serves both inboxes — no separate key per mailbox.
+
+> [!NOTE]
+> Revoking the delegation removes the mailbox from the Default Profile (and
+> every other profile) immediately.
 
 ### Targeting a Specific Email in API Calls
 

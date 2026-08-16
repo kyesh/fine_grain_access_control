@@ -45,7 +45,9 @@ export default function MultipleGmailAccountsPage() {
               inbox — no password sharing, no Google Workspace admin needed.
             </li>
             <li>
-              Your agent targets any granted inbox with the{" "}
+              That&apos;s it — the delegated inbox attaches to your Default
+              Profile automatically, read-only like your own. Your agent
+              targets any inbox with the{" "}
               <code className="rounded-xs bg-primary-muted px-1.5 py-0.5 font-mono text-xs text-primary">
                 account
               </code>{" "}
@@ -53,6 +55,12 @@ export default function MultipleGmailAccountsPage() {
               <em>&ldquo;Summarize unread mail in the support inbox&rdquo;</em>.
             </li>
           </ol>
+          <p className="mt-4 text-sm leading-relaxed text-muted-foreground">
+            Building a custom profile instead? Delegated inboxes stay opt-in
+            there — pick the mailboxes when you create the profile. And when a
+            delegation is revoked, the inbox disappears from every profile
+            immediately.
+          </p>
         </section>
 
         <section className="rounded-lg border border-border bg-card p-6">

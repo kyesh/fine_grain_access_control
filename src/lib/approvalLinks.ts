@@ -24,6 +24,7 @@ export const APPROVAL_LINK_TTL_SECONDS = 15 * 60;
 
 export type ApprovalAction =
   | { action: 'send_whitelist'; recipient: string }
+  | { action: 'send_all' }
   | { action: 'sheets_expose'; spreadsheetId: string; resourceName?: string }
   | { action: 'sheets_write'; spreadsheetId: string; resourceName?: string };
 
@@ -90,7 +91,7 @@ export async function verifyApprovalToken(token: string): Promise<VerifyResult> 
     if (
       typeof jti !== 'string' || typeof userId !== 'string' ||
       typeof proxyKeyId !== 'string' || typeof action !== 'string' ||
-      !['send_whitelist', 'sheets_expose', 'sheets_write'].includes(action)
+      !['send_whitelist', 'send_all', 'sheets_expose', 'sheets_write'].includes(action)
     ) {
       return { ok: false, reason: 'invalid' };
     }
@@ -117,6 +118,8 @@ export function describeApproval(p: ApprovalPayload): string {
   switch (p.action) {
     case 'send_whitelist':
       return `Allow this agent to send email to ${p.recipient}`;
+    case 'send_all':
+      return 'Allow this agent to send email to ANY recipient, from every mailbox on its profile';
     case 'sheets_expose':
       return `Give this agent read-only access to spreadsheet ${p.resourceName || p.spreadsheetId}`;
     case 'sheets_write':

@@ -27,7 +27,7 @@ allowed-tools: Bash(gh:*), Bash(npx vercel ls:*), Bash(npx vercel inspect:*), Ba
 3. **Validate the deployment**:
 
    ```bash
-   npx vercel ls googleapis-fine-grain-access-control --prod --limit 1
+   npx vercel ls fine-grain-access-control --prod --limit 1
    ```
    Optional precise status check if you have the deployment URL:
    ```bash
@@ -44,7 +44,7 @@ allowed-tools: Bash(gh:*), Bash(npx vercel ls:*), Bash(npx vercel inspect:*), Ba
    - Flag the deployment issues explicitly.
    - Check logs:
      ```bash
-     npx vercel logs googleapis-fine-grain-access-control --prod
+     npx vercel logs fine-grain-access-control --prod
      ```
    - Propose fixes. Do NOT attempt a production redeploy yourself — `vercel --prod`,
      `vercel promote`, and `vercel alias` are banned and denied in `.claude/settings.json`.

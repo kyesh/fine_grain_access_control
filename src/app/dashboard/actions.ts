@@ -4,6 +4,7 @@ import { db } from "@/db";
 import { users, proxyKeys, emailDelegations, keyEmailAccess, accessRules, keyRuleAssignments } from "@/db/schema";
 import { eq, and, desc, isNull } from "drizzle-orm";
 import { findActiveDelegation } from "@/db/delegationQueries";
+import { syncDefaultProfileDelegatedAccess } from "@/db/defaultProfile";
 import { currentUser } from "@clerk/nextjs/server";
 import { revalidatePath } from "next/cache";
 import safeRegex from "safe-regex";
@@ -67,12 +68,16 @@ export async function createDelegation(formData: FormData) {
 
   if (existing && existing.status === 'active') {
     console.log("[createDelegation] Delegation already active");
+    // Self-heal: re-materialize onto the delegate's Default Profile in case a
+    // prior sync was missed (e.g. the profile didn't exist yet).
+    await syncDefaultProfileDelegatedAccess(delegateUser.email);
     revalidatePath("/dashboard");
     return;
   }
 
   if (existing && existing.status === 'revoked') {
-    // Re-activate the existing delegation
+    // Re-activate the existing delegation. Revocation deleted the
+    // key_email_access rows, so the default-profile sync below must re-add them.
     await db.update(emailDelegations).set({
       status: 'active',
       revokedAt: null,
@@ -85,6 +90,11 @@ export async function createDelegation(formData: FormData) {
       status: 'active',
     });
   }
+
+  // The delegate's Default Profile gets the mailbox immediately — delegation is
+  // the owner's explicit grant, and instant-start connections run on the
+  // default key. Custom profiles remain per-mailbox opt-in.
+  await syncDefaultProfileDelegatedAccess(delegateUser.email);
 
   revalidatePath("/dashboard");
 }
@@ -550,6 +560,71 @@ export async function applyRecommendedSecurityRules() {
   revalidatePath("/dashboard");
 }
 
+// ─── Send to Anyone ────────────────────────────────────────────────────────
+
+/**
+ * Grant a profile an all-recipients send whitelist ('*' pattern). Shared by
+ * the dashboard one-click button and the send_all magic link.
+ *
+ * Reuses an existing '*' rule only when it already has assignments — adding
+ * an assignment to a GLOBAL rule (zero assignments) would silently narrow it
+ * to this one key, revoking sending everywhere else. Returns false when the
+ * key already has the grant (directly or via a global rule).
+ */
+async function grantSendToAnyone(dbUserId: string, keyId: string): Promise<boolean> {
+  const candidates = await db.select().from(accessRules).where(and(
+    eq(accessRules.userId, dbUserId),
+    eq(accessRules.service, 'gmail'),
+    eq(accessRules.actionType, 'send_whitelist'),
+    eq(accessRules.regexPattern, '*'),
+  ));
+
+  let reusable: typeof candidates[number] | null = null;
+  for (const rule of candidates) {
+    const assignments = await db.select().from(keyRuleAssignments)
+      .where(eq(keyRuleAssignments.accessRuleId, rule.id));
+    if (assignments.length === 0) return false; // global — already covers this key
+    if (assignments.some(a => a.proxyKeyId === keyId)) return false; // already granted
+    reusable = reusable ?? rule;
+  }
+
+  let rule = reusable;
+  if (!rule) {
+    [rule] = await db.insert(accessRules).values({
+      userId: dbUserId,
+      ruleName: 'Send to Anyone',
+      service: 'gmail',
+      actionType: 'send_whitelist',
+      regexPattern: '*',
+    }).returning();
+  }
+
+  await db.insert(keyRuleAssignments).values({ proxyKeyId: keyId, accessRuleId: rule.id });
+  return true;
+}
+
+/**
+ * One-click "let this profile email anyone" — the escape hatch for users who
+ * don't want to whitelist recipients one at a time. Deliberately per-profile
+ * (surfaced on the Default Profile in the UI) and reversible by deleting the
+ * 'Send to Anyone' rule.
+ */
+export async function enableSendToAnyone(keyId: string) {
+  const dbUser = await getDbUser();
+
+  const key = await db.select().from(proxyKeys)
+    .where(and(eq(proxyKeys.id, keyId), eq(proxyKeys.userId, dbUser.id), isNull(proxyKeys.revokedAt)))
+    .limit(1).then(r => r[0]);
+  if (!key) throw new Error("Unauthorized");
+
+  const granted = await grantSendToAnyone(dbUser.id, key.id);
+  if (granted) {
+    const { captureServerEvent } = await import("@/lib/posthogServer");
+    captureServerEvent(dbUser.clerkUserId, "send_all_enabled", { source: "dashboard" });
+  }
+  revalidatePath("/dashboard");
+}
+
 // ─── Magic-Link Approvals (connector-growth Phase C) ───────────────────────
 
 export type MagicApprovalResult =
@@ -612,6 +687,10 @@ export async function approveMagicLink(
       regexPattern: `^${escaped}$`,
     }).returning();
     await db.insert(keyRuleAssignments).values({ proxyKeyId: key.id, accessRuleId: rule.id });
+  } else if (p.action === "send_all") {
+    // Idempotent: an already-granted key still consumes the token and reports
+    // success — the agent's retry will work either way.
+    await grantSendToAnyone(dbUser.id, key.id);
   } else if ((p.action === "sheets_expose" || p.action === "sheets_write") && p.spreadsheetId) {
     const readWrite = p.action === "sheets_write" || sheetsWriteChoice === true;
     const [rule] = await db.insert(accessRules).values({
