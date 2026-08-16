@@ -2,6 +2,7 @@ import { db } from '@/db';
 import { users, proxyKeys, keyEmailAccess } from '@/db/schema';
 import { eq, and, desc, isNull } from 'drizzle-orm';
 import * as jose from 'jose';
+import { syncDefaultProfileDelegatedAccess } from '@/db/defaultProfile';
 
 /**
  * Resolve the FGAC user row for a Clerk session, creating one only when this
@@ -91,11 +92,15 @@ export async function createDbUser(clerkUserId: string, email: string) {
 
   // 3. Create the Default Agent Profile (Proxy Key)
   const proxyKeyString = `sk_proxy_${crypto.randomUUID().replace(/-/g, '')}`;
+  // isDefault from birth: ensureDefaultProfile's legacy-adoption branch exists
+  // only for pre-instant-start rows, and delegation sync (defaultProfile.ts)
+  // finds default keys by the flag, not the label.
   const [newKey] = await db.insert(proxyKeys).values({
     userId: newUser.id,
     key: proxyKeyString,
     publicKey: publicKeyPem,
     label: 'Default Profile',
+    isDefault: true,
   }).returning();
 
   // 4. Grant this key access to the user's own email address
@@ -103,6 +108,12 @@ export async function createDbUser(clerkUserId: string, email: string) {
     proxyKeyId: newKey.id,
     targetEmail: email,
   });
+
+  // 5. Materialize any active delegations to this address. A genuine first
+  // signup has none (delegation requires an existing account), but Clerk can
+  // mint a new user id for a known email — the fresh default key must still
+  // reach mailboxes delegated to the older row.
+  await syncDefaultProfileDelegatedAccess(email);
 
   return newUser;
 }

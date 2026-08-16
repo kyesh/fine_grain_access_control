@@ -204,8 +204,17 @@ Owner (user_a@example.com)              Delegate (user_b@example.com)
 3. Under **"Accessible Gmail Accounts"**, you'll see:
    - Your own email (green **"You"** badge)
    - The delegated email (indigo **"Delegated"** badge)
-4. Create an API key and check both emails under **"Email Access"**.
-5. Your agent can now access both inboxes using a single key.
+4. **Your Default Profile picks up the delegated mailbox automatically** — agents
+   connected on the Default Profile can read it immediately, with the same
+   read-only default posture as your own mailbox (no sending, no Sheets, until
+   you add rules).
+5. For a **custom** API key/profile, mailbox access stays opt-in: check both
+   emails under **"Email Access"** when creating the key.
+6. Either way, one key serves both inboxes — no separate key per mailbox.
+
+> [!NOTE]
+> Revoking the delegation removes the mailbox from the Default Profile (and
+> every other profile) immediately.
 
 ### Targeting a Specific Email in API Calls
 

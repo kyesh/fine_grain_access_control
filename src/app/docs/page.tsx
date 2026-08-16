@@ -248,7 +248,7 @@ export default function DocsPage() {
               ["Gmail and Google Sheets only.", "Other Google services (Drive, Calendar, Docs) are denied — support arrives service by service, each behind its own rules."],
               ["Agents can never delete.", "No tool exposes DELETE. Trash, empty-trash, and destructive Gmail settings are refused regardless of your rules."],
               ["Sending requires a whitelist.", "With no send-whitelist rule configured, all outbound mail is refused. That's the default. When a send is denied, you get a one-click, single-use link to approve exactly that recipient — or the agent can ask via request_access."],
-              ["New connections start read-only.", "Connecting attaches the agent to your Default Profile: it can read this account's mail and nothing else — no sending, no Sheets, no other inboxes. You can review, re-scope, or block it from the dashboard at any time."],
+              ["New connections start read-only.", "Connecting attaches the agent to your Default Profile: it can read this account's mail — plus any inbox its owner has delegated to you — and nothing else: no sending, no Sheets, no undelegated inboxes. You can review, re-scope, or block it from the dashboard at any time."],
               ["Attachments cap at ~150 KB", "through MCP responses. Larger files must be fetched from Gmail directly."],
               ["Delegated inboxes need an explicit delegation", "created by the inbox owner from their own FGAC account, revocable any time."],
             ].map(([lead, rest]) => (

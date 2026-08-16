@@ -29,3 +29,13 @@
 ### A6: list_accounts shows delegated emails
 - Agent calls list_accounts
 - **Expected**: Returns both own and delegated email addresses
+
+### A7: Default Profile auto-includes delegated mailboxes
+- Owner delegates to a user who has a Default Profile connection but takes NO
+  dashboard action as the delegate (no key creation, no profile edit)
+- On that default-profile connection, call `list_accounts`, then `gmail_list`
+  with `account=<owner email>`
+- **Expected**: The owner's mailbox is listed and readable immediately —
+  delegation alone attaches it to the Default Profile. After the owner
+  revokes, the same calls are denied and the mailbox disappears from
+  `list_accounts` (custom profiles remain per-mailbox opt-in at creation)

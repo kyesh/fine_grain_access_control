@@ -4,6 +4,7 @@ import { db } from "@/db";
 import { users, proxyKeys, emailDelegations, keyEmailAccess, accessRules, keyRuleAssignments } from "@/db/schema";
 import { eq, and, desc, isNull } from "drizzle-orm";
 import { findActiveDelegation } from "@/db/delegationQueries";
+import { syncDefaultProfileDelegatedAccess } from "@/db/defaultProfile";
 import { currentUser } from "@clerk/nextjs/server";
 import { revalidatePath } from "next/cache";
 import safeRegex from "safe-regex";
@@ -67,12 +68,16 @@ export async function createDelegation(formData: FormData) {
 
   if (existing && existing.status === 'active') {
     console.log("[createDelegation] Delegation already active");
+    // Self-heal: re-materialize onto the delegate's Default Profile in case a
+    // prior sync was missed (e.g. the profile didn't exist yet).
+    await syncDefaultProfileDelegatedAccess(delegateUser.email);
     revalidatePath("/dashboard");
     return;
   }
 
   if (existing && existing.status === 'revoked') {
-    // Re-activate the existing delegation
+    // Re-activate the existing delegation. Revocation deleted the
+    // key_email_access rows, so the default-profile sync below must re-add them.
     await db.update(emailDelegations).set({
       status: 'active',
       revokedAt: null,
@@ -85,6 +90,11 @@ export async function createDelegation(formData: FormData) {
       status: 'active',
     });
   }
+
+  // The delegate's Default Profile gets the mailbox immediately — delegation is
+  // the owner's explicit grant, and instant-start connections run on the
+  // default key. Custom profiles remain per-mailbox opt-in.
+  await syncDefaultProfileDelegatedAccess(delegateUser.email);
 
   revalidatePath("/dashboard");
 }

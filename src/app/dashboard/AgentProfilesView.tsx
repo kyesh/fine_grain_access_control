@@ -276,7 +276,7 @@ function RecentConnectionsBanner({ connections, rules }: { connections: Connecti
     <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-primary/30 bg-primary-muted px-5 py-3.5">
       <div className="min-w-0">
         <p className="text-[13px] font-bold text-foreground">
-          {label} with safe defaults: it can read this account&apos;s mail, and cannot send, edit, or delete.
+          {label} with safe defaults: it can read this account&apos;s mail (and inboxes delegated to you), and cannot send, edit, or delete.
         </p>
         <p className="mt-0.5 text-xs text-muted-foreground">
           {hasShield
