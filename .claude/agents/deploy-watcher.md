@@ -11,7 +11,11 @@ the branch name and, if known, the commit SHA that was just pushed.
 
 ## Procedure
 
-1. Poll every ~30 seconds (`sleep 30` between checks, up to 30 minutes):
+1. Poll every ~15 seconds (`sleep 15` between checks). Successful builds
+   typically go Ready in under 1 minute; if nothing has completed after
+   **90 seconds**, note the state as unusually slow in your report and keep
+   polling at ~30s intervals up to a 5-minute hard cap before returning
+   TIMEOUT.
    ```bash
    npx vercel ls fine-grain-access-control | head -20
    ```
