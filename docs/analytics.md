@@ -20,13 +20,32 @@ keep internal/QA traffic out of the numbers.
 | `$pageview` | client (`PostHogPageView.tsx`) | `$current_url` |
 | `sign_up_started` | client (`SignUpCta.tsx`, all sign-up CTAs) | `cta_location`: nav / hero / bottom_cta |
 | `sign_up_completed` | server (Clerk webhook, `user.created`) | `$set.email` |
-| `mcp_tool_call` | server (`/api/mcp`, every tool) | `tool`, `client_id`, `outcome`, `duration_ms` |
+| `$mcp_tool_call` | server (`/api/mcp`, every tool) | `$mcp_tool_name`, `$mcp_duration_ms`, `$mcp_is_error`, `client_id`, `outcome` |
 | `proxy_request` | server (`/api/proxy/[...path]`) | `service` (gmail/sheets/drive), `method`, `status`, `outcome`, `duration_ms`, `proxy_key_id` |
+| `mcp_connection_created` | server (`/api/mcp` auth layer) | `connection_id`, `client_id`, `auto_attached` |
+| `approval_link_minted` | server (`/api/mcp`) | `action` |
+| `read_restriction_enforced` | server (`/api/mcp`) | `via` (tool name), `restriction` |
 
-`mcp_tool_call.outcome`: `success`, `denied_by_policy` (🚫 FGAC rule), `pending_approval`
-(⏳ connection not yet approved), `failed` (❌ auth/input problems), `error`
-(upstream Google failure), `exception`.
+`$mcp_tool_call` uses PostHog's **canonical MCP Analytics schema** (event and
+`$mcp_*` property names) so PostHog's built-in MCP views resolve the tool name.
+`$mcp_is_error` is true only for upstream failures/exceptions; the finer-grained
+FGAC story is in the custom `outcome` property: `success`, `denied_by_policy`
+(🚫 FGAC rule), `pending_approval` (⏳ connection not yet approved), `failed`
+(❌ auth/input problems), `error` (upstream Google failure), `exception`.
 Unauthenticated calls attribute to the `anonymous-mcp` / `anonymous-proxy` persons.
+
+> **Legacy naming (before 2026-08):** tool calls were captured as a custom
+> `mcp_tool_call` event with `tool` / `duration_ms` properties. That name
+> collides with the event PostHog's archived beta MCP SDK once emitted, so the
+> PostHog UI labels it "MCP tool call (legacy)" and its MCP views show no tool
+> name (they read `$mcp_tool_name`). The old events still exist under the old
+> name — insights spanning the rename must query both. Nothing in this codebase
+> should ever emit `mcp_tool_call` again; QA capability 16 asserts this.
+
+Payload capture is deliberately **off**: we never send `$mcp_parameters` or
+`$mcp_response` (they would carry customer mail/sheet content into PostHog).
+For the same reason, do not adopt `@posthog/mcp` / `npx @posthog/wizard
+mcp-analytics`, which captures both with no redaction option.
 
 Every event (client and server) carries an `environment` property:
 `development` (localhost), `preview` (`*.vercel.app`), or `production` — all three

@@ -138,3 +138,15 @@ curl -X POST http://localhost:18790/api/chat \
 ```bash
 docker compose -f test/qa-envs/openclaw/docker-compose.yml down
 ```
+
+## Capability: Analytics Events (→ capabilities/16_analytics_events.md)
+
+> Run LAST — it inspects the PostHog events the capabilities above generated.
+> Environment tier here is `development` (localhost dev server).
+
+- A1–A5: `npx tsx scripts/qa-posthog-events.ts --event '$mcp_tool_call' --since <minutes since run start> --environment development`
+  (A2 repeats with `--event mcp_tool_call` expecting 0 rows). Needs
+  `POSTHOG_PERSONAL_API_KEY` + `POSTHOG_PROJECT_ID`; if unset, `skip` all with
+  that reason. Ingestion lags ~30–60s — re-query before failing.
+- A6: via the browser agent, click a sign-up CTA signed-out (never complete
+  sign-up), then query `--event sign_up_started`. Headless-only run → `skip`.

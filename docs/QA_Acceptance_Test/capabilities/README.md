@@ -26,3 +26,7 @@
 | 10 | `10_raw_google_api.md` | Deny-by-default raw Google API pair |
 | 11 | `11_partner_handoff.md` | Partner OAuth handoff, consent provisioning, bypass fail-safe |
 | 12 | `12_push_notifications.md` | Watch/PubSub pipeline, rule-filtered thin pings, retry/suspend |
+| 13 | `13_default_profile_instant_start.md` | Auto-provisioned default profile, instant-start flow |
+| 14 | `14_magic_link_approvals.md` | Magic approval links: signing, expiry, single-use, owner-only |
+| 15 | `15_request_access_tool.md` | Conversational permission upgrades via `request_access` |
+| 16 | `16_analytics_events.md` | PostHog events arrive with canonical schema (`$mcp_tool_call` + tool names, outcomes, environment tags) |

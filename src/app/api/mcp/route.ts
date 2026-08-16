@@ -558,14 +558,18 @@ function withToolAnalytics<R extends ToolAnalyticsResult>(
     const started = Date.now();
     // Distinct id = the caller's Clerk user id, matching the dashboard's
     // identify() — MCP usage lands on the same PostHog person.
+    // Event/property names follow PostHog's canonical MCP Analytics schema
+    // ($mcp_tool_call / $mcp_tool_name / …) so its built-in MCP views resolve
+    // the tool name; `outcome` and `client_id` are FGAC-specific extras.
     const track = (outcome: string) => captureServerEvent(
       extra?.authInfo?.extra?.userId ?? 'anonymous-mcp',
-      'mcp_tool_call',
+      '$mcp_tool_call',
       {
-        tool,
+        $mcp_tool_name: tool,
+        $mcp_duration_ms: Date.now() - started,
+        $mcp_is_error: outcome === 'error' || outcome === 'exception',
         client_id: extra?.authInfo?.clientId,
         outcome,
-        duration_ms: Date.now() - started,
       },
     );
     try {
@@ -678,7 +682,7 @@ function toolConfig<S extends z.ZodRawShape>(def: FgacToolDef, inputSchema: S) {
 
 const handler = createMcpHandler(
   (server) => {
-    // Every registered tool is wrapped with a PostHog `mcp_tool_call` capture.
+    // Every registered tool is wrapped with a PostHog `$mcp_tool_call` capture.
     // Patching registerTool here keeps the registrations below untouched (their
     // schema-inferred param types intact) and instruments future tools too.
     const rawRegisterTool = server.registerTool.bind(server) as (
