@@ -14,10 +14,14 @@ can go end-to-end in ~10 minutes.
 
 ### 1. Create the Google account (human step — not automatable)
 
-- Fresh Gmail account, e.g. `fgac.reviewer@gmail.com` (any available name).
-- Password stored in 1Password (vault `FGAC`, item `connector-reviewer`).
-- Turn OFF 2-step verification (reviewers can't complete our 2FA), or use an
-  account where it's not enforced. No recovery phone tied to personal numbers.
+- ✅ DONE (2026-08-16): a dedicated reviewer Gmail account exists. Its
+  address, password, and 2FA live in 1Password (vault `FGAC`, item
+  `connector-reviewer`) — referenced here only as `<REVIEWER_EMAIL>`,
+  `<REVIEWER_PASSWORD>`, `<1PASSWORD_2FA_LINK>`.
+- The account HAS 2-step verification; reviewers get codes via a 1Password
+  shared link included in the portal submission. **The password and the
+  1Password share link are secrets — the share link mints live 2FA codes.
+  Neither may ever appear in this repo, an issue/PR, or any committed doc.**
 
 ### 2. Populate the inbox (fixtures)
 
@@ -60,22 +64,30 @@ doc and reality before submission day.
 
 ---
 
-## Part 2 — Paste into the portal's "Test & launch" step
+## Part 2 — Portal "Test & launch" instructions
 
-> **Credentials**: Google account `<REVIEWER_EMAIL>` / password
-> `<REVIEWER_PASSWORD>` (no 2FA). This account is pre-loaded with email
-> fixtures, two Gmail labels, one Google Sheet, and pre-configured FGAC rules.
+**Submitted version (2026-08-16)** — this is the text that went into the
+portal, with secrets as placeholders (real values in the portal + 1Password
+only; never commit them):
 
-**Setup (~3 min)**
+> **Step 1: Log in to google.com**
+> User Name: `<REVIEWER_EMAIL>`
+> Password: `<REVIEWER_PASSWORD>`
+> 1Password link for 2FA code: `<1PASSWORD_2FA_LINK>`
+>
+> **Step 2: Log in to FGAC.ai using Google OAuth**
+> Visit https://fgac.ai/ and click Sign up. Select "Continue with Google"
+> and use the `<REVIEWER_EMAIL>` account. This logs you in with Google OAuth.
+>
+> **Step 3: Connect Claude**
+> Add the connector `https://fgac.ai/api/mcp` in Claude. Approve the
+> connector in the FGAC.ai OAuth flow.
+>
+> The MCP is ready to use immediately — signing in attaches the agent to the
+> account's read-only Default Profile; no manual approval step.
 
-1. In Claude, add the connector (or as a custom connector:
-   `https://fgac.ai/api/mcp`). When the OAuth window opens, choose
-   **Sign in with Google** and use the credentials above.
-2. Ask Claude: *"List my email accounts."* — Expected: the account list,
-   immediately. Signing in attached the agent to the account's read-only
-   **Default Profile** — no manual approval step is needed, and the
-   dashboard (`https://fgac.ai/dashboard`) shows the new connection with
-   review/block controls.
+**Suggested functional script** (richer optional addition for the same portal
+field — gives reviewers expected outcomes per prompt):
 
 **Functional tests (~7 min)**
 
