@@ -9,12 +9,17 @@
 
 ## Assertions
 
-### A1: Raw pair is annotated; legacy tool is gone
+### A1: Raw pair is annotated; legacy tool is gone; descriptions state the real access model
 - Call `tools/list` on the hosted MCP endpoint
 - **Expected**: `google_api_get` present with `readOnlyHint: true`;
   `google_api_modify` present with `destructiveHint: true`; every listed tool
   has a `title`; `raw_google_api_call` is absent; `google_api_modify`'s input
   schema offers only POST/PUT/PATCH (no DELETE, no GET)
+- **Also expected** (description accuracy, 2026-08-15 tester finding):
+  `google_api_get` and `gmail_read` descriptions state that Gmail reads are
+  allowed by default and filtered by read-block rules (not that every
+  response is rule-gated), and `gmail_get_attachment`'s description states
+  the returned data is base64url-encoded (URL-safe alphabet, unpadded)
 
 ### A2: Raw Gmail read succeeds
 - `google_api_get` with path `gmail/v1/users/me/messages?maxResults=2`

@@ -61,6 +61,16 @@ async function main() {
   const url = await mintApprovalUrl('https://fgac.ai', 'u', 'k', { action: 'send_whitelist', recipient: 'a@b.com' });
   check('url targets /dashboard/approve', url.startsWith('https://fgac.ai/dashboard/approve?token='));
 
+  // Regression (tester finding 2026-08-15): env base URLs have shipped with a
+  // trailing newline, producing "https://fgac.ai\n/dashboard/..." — unclickable.
+  for (const dirty of ['https://fgac.ai\n', 'https://fgac.ai \n', 'https://fgac.ai/', '  https://fgac.ai  ']) {
+    const u = await mintApprovalUrl(dirty, 'u', 'k', { action: 'send_whitelist', recipient: 'a@b.com' });
+    check(`no whitespace in url minted from ${JSON.stringify(dirty)}`, !/\s/.test(u));
+    const parsed = new URL(u);
+    check(`url parses to fgac.ai/dashboard/approve from ${JSON.stringify(dirty)}`,
+      parsed.host === 'fgac.ai' && parsed.pathname === '/dashboard/approve' && !!parsed.searchParams.get('token'));
+  }
+
   if (failures > 0) { console.error(`\n${failures} approval-link test(s) FAILED`); process.exit(1); }
   console.log('\nAll approval-link tests passed.');
 }

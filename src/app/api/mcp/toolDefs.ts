@@ -40,13 +40,13 @@ export const TOOL_DEFS = {
   gmail_read: {
     name: 'gmail_read',
     title: 'Read a Gmail message',
-    description: 'Read a Gmail message by ID. Returns parsed headers, body text, and attachment metadata. Reads are evaluated against the user\'s FGAC access rules, and work across every connected or delegated Gmail inbox via the "account" parameter.',
+    description: 'Read a Gmail message by ID. Returns parsed headers, body text, and attachment metadata. Reading is allowed by default; messages matching the user\'s read-block rules (labels or content patterns), if any, are withheld. Works across every connected or delegated Gmail inbox via the "account" parameter.',
     readOnly: true,
   },
   gmail_get_attachment: {
     name: 'gmail_get_attachment',
     title: 'Download a Gmail attachment',
-    description: 'Retrieve an email attachment by message ID and attachment ID. The parent message must pass the user\'s FGAC read rules.',
+    description: 'Retrieve an email attachment by message ID and attachment ID (allowed unless the parent message matches a read-block rule). Returns Gmail\'s base64url-encoded data (URL-safe alphabet, unpadded) — decode with a base64url decoder, not standard base64.',
     readOnly: true,
   },
   gmail_send: {
@@ -92,7 +92,7 @@ export const TOOL_DEFS = {
   google_api_get: {
     name: 'google_api_get',
     title: 'Raw Google API read',
-    description: 'Perform a read-only GET request against any endpoint of the Gmail API (https://developers.google.com/gmail/api/reference/rest) or Google Sheets API (https://developers.google.com/sheets/api/reference/rest). Every response is evaluated against the user\'s FGAC access rules before it is returned; other Google APIs and batch endpoints are denied.',
+    description: 'Perform a read-only GET request against any endpoint of the Gmail API (https://developers.google.com/gmail/api/reference/rest) or Google Sheets API (https://developers.google.com/sheets/api/reference/rest). Access model: Gmail reads are allowed by default and filtered by the user\'s read-block rules if any; Sheets require an explicit per-spreadsheet rule; other Google APIs and batch endpoints are denied.',
     readOnly: true,
     freeformMethods: ['GET'],
   },
@@ -114,7 +114,7 @@ export const TOOL_DEFS = {
   get_my_permissions: {
     name: 'get_my_permissions',
     title: 'Show my permissions',
-    description: 'Shows the access rules, accessible accounts, and proxy key that apply to this connection.',
+    description: 'Shows the access rules, accessible accounts, proxy key, and default access posture (including implicit Gmail read access) that apply to this connection.',
     readOnly: true,
   },
 } as const satisfies Record<string, FgacToolDef>;
