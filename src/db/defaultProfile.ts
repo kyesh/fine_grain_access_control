@@ -17,8 +17,10 @@
  * materialized as key_email_access rows carrying the delegationId, so
  * revokeDelegation's row teardown and filterLiveDelegatedAccess both apply
  * unchanged. Writers keeping the invariant: this file (at ensure time),
- * createDelegation (via syncDefaultProfileDelegatedAccess), and migration
- * 0008 (per-deploy backfill/self-heal).
+ * createDelegation (via syncDefaultProfileDelegatedAccess), and migrations
+ * 0008/0009 (per-deploy backfill/self-heal; 0009 also flags legacy
+ * 'Default Profile' keys so users with only pre-existing connections are
+ * covered without waiting for a new-connection adoption).
  */
 import { db } from '@/db';
 import { users, proxyKeys, keyEmailAccess } from '@/db/schema';
