@@ -23,14 +23,22 @@ we get surfaced.
 **Server name** (≤100 chars)
 > FGAC.ai
 
-**Tagline** (≤55 chars — pick one)
-> 1. `Multiple Gmail accounts & editable Sheets, safely` (49)
-> 2. `Gmail & Sheets for agents — on your terms` (41)
-> 3. `Read mail, update Sheets — with guardrails` (42)
+**Tagline** (≤55 chars) — DECIDED (user, 2026-08-15):
+> `Manage Multiple Gmail Accounts & Edit Google Sheets` (51)
 
-Recommended: #1 (both differentiators, then the safety hook).
+**Description** (≤2,000 chars) — DECIDED (user, 2026-08-15):
 
-**Description** (≤2,000 chars)
+> Connect Claude to Multiple Gmail Accounts, Work, School and Personal and
+> let it update Google Sheets for you! Through FGAC.ai you can give Claude
+> precise access to the specific sheets and senders you want.
+>
+> More Google Workspace Connections Coming Soon!
+
+(Earlier keyword-first draft kept below for reference — its bullet points
+remain useful raw material if the description is ever expanded; the
+use-cases step still carries the remaining search-phrase clusters.)
+
+<details><summary>Superseded draft (v2 keyword-first)</summary>
 
 > Connect one or many Gmail accounts — work, personal, and delegated team
 > inboxes — and let Claude read mail, send guarded email, and update your
@@ -63,7 +71,7 @@ Recommended: #1 (both differentiators, then the safety hook).
 >
 > Free for personal use. Connected in under a minute.
 
-(~1,750 chars.)
+</details>
 
 **Categories** (1-5): Productivity; Email; Spreadsheets/Data; Developer Tools
 (pick what the portal's actual taxonomy offers — Productivity first).
@@ -77,6 +85,11 @@ brand mark — the only logo asset in the repo; older variants were removed).
 
 **URL slug** (PERMANENT — cannot change after publication)
 > Recommended: `fgac` (short, matches domain). Alternative: `fgac-ai`.
+
+**Allowed link URIs** (optional field): one entry — `https://fgac.ai`. We
+don't call `ui/open-link` today (links are plain text in tool results), but
+the declaration is inert, we own the origin, and it pre-clears any future
+embedded-approval-card upgrade. Never list domains we don't own.
 
 ## Connection step
 
@@ -135,8 +148,9 @@ brand mark — the only logo asset in the repo; older variants were removed).
 - Use docs/connector_submission/reviewer_runbook.md Part 2 verbatim, with real
   credentials filled in from 1Password.
 - Attestation "you have run every tool yourself": true — QA runs exercised all
-  13 tools through the MCP endpoint (docs/QA_Acceptance_Test/qa-results.json);
-  do one final custom-connector pass from Claude.ai before submitting.
+  14 tools (including request_access) through the MCP endpoint
+  (docs/QA_Acceptance_Test/qa-results.json); do one final custom-connector
+  pass from Claude.ai before submitting.
 
 ## Compliance step (7 acknowledgments)
 
@@ -147,10 +161,11 @@ collection beyond tool needs ✓; public documentation live at fgac.ai/docs ✓.
 
 ## Pre-submission checklist (final pass)
 
-- [ ] Google Group accepts posts from non-members (tested with an outside email)
-- [ ] fgac.ai/docs live in production
+- [ ] support@fgac.ai delivery tested with an email from an outside address
+- [x] fgac.ai/docs live in production
 - [ ] Reviewer account built + dry-run (reviewer_runbook.md Part 1, step 5)
-- [ ] Icon cropped square, 512×512 PNG
+- [x] Icon cropped square, 512×512 PNG (from logo-v2.png)
 - [ ] No Vercel firewall/challenge rules blocking 160.79.104.0/21
-- [ ] Final custom-connector smoke test from Claude.ai (all tools listed with
-      annotations; one read, one denied read, one send, one denied send)
+- [ ] Final custom-connector smoke test from Claude.ai (all 14 tools listed
+      with annotations; one read, one denied read, one send, one denied send,
+      one request_access)
