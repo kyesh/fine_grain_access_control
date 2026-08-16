@@ -58,6 +58,16 @@ async function main() {
   check('sheets payload carries resourceName', sheetOk.ok && sheetOk.payload.resourceName === 'Budget');
   if (sheetOk.ok) check('sheets description prefers name', describeApproval(sheetOk.payload).includes('Budget'));
 
+  // send_all: the "email anyone" escape hatch offered alongside per-recipient
+  // approval in send denials.
+  const allToken = await mintApprovalToken('user-1', 'key-1', { action: 'send_all' });
+  const allOk = await verifyApprovalToken(allToken);
+  check('send_all roundtrip verifies', allOk.ok);
+  if (allOk.ok) {
+    check('send_all payload carries no recipient', allOk.payload.action === 'send_all' && allOk.payload.recipient === undefined);
+    check('send_all description says ANY recipient', describeApproval(allOk.payload).includes('ANY recipient'));
+  }
+
   const url = await mintApprovalUrl('https://fgac.ai', 'u', 'k', { action: 'send_whitelist', recipient: 'a@b.com' });
   check('url targets /dashboard/approve', url.startsWith('https://fgac.ai/dashboard/approve?token='));
 

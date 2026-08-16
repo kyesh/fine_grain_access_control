@@ -15,3 +15,12 @@
 ### A3: get_my_permissions shows send whitelist rules
 - Query the agent's permissions
 - **Expected**: Send whitelist rules visible in the response
+
+### A4: One-click "Enable sending to anyone" on the Default Profile
+- On the dashboard's Default Profile Gmail Rules card, click
+  "Enable sending to anyone" (shown while no all-recipients rule covers the
+  profile)
+- **Expected**: A single click creates a "Send to Anyone" send_whitelist rule
+  (pattern `*`) assigned to the Default Profile; `gmail_send` to any address
+  now succeeds on that profile; other profiles are unaffected; deleting the
+  rule restores the deny-by-default posture and the button reappears
