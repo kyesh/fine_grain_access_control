@@ -6,7 +6,13 @@
 
 ### A1: Read blacklisted sender domain blocked
 - Attempt to read an email from a blacklisted domain (e.g., `sales@competitor.com`)
-- **Expected**: Proxy blocks with error: *"Access restricted: Sender domain '*@competitor.com' is blacklisted."*
+- **Expected**: Read is blocked with a rule-named restriction message
+  (*"🚫 Access restricted: Content blocked by rule '<name>'"*)
+- **Mechanism note** (2026-08-16 audit): there is no separate sender-domain
+  matcher — `read_blacklist` rules are one regex tested against the whole
+  serialized message (`src/lib/gmailRules.ts`), so a domain pattern matches
+  the From header via the same generic content path as A2, and the denial
+  wording is the generic rule-named message, not a domain-specific one
 
 ### A2: Read blacklisted content pattern blocked
 - Attempt to read an email containing blacklisted content (e.g., "CONFIDENTIAL_PROJECT_X")

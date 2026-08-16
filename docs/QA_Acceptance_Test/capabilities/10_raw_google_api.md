@@ -19,7 +19,9 @@
   `google_api_get` and `gmail_read` descriptions state that Gmail reads are
   allowed by default and filtered by read-block rules (not that every
   response is rule-gated), and `gmail_get_attachment`'s description states
-  the returned data is base64url-encoded (URL-safe alphabet, unpadded)
+  the returned data is base64url-encoded (URL-safe alphabet, padded — a
+  15,326-byte fixture ends in exactly one "=", verified 2026-08-16; the
+  description must match the actual output, per the tester finding)
 
 ### A2: Raw Gmail read succeeds
 - `google_api_get` with path `gmail/v1/users/me/messages?maxResults=2`
