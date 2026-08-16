@@ -73,3 +73,14 @@
 - Block the A1 connection from the dashboard, then retry a read tool
 - **Expected**: "🚫 This connection has been blocked by the user." — one-click
   block is unchanged by instant-start
+
+### A12: get_my_permissions states the implicit access posture
+- Call `get_my_permissions` on a connection whose profile has an empty or
+  minimal ruleset
+- **Expected**: The response contains an explicit defaults/posture section
+  stating that Gmail read is ALLOWED by default (restricted only by
+  read-block rules), sending is DENIED without a send whitelist, Sheets are
+  DENIED without per-spreadsheet rules, and deletion is never available —
+  so an auditor reading `rules: []` cannot conclude the key reaches nothing
+- **Regression**: 2026-08-15 tester audit note — implicit Gmail read was
+  invisible in the permissions output

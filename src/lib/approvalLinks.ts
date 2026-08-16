@@ -68,8 +68,13 @@ export async function mintApprovalUrl(
   proxyKeyId: string,
   action: ApprovalAction,
 ): Promise<string> {
+  // Env-sourced base URLs have shipped with a trailing newline before (a
+  // pasted Vercel env var), which breaks every link at the client — most
+  // clients truncate at the newline and land on the site root. Sanitize here
+  // so every caller is covered, whatever the env value looks like.
+  const origin = baseUrl.trim().replace(/\/+$/, '');
   const token = await mintApprovalToken(userId, proxyKeyId, action);
-  return `${baseUrl}/dashboard/approve?token=${encodeURIComponent(token)}`;
+  return `${origin}/dashboard/approve?token=${encodeURIComponent(token)}`;
 }
 
 export type VerifyResult =

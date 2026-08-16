@@ -32,11 +32,20 @@ import { ensureDefaultProfile } from '@/db/defaultProfile';
 import { mintApprovalUrl, type ApprovalAction } from '@/lib/approvalLinks';
 import { TOOL_DEFS, toolAnnotations, type FgacToolDef } from './toolDefs';
 import {
-  classifyGoogleApiCall, extractSendRecipients,
+  classifyGoogleApiCall, extractSendRecipients, sheetsApprovalAction,
 } from './googleApiPolicy';
 
-const DASHBOARD_URL = process.env.NEXT_PUBLIC_APP_URL
-  || (process.env.VERCEL_PROJECT_PRODUCTION_URL ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}` : null)
+/** Env URL values have shipped with trailing whitespace/newlines (pasted
+ * Vercel vars); a whitespace-only value must also not win the fallback chain.
+ * Sanitizing here fixes every consumer: approval links, pending-approval
+ * dashboard URLs, everything built on DASHBOARD_URL. */
+function cleanUrl(value: string | undefined | null): string | null {
+  const trimmed = value?.trim().replace(/\/+$/, '');
+  return trimmed || null;
+}
+
+const DASHBOARD_URL = cleanUrl(process.env.NEXT_PUBLIC_APP_URL)
+  || (process.env.VERCEL_PROJECT_PRODUCTION_URL ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL.trim()}` : null)
   || 'http://localhost:3000';
 
 // ─── Connection Resolution ──────────────────────────────────────────────────
@@ -420,12 +429,11 @@ async function checkSheetsPermission(userId: string, proxyKeyId: string, spreads
 
 type SheetsPermission = Awaited<ReturnType<typeof checkSheetsPermission>>;
 
-/** Map a sheets denial onto an approvable action (explicit blocks get none). */
-function sheetsDenialAction(perm: SheetsPermission, spreadsheetId: string): ApprovalAction | null {
+/** Map a sheets denial onto an approvable action matching the access level
+ * the denied operation requires (see sheetsApprovalAction in googleApiPolicy). */
+function sheetsDenialAction(perm: SheetsPermission, spreadsheetId: string, isMutating: boolean): ApprovalAction | null {
   if (perm.allowed) return null;
-  if (perm.denial === 'not_exposed') return { action: 'sheets_expose', spreadsheetId };
-  if (perm.denial === 'read_only') return { action: 'sheets_write', spreadsheetId };
-  return null;
+  return sheetsApprovalAction(perm.denial, spreadsheetId, isMutating);
 }
 
 // ─── Gmail Message Parsing (token-frugal responses) ─────────────────────────
@@ -627,7 +635,7 @@ async function executeRawGoogleCall(
 
   if (cls.kind === 'sheets') {
     const perm = await checkSheetsPermission(conn.user.id, resolved.proxyKeyId, cls.spreadsheetId, cls.isMutating);
-    if (!perm.allowed) return policyDenialWithLink(conn, resolved.proxyKeyId, perm.reason, sheetsDenialAction(perm, cls.spreadsheetId));
+    if (!perm.allowed) return policyDenialWithLink(conn, resolved.proxyKeyId, perm.reason, sheetsDenialAction(perm, cls.spreadsheetId, cls.isMutating));
 
     const url = `https://sheets.googleapis.com/${cleanPath.replace(/^sheets\//, '')}`;
     const result = await googleFetch(url, resolved.token, method, serializeBody(body), resolved.targetEmail);
@@ -868,7 +876,7 @@ const handler = createMcpHandler(
         if ('error' in resolved) return textResult(resolved.error);
 
         const perm = await checkSheetsPermission(conn.user.id, resolved.proxyKeyId, spreadsheetId, false);
-        if (!perm.allowed) return policyDenialWithLink(conn, resolved.proxyKeyId, perm.reason, sheetsDenialAction(perm, spreadsheetId));
+        if (!perm.allowed) return policyDenialWithLink(conn, resolved.proxyKeyId, perm.reason, sheetsDenialAction(perm, spreadsheetId, false));
 
         const result = await sheetsFetch(resolved.token, `${spreadsheetId}`, 'GET', undefined, resolved.targetEmail);
         if (!result.ok) return errorResult(result.error);
@@ -892,7 +900,7 @@ const handler = createMcpHandler(
         if ('error' in resolved) return textResult(resolved.error);
 
         const perm = await checkSheetsPermission(conn.user.id, resolved.proxyKeyId, spreadsheetId, false);
-        if (!perm.allowed) return policyDenialWithLink(conn, resolved.proxyKeyId, perm.reason, sheetsDenialAction(perm, spreadsheetId));
+        if (!perm.allowed) return policyDenialWithLink(conn, resolved.proxyKeyId, perm.reason, sheetsDenialAction(perm, spreadsheetId, false));
 
         const encodedRange = encodeURIComponent(range);
         const result = await sheetsFetch(resolved.token, `${spreadsheetId}/values/${encodedRange}`, 'GET', undefined, resolved.targetEmail);
@@ -918,7 +926,7 @@ const handler = createMcpHandler(
         if ('error' in resolved) return textResult(resolved.error);
 
         const perm = await checkSheetsPermission(conn.user.id, resolved.proxyKeyId, spreadsheetId, true);
-        if (!perm.allowed) return policyDenialWithLink(conn, resolved.proxyKeyId, perm.reason, sheetsDenialAction(perm, spreadsheetId));
+        if (!perm.allowed) return policyDenialWithLink(conn, resolved.proxyKeyId, perm.reason, sheetsDenialAction(perm, spreadsheetId, true));
 
         const encodedRange = encodeURIComponent(range);
         const body = JSON.stringify({ values, range });
@@ -945,7 +953,7 @@ const handler = createMcpHandler(
         if ('error' in resolved) return textResult(resolved.error);
 
         const perm = await checkSheetsPermission(conn.user.id, resolved.proxyKeyId, spreadsheetId, true);
-        if (!perm.allowed) return policyDenialWithLink(conn, resolved.proxyKeyId, perm.reason, sheetsDenialAction(perm, spreadsheetId));
+        if (!perm.allowed) return policyDenialWithLink(conn, resolved.proxyKeyId, perm.reason, sheetsDenialAction(perm, spreadsheetId, true));
 
         const encodedRange = encodeURIComponent(range);
         const body = JSON.stringify({ values });
@@ -1069,6 +1077,15 @@ const handler = createMcpHandler(
           connection: { id: conn.connectionId, nickname: conn.nickname },
           proxyKey: { id: key?.id, label: key?.label },
           accessibleEmails: emails.map(e => e.targetEmail),
+          // Implicit posture, stated explicitly: an empty rules array does
+          // NOT mean "no access" — auditors reading this output must see
+          // what the key can reach by default (tester finding, 2026-08-15).
+          defaults: {
+            gmailRead: 'ALLOWED by default for every accessible email; read-block rules (label/content) below restrict it',
+            gmailSend: 'DENIED unless a send_whitelist rule matches the recipient',
+            sheets: 'DENIED unless a per-spreadsheet rule below exposes the sheet',
+            deletion: 'NEVER available through any tool',
+          },
           rules: applicableRules.map(r => ({
             name: r.ruleName,
             type: r.actionType,

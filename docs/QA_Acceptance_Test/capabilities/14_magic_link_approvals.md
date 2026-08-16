@@ -50,3 +50,30 @@
 - Trigger a label- or content-blocked `gmail_read` denial
 - **Expected**: The restriction message contains no approval URL — weakening
   a read block remains a deliberate dashboard act
+
+### A9: Approval URLs are well-formed single-line links
+- Capture approval URLs from (a) a send denial, (b) a sheets denial, and
+  (c) `request_access`'s structured `approvalUrl` field
+- **Expected**: Each URL contains no whitespace or newline characters
+  anywhere in the string, and parses to the FGAC origin with path
+  `/dashboard/approve` and a non-empty `token` query parameter
+- **Regression**: 2026-08-15 tester finding — a trailing newline in the env
+  base URL shipped links as `https://fgac.ai\n/dashboard/...`, breaking the
+  entire approval loop
+
+### A10: Denial-minted tokens match the access level the operation needs
+- Decode the JWT payload (base64url, no verification needed) of the approval
+  link from each denied call in this matrix:
+  | Denied operation | Sheet state | Required token action |
+  |---|---|---|
+  | `sheets_read_range` | unexposed | `sheets_expose` |
+  | `sheets_update_range` | unexposed | `sheets_write` |
+  | `sheets_append_rows` | unexposed | `sheets_write` |
+  | `sheets_update_range` | exposed Read Only | `sheets_write` |
+  | `google_api_modify` (Sheets PUT) | unexposed | `sheets_write` |
+- **Expected**: The token's `action` claim equals the required action in
+  every row — a write denial must never mint a read-level (`sheets_expose`)
+  token, which would send the user through an approval that cannot satisfy
+  the retried operation
+- **Regression**: 2026-08-15 tester finding — write denials minted
+  `sheets_expose`, creating an approve→retry→fail loop with no signal
