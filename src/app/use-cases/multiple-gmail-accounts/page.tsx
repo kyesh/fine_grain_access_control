@@ -36,7 +36,7 @@ export default function MultipleGmailAccountsPage() {
             <span className="h-2.5 w-2.5 rounded-full bg-secondary" />
             <span className="h-2.5 w-2.5 rounded-full bg-secondary" />
             <span className="h-2.5 w-2.5 rounded-full bg-secondary" />
-            <span className="flex-1 text-center font-mono text-[12px] text-subtle">
+            <span className="flex-1 text-center font-mono text-[13px] font-medium text-foreground">
               Multiple Gmail accounts — setup walkthrough
             </span>
           </div>

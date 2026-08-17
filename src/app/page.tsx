@@ -57,40 +57,42 @@ export default async function LandingPage() {
             </Link>
           </div>
 
-          {/* Demo videos, framed as browser windows — stacked full-width so
-              titles and content stay legible */}
-          <div className="mt-6 grid w-full max-w-[920px] gap-8">
-            <div className="rounded-lg border border-border bg-card p-2.5 shadow-lg">
-              <div className="flex items-center gap-1.5 px-1.5 pb-2.5 pt-0.5">
-                <span className="h-2.5 w-2.5 rounded-full bg-secondary" />
-                <span className="h-2.5 w-2.5 rounded-full bg-secondary" />
-                <span className="h-2.5 w-2.5 rounded-full bg-secondary" />
-                <span className="flex-1 text-center font-mono text-[12px] text-subtle">
-                  FGAC × Google Sheets — demo
-                </span>
-              </div>
-              <div className="relative aspect-video w-full overflow-hidden rounded-sm bg-surface-inverse">
-                <TrackedVideoEmbed
-                  src="https://share.descript.com/embed/Fv9pwXugLUa"
-                  title="FGAC Google Sheets demo"
-                />
-              </div>
+        </div>
+
+        {/* Demo videos, framed as browser windows — stacked and outside the
+            880px text column so they match the 1120px card grid below, keeping
+            titles and content legible */}
+        <div className="mx-auto mt-12 grid w-full max-w-[1120px] gap-8">
+          <div className="rounded-lg border border-border bg-card p-2.5 shadow-lg">
+            <div className="flex items-center gap-1.5 px-1.5 pb-2.5 pt-0.5">
+              <span className="h-2.5 w-2.5 rounded-full bg-secondary" />
+              <span className="h-2.5 w-2.5 rounded-full bg-secondary" />
+              <span className="h-2.5 w-2.5 rounded-full bg-secondary" />
+              <span className="flex-1 text-center font-mono text-[13px] font-medium text-foreground">
+                FGAC × Google Sheets — demo
+              </span>
             </div>
-            <div className="rounded-lg border border-border bg-card p-2.5 shadow-lg">
-              <div className="flex items-center gap-1.5 px-1.5 pb-2.5 pt-0.5">
-                <span className="h-2.5 w-2.5 rounded-full bg-secondary" />
-                <span className="h-2.5 w-2.5 rounded-full bg-secondary" />
-                <span className="h-2.5 w-2.5 rounded-full bg-secondary" />
-                <span className="flex-1 text-center font-mono text-[12px] text-subtle">
-                  Multiple Gmail accounts — demo
-                </span>
-              </div>
-              <div className="relative aspect-video w-full overflow-hidden rounded-sm bg-surface-inverse">
-                <TrackedVideoEmbed
-                  src="https://share.descript.com/embed/ZQ0snxtpdAK"
-                  title="FGAC multiple Gmail accounts demo"
-                />
-              </div>
+            <div className="relative aspect-video w-full overflow-hidden rounded-sm bg-surface-inverse">
+              <TrackedVideoEmbed
+                src="https://share.descript.com/embed/Fv9pwXugLUa"
+                title="FGAC Google Sheets demo"
+              />
+            </div>
+          </div>
+          <div className="rounded-lg border border-border bg-card p-2.5 shadow-lg">
+            <div className="flex items-center gap-1.5 px-1.5 pb-2.5 pt-0.5">
+              <span className="h-2.5 w-2.5 rounded-full bg-secondary" />
+              <span className="h-2.5 w-2.5 rounded-full bg-secondary" />
+              <span className="h-2.5 w-2.5 rounded-full bg-secondary" />
+              <span className="flex-1 text-center font-mono text-[13px] font-medium text-foreground">
+                Multiple Gmail accounts — demo
+              </span>
+            </div>
+            <div className="relative aspect-video w-full overflow-hidden rounded-sm bg-surface-inverse">
+              <TrackedVideoEmbed
+                src="https://share.descript.com/embed/ZQ0snxtpdAK"
+                title="FGAC multiple Gmail accounts demo"
+              />
             </div>
           </div>
         </div>
