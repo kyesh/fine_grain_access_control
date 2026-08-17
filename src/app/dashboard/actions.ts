@@ -641,7 +641,14 @@ export async function enableSendToAnyone(keyId: string) {
 // ─── Magic-Link Approvals (connector-growth Phase C) ───────────────────────
 
 export type MagicApprovalResult =
-  | { ok: true; description: string }
+  | {
+      ok: true;
+      description: string;
+      /** Set when the FGAC rule was created but Google has no drive.file
+       * grant for the sheet yet — the approve page must route the user into
+       * the Picker recovery flow instead of claiming the agent can retry. */
+      needsSheetsGrant?: { spreadsheetId: string; resourceName?: string };
+    }
   | { ok: false; reason: string };
 
 /**
@@ -715,6 +722,33 @@ export async function approveMagicLink(
       resourceName: p.resourceName || null,
     }).returning();
     await db.insert(keyRuleAssignments).values({ proxyKeyId: key.id, accessRuleId: rule.id });
+
+    // The rule is only half of sheets access: Google grants the file via
+    // drive.file ONLY after a Picker pick. Verify before telling the user
+    // the agent can retry — an unverified "success" here is exactly the
+    // approve→retry→404 dead end the 2026-08 launch cohort churned on.
+    const { verifySheetsGrant, getOwnerGoogleToken } = await import("@/lib/sheetsGrantCheck");
+    const googleToken = await getOwnerGoogleToken(dbUser.clerkUserId);
+    const grant = googleToken
+      ? await verifySheetsGrant(googleToken, p.spreadsheetId)
+      : { state: "missing" as const };
+    captureServerEvent(dbUser.clerkUserId, "sheets_grant_verification", {
+      result: grant.state,
+      via: "magic_link",
+      spreadsheet_id: p.spreadsheetId,
+    });
+    if (grant.state === "missing") {
+      captureServerEvent(dbUser.clerkUserId, "approval_link_approved", { action: p.action });
+      revalidatePath("/dashboard");
+      return {
+        ok: true,
+        description: describeApproval(p),
+        needsSheetsGrant: {
+          spreadsheetId: p.spreadsheetId,
+          resourceName: p.resourceName || undefined,
+        },
+      };
+    }
   } else {
     return { ok: false, reason: "This approval link is malformed." };
   }

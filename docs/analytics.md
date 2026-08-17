@@ -36,6 +36,15 @@ keep internal/QA traffic out of the numbers.
 | `account_linked` | server (dashboard action) | `target_email`, `delegated`, `via` |
 | `approval_link_minted` | server (`/api/mcp`) | `action` |
 | `read_restriction_enforced` | server (`/api/mcp`) | `via` (tool name), `restriction` |
+| `sheets_grant_verification` | server (magic-link approval, `actions.ts`) | `result` (`ok`/`missing`/`unknown`), `via`, `spreadsheet_id` |
+| `sheets_grant_recovered` | server (`/api/rules/verify-sheets-access`) | `spreadsheet_id` |
+
+The two `sheets_grant_*` events instrument the **sheets grant-recovery loop**
+(`/dashboard/sheets-setup`): approving a sheets magic link verifies the
+Google-side `drive.file` grant before claiming success; `result=missing`
+routes the user into the Picker + demo-video recovery page, and a verified
+re-check from that page fires `sheets_grant_recovered`. Recovery rate =
+`sheets_grant_recovered` / `sheets_grant_verification{result=missing}`.
 
 `$mcp_tool_call` uses PostHog's **canonical MCP Analytics schema** (event and
 `$mcp_*` property names) so PostHog's built-in MCP views resolve the tool name.

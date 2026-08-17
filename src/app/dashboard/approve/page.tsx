@@ -83,6 +83,14 @@ export default async function ApprovePage({
     const rw = formData.get("permission") === "read_write";
     const result = await approveMagicLink(formData.get("token") as string, rw);
     if (result.ok) {
+      if (result.needsSheetsGrant) {
+        // FGAC rule created, but Google has no drive.file grant for this
+        // sheet yet — "retry now" would be a lie (the 404 dead end the
+        // connector-launch cohort hit). Route into the Picker recovery flow.
+        const q = new URLSearchParams({ sid: result.needsSheetsGrant.spreadsheetId, from: "approval" });
+        if (result.needsSheetsGrant.resourceName) q.set("name", result.needsSheetsGrant.resourceName);
+        redirect(`/dashboard/sheets-setup?${q.toString()}`);
+      }
       redirect(`/dashboard/approve?result=ok&message=${encodeURIComponent(result.description)}`);
     }
     redirect(`/dashboard/approve?result=error&message=${encodeURIComponent(result.reason)}`);
