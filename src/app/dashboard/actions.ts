@@ -299,6 +299,32 @@ export async function createRule(formData: FormData) {
     });
   }
 
+  const { captureServerEvent } = await import("@/lib/posthogServer");
+  captureServerEvent(dbUser.clerkUserId, "rule_created", {
+    service,
+    action_type: actionType,
+    via: "dashboard_manual",
+    keys_assigned: keyIds.length,
+    ...(targetResourceId ? { spreadsheet_id: targetResourceId } : {}),
+  });
+
+  // A hand-typed spreadsheet id has no Picker pick behind it, so Google may
+  // have no drive.file grant — the same stranded-rule dead end the magic-link
+  // flow verifies against. Record the grant state at birth so these rules are
+  // visible in the sheets funnel rather than silently broken.
+  if (service === "sheets" && targetResourceId) {
+    const { verifySheetsGrant, getOwnerGoogleToken } = await import("@/lib/sheetsGrantCheck");
+    const googleToken = await getOwnerGoogleToken(dbUser.clerkUserId);
+    const grant = googleToken
+      ? await verifySheetsGrant(googleToken, targetResourceId)
+      : { state: "missing" as const };
+    captureServerEvent(dbUser.clerkUserId, "sheets_grant_verification", {
+      result: grant.state,
+      via: "dashboard_manual",
+      spreadsheet_id: targetResourceId,
+    });
+  }
+
   revalidatePath("/dashboard");
 }
 
@@ -391,6 +417,7 @@ export async function exposeSheetsFromPicker(
   profileId?: string,
 ) {
   const dbUser = await getDbUser();
+  const { captureServerEvent } = await import("@/lib/posthogServer");
 
   if (profileId) {
     const key = await db.select().from(proxyKeys)
@@ -442,6 +469,15 @@ export async function exposeSheetsFromPicker(
         await db.insert(keyRuleAssignments)
           .values({ accessRuleId: rule.id, proxyKeyId: profileId });
       }
+      // A picker pick registers the drive.file grant, so a rule created here
+      // IS a successfully added sheet — the funnel's dashboard-path end state.
+      captureServerEvent(dbUser.clerkUserId, "rule_created", {
+        service: "sheets",
+        action_type: rule.actionType,
+        via: "dashboard_picker",
+        spreadsheet_id: sheet.id,
+        profile_scoped: !!profileId,
+      });
     }
   }
 
@@ -742,6 +778,12 @@ export async function approveMagicLink(
         resourceName: name,
       }).returning();
       await db.insert(keyRuleAssignments).values({ proxyKeyId: key.id, accessRuleId: rule.id });
+      captureServerEvent(dbUser.clerkUserId, "rule_created", {
+        service: "sheets",
+        action_type: rule.actionType,
+        via: "magic_link",
+        spreadsheet_id: id,
+      });
     };
 
     if (pickedSheets && pickedSheets.length > 0) {

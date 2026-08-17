@@ -3,6 +3,7 @@
 import { useState, useCallback, useEffect } from 'react';
 import { useUser, useReverification } from '@clerk/nextjs';
 import { isReverificationCancelledError } from '@clerk/nextjs/errors';
+import { usePostHog } from 'posthog-js/react';
 
 declare global {
   interface Window {
@@ -30,6 +31,7 @@ export interface PickedSheet {
  */
 export function useGooglePicker(onSheetsPicked: (sheets: PickedSheet[], context?: string) => void) {
   const { user } = useUser();
+  const posthog = usePostHog();
   const [isLoading, setIsLoading] = useState(false);
   const [gapiLoaded, setGapiLoaded] = useState(false);
 
@@ -115,6 +117,10 @@ export function useGooglePicker(onSheetsPicked: (sheets: PickedSheet[], context?
         }
 
         if (verificationUrl) {
+          // The consent round-trip is the funnel's riskiest hop — users who
+          // never come back are visible as this event with no picker_opened
+          // after it. $pathname distinguishes approve / sheets-setup / dashboard.
+          posthog?.capture('sheets_picker_scope_redirect');
           window.location.href = verificationUrl;
           return;
         }
@@ -133,7 +139,10 @@ export function useGooglePicker(onSheetsPicked: (sheets: PickedSheet[], context?
             id: doc.id,
             name: doc.name || `Spreadsheet (${doc.id.slice(0, 6)})`
           }));
+          posthog?.capture('sheets_picker_picked', { count: docs.length });
           onSheetsPicked(docs, context);
+        } else if (data.action === window.google.picker.Action.CANCEL) {
+          posthog?.capture('sheets_picker_cancelled');
         }
         setIsLoading(false);
       };
@@ -157,12 +166,16 @@ export function useGooglePicker(onSheetsPicked: (sheets: PickedSheet[], context?
 
       const picker = builder.build();
 
+      posthog?.capture('sheets_picker_opened', { from_oauth_return: fromOAuthReturn });
       picker.setVisible(true);
     } catch (err) {
       console.error('Error opening Google Picker:', err);
+      posthog?.capture('sheets_picker_error', {
+        message: err instanceof Error ? err.message.slice(0, 200) : 'unknown',
+      });
       setIsLoading(false);
     }
-  }, [user, onSheetsPicked]);
+  }, [user, onSheetsPicked, posthog]);
 
   // Automatically launch Google Picker if returning from OAuth reauthorization
   // redirect. The component consuming this hook must live on the page the

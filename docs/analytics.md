@@ -36,8 +36,14 @@ keep internal/QA traffic out of the numbers.
 | `account_linked` | server (dashboard action) | `target_email`, `delegated`, `via` |
 | `approval_link_minted` | server (`/api/mcp`) | `action` |
 | `read_restriction_enforced` | server (`/api/mcp`) | `via` (tool name), `restriction` |
-| `sheets_grant_verification` | server (approve-page load via `/api/rules/verify-sheets-access`, and approval in `actions.ts`) | `result` (`ok`/`missing`/`unknown`), `via` (`link_open`/`magic_link`), `spreadsheet_id` |
+| `sheets_grant_verification` | server (approve-page load and recovery re-checks via `/api/rules/verify-sheets-access`; approval and manual rule creation in `actions.ts`) | `result` (`ok`/`missing`/`unknown`), `via` (`link_open`/`magic_link`/`recovery`/`dashboard_manual`), `spreadsheet_id` |
 | `sheets_grant_recovered` | server (`/api/rules/verify-sheets-access`) | `spreadsheet_id` |
+| `rule_created` | server (dashboard actions: `createRule`, `exposeSheetsFromPicker`, magic-link sheet approval) | `service`, `action_type`, `via` (`dashboard_manual`/`dashboard_picker`/`magic_link`), `spreadsheet_id` (sheets), `keys_assigned`/`profile_scoped` |
+| `sheets_picker_scope_redirect` | client (`useGooglePicker.ts`) | — (surface via `$pathname`) |
+| `sheets_picker_opened` | client (`useGooglePicker.ts`) | `from_oauth_return` |
+| `sheets_picker_picked` | client (`useGooglePicker.ts`) | `count` |
+| `sheets_picker_cancelled` | client (`useGooglePicker.ts`) | — |
+| `sheets_picker_error` | client (`useGooglePicker.ts`) | `message` (truncated) |
 
 The two `sheets_grant_*` events instrument the **picker-first sheets
 approval funnel**: opening a sheets approval link verifies the Google-side
@@ -47,9 +53,21 @@ with `via=magic_link`. Picking a different sheet than the agent asked for is
 an explicit substitution — `approval_link_approved` then carries
 `substituted: true` and `granted_count`, making wrong-agent-id frequency
 measurable. `/dashboard/sheets-setup` remains the recovery path for
-pre-existing stranded rules (dashboard chips, MCP error links); a verified
-re-check there fires `sheets_grant_recovered`. Funnel health =
-`link_open{missing}` → `magic_link{ok}` conversion.
+pre-existing stranded rules (dashboard chips, MCP error links); every re-check
+there fires `sheets_grant_verification{via=recovery}` and a verified one adds
+`sheets_grant_recovered`. Funnel health = `link_open{missing}` →
+`magic_link{ok}` conversion.
+
+**Sheet-adoption funnel** ("user successfully adds a Google Sheet"), across
+all three creation surfaces (`rule_created.via`): client picker steps
+(`sheets_picker_scope_redirect` → `sheets_picker_opened` →
+`sheets_picker_picked`/`_cancelled`, surface from `$pathname`) → `rule_created`
+→ first `$mcp_tool_call{outcome=success}` whose `spreadsheet_id` matches
+(stamped by `checkSheetsPermission`, on denied outcomes too). A
+`sheets_picker_scope_redirect` with no later `sheets_picker_opened` is a user
+lost in the Google consent round-trip; a `rule_created{via=dashboard_manual}`
+whose `sheets_grant_verification{via=dashboard_manual}` says `missing` is a
+rule stranded at birth (hand-typed id, no Picker grant).
 
 `$mcp_tool_call` uses PostHog's **canonical MCP Analytics schema** (event and
 `$mcp_*` property names) so PostHog's built-in MCP views resolve the tool name.

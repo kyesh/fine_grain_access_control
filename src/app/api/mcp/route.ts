@@ -469,6 +469,10 @@ async function sheetsFetch(token: string, path: string, method = 'GET', body?: s
 }
 
 async function checkSheetsPermission(userId: string, proxyKeyId: string, spreadsheetId: string, isMutating: boolean) {
+  // Stamp the sheet onto $mcp_tool_call (allowed AND denied outcomes), so the
+  // adoption funnel can tie a rule_created / grant verification for a sheet to
+  // its first successful tool call on that same sheet.
+  addToolCallProps({ spreadsheet_id: spreadsheetId });
   const allRules = await db.select().from(accessRules).where(eq(accessRules.userId, userId));
   const keyAssignments = await db.select().from(keyRuleAssignments).where(eq(keyRuleAssignments.proxyKeyId, proxyKeyId));
   const assignedRuleIds = new Set(keyAssignments.map(a => a.accessRuleId));

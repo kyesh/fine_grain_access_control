@@ -38,8 +38,15 @@ export async function GET(request: NextRequest) {
       const result: SheetsGrantState = token
         ? await verifySheetsGrant(token, sid)
         : { state: 'missing' };
-      if (context === 'recovery' && result.state === 'ok') {
-        captureServerEvent(clerkUserId, 'sheets_grant_recovered', { spreadsheet_id: sid });
+      if (context === 'recovery') {
+        // Capture every recovery re-check, not just successes — recovery
+        // attempts that stay 'missing' are the funnel's stuck users.
+        captureServerEvent(clerkUserId, 'sheets_grant_verification', {
+          result: result.state, via: 'recovery', spreadsheet_id: sid,
+        });
+        if (result.state === 'ok') {
+          captureServerEvent(clerkUserId, 'sheets_grant_recovered', { spreadsheet_id: sid });
+        }
       }
       // link_open = the approve page checking the grant before showing the
       // flow — the top of the picker-first funnel.
