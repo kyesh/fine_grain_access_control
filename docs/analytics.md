@@ -12,6 +12,14 @@ keep internal/QA traffic out of the numbers.
   `email`/`name` person properties.
 - Signed-out visitors stay anonymous (`person_profiles: 'identified_only'`).
   `posthog.reset()` runs on sign-out so shared browsers don't cross-link users.
+- **`signup_source` person property** (`$set_once`): fresh accounts (<10 min
+  old) are stamped `website` on their first identified dashboard visit
+  (`PostHogIdentify`) or `claude_connector` on their first MCP connection —
+  whichever touchpoint a new account reaches first wins.
+- **Delegation observability**: tool/proxy events carry `account_email` and
+  `account_delegated` (which mailbox a call resolved to, own vs delegated) via
+  `src/lib/toolCallContext.ts` (AsyncLocalStorage rides the props from account
+  resolution to the single capture site).
 
 ## Event catalog
 
@@ -21,9 +29,11 @@ keep internal/QA traffic out of the numbers.
 | `sign_up_started` | client (`SignUpCta.tsx`, all sign-up CTAs) | `cta_location`: nav / hero / bottom_cta |
 | `sign_up_completed` | server (Clerk webhook, `user.created`) | `$set.email` |
 | `video_played` | client (`TrackedVideoEmbed.tsx`, all Descript demo embeds) | `video_id`, `video_title`, `page` |
-| `$mcp_tool_call` | server (`/api/mcp`, every tool) | `$mcp_tool_name`, `$mcp_duration_ms`, `$mcp_is_error`, `client_id`, `outcome` |
-| `proxy_request` | server (`/api/proxy/[...path]`) | `service` (gmail/sheets/drive), `method`, `status`, `outcome`, `duration_ms`, `proxy_key_id` |
-| `mcp_connection_created` | server (`/api/mcp` auth layer) | `connection_id`, `client_id`, `auto_attached` |
+| `$mcp_tool_call` | server (`/api/mcp`, every tool) | `$mcp_tool_name`, `$mcp_duration_ms`, `$mcp_is_error`, `client_id`, `outcome`, `account_email`, `account_delegated` |
+| `proxy_request` | server (`/api/proxy/[...path]`) | `service` (gmail/sheets/drive), `method`, `status`, `outcome`, `duration_ms`, `proxy_key_id`, `account_email`, `account_delegated` |
+| `mcp_connection_created` | server (`/api/mcp` auth layer) | `connection_id`, `client_id`, `auto_attached`, `account_age_seconds` |
+| `delegation_created` | server (dashboard action) | `delegate_email`, `reactivated` |
+| `account_linked` | server (dashboard action) | `target_email`, `delegated`, `via` |
 | `approval_link_minted` | server (`/api/mcp`) | `action` |
 | `read_restriction_enforced` | server (`/api/mcp`) | `via` (tool name), `restriction` |
 
