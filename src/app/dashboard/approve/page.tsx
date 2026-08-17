@@ -120,7 +120,7 @@ export default async function ApprovePage({
       <p className="mb-5 text-sm text-muted-foreground">
         An AI agent connected to your account is asking for exactly this grant:
       </p>
-      <div className="mb-5 rounded-md border border-warning-foreground/30 bg-warning px-4 py-3 text-sm font-medium text-warning-foreground">
+      <div className="mb-5 rounded-md border border-warning-foreground/30 bg-warning px-4 py-3 text-sm font-medium text-warning-foreground [overflow-wrap:anywhere]">
         {describeApproval(p)}
       </div>
       {isSheets ? (

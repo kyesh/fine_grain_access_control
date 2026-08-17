@@ -90,7 +90,7 @@ export function SheetsApprovalFlow({
   if (state.step === "need_pick") {
     return (
       <div className="flex flex-col gap-4" data-testid="sheets-flow-pick-first">
-        <div className="rounded-md border border-warning-foreground/30 bg-warning px-4 py-3 text-sm text-warning-foreground">
+        <div className="rounded-md border border-warning-foreground/30 bg-warning px-4 py-3 text-sm text-warning-foreground [overflow-wrap:anywhere]">
           Google hasn&apos;t shared <strong>{sheetLabel}</strong> with FGAC yet, so
           there&apos;s nothing to approve until you pick it. Google only shares a
           sheet when you choose it in Google&apos;s own file picker — that per-file
@@ -137,7 +137,7 @@ export function SheetsApprovalFlow({
       {picked && <input type="hidden" name="picked" value={JSON.stringify(picked)} />}
 
       {substituting && (
-        <div className="rounded-md border border-warning-foreground/30 bg-warning px-4 py-3 text-sm text-warning-foreground" data-testid="sheets-flow-substitution">
+        <div className="rounded-md border border-warning-foreground/30 bg-warning px-4 py-3 text-sm text-warning-foreground [overflow-wrap:anywhere]" data-testid="sheets-flow-substitution">
           You picked <strong>{grantTargets}</strong>, but the agent asked for a
           different sheet ID (<code className="font-mono text-xs">{spreadsheetId}</code>)
           that Google says you don&apos;t have. Most likely the agent had the wrong
@@ -147,7 +147,7 @@ export function SheetsApprovalFlow({
         </div>
       )}
       {!substituting && (
-        <div className="rounded-md border border-border bg-secondary/30 px-4 py-3 text-sm text-foreground">
+        <div className="rounded-md border border-border bg-secondary/30 px-4 py-3 text-sm text-foreground [overflow-wrap:anywhere]">
           Granting access to <strong>{grantTargets}</strong>
           {state.title && resourceName === null ? " (verified with Google)" : ""}.
         </div>

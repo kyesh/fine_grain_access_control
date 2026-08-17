@@ -113,7 +113,7 @@ export function SheetsGrantRecovery({
             <h1 className="mb-2 text-xl font-bold text-foreground">
               {fromApproval ? "Approved — one more step" : "Finish setting up sheet access"}
             </h1>
-            <p className="mb-1 text-sm text-muted-foreground">
+            <p className="mb-1 text-sm text-muted-foreground [overflow-wrap:anywhere]">
               {fromApproval
                 ? <>Your FGAC rule for <strong>{sheetLabel}</strong> is saved, but Google hasn&apos;t shared the sheet itself with FGAC yet.</>
                 : <>FGAC has a rule for <strong>{sheetLabel}</strong>, but Google hasn&apos;t shared the sheet itself with FGAC yet.</>}
@@ -125,7 +125,7 @@ export function SheetsGrantRecovery({
             </p>
 
             {status === "picked_other" && (
-              <div className="mb-5 rounded-md border border-warning-foreground/30 bg-warning px-4 py-3 text-sm text-warning-foreground">
+              <div className="mb-5 rounded-md border border-warning-foreground/30 bg-warning px-4 py-3 text-sm text-warning-foreground [overflow-wrap:anywhere]">
                 The sheet(s) you picked are now shared with FGAC — but none of them
                 matched the exact spreadsheet the agent asked for
                 {spreadsheetId ? <> (ID <code className="font-mono text-xs">{spreadsheetId}</code>)</> : null}.
