@@ -29,6 +29,26 @@ export default function MultipleGmailAccountsPage() {
       </div>
 
       <div className="mx-auto mt-12 flex max-w-3xl flex-col gap-8 px-6 sm:px-8">
+        {/* Walkthrough video, framed as a browser window (matches the home-page demos) */}
+        <div className="rounded-lg border border-border bg-card p-2.5 shadow-lg">
+          <div className="flex items-center gap-1.5 px-1.5 pb-2.5 pt-0.5">
+            <span className="h-2.5 w-2.5 rounded-full bg-secondary" />
+            <span className="h-2.5 w-2.5 rounded-full bg-secondary" />
+            <span className="h-2.5 w-2.5 rounded-full bg-secondary" />
+            <span className="flex-1 text-center font-mono text-[12px] text-subtle">
+              Multiple Gmail accounts — setup walkthrough
+            </span>
+          </div>
+          <div className="relative aspect-video w-full overflow-hidden rounded-sm bg-surface-inverse">
+            <iframe
+              src="https://share.descript.com/embed/ZQ0snxtpdAK"
+              title="Setting up multiple Gmail accounts with FGAC"
+              allowFullScreen
+              className="absolute inset-0 h-full w-full border-0"
+            />
+          </div>
+        </div>
+
         <section className="rounded-lg border border-border bg-card p-6">
           <h2 className="mb-3 text-xl font-bold text-foreground">How it works</h2>
           <ol className="m-0 flex list-decimal flex-col gap-2.5 pl-5 text-sm leading-relaxed text-muted-foreground">
