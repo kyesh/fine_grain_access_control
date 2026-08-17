@@ -2,6 +2,7 @@ import { Show } from '@clerk/nextjs';
 import Link from 'next/link';
 import { SignUpCta } from './SignUpCta';
 import { Shield } from 'lucide-react';
+import { TrackedVideoEmbed } from '@/components/TrackedVideoEmbed';
 
 /* ─── Landing ─────────────────────────────────────────────────────────────
    Nav and footer come from the root layout, so this file is the page body
@@ -68,11 +69,9 @@ export default async function LandingPage() {
                 </span>
               </div>
               <div className="relative aspect-video w-full overflow-hidden rounded-sm bg-surface-inverse">
-                <iframe
+                <TrackedVideoEmbed
                   src="https://share.descript.com/embed/Fv9pwXugLUa"
                   title="FGAC Google Sheets demo"
-                  allowFullScreen
-                  className="absolute inset-0 h-full w-full border-0"
                 />
               </div>
             </div>
@@ -86,11 +85,9 @@ export default async function LandingPage() {
                 </span>
               </div>
               <div className="relative aspect-video w-full overflow-hidden rounded-sm bg-surface-inverse">
-                <iframe
+                <TrackedVideoEmbed
                   src="https://share.descript.com/embed/ZQ0snxtpdAK"
                   title="FGAC multiple Gmail accounts demo"
-                  allowFullScreen
-                  className="absolute inset-0 h-full w-full border-0"
                 />
               </div>
             </div>

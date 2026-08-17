@@ -184,3 +184,6 @@ tmux kill-session -t fgac-qa
   that reason. Ingestion lags ~30–60s — re-query before failing.
 - A6: via the browser agent, click a sign-up CTA signed-out (never complete
   sign-up), then query `--event sign_up_started`. Headless-only run → `skip`.
+- A7: start playback on a landing-page demo video (play control, or the
+  console postMessage fallback in the capability doc), then query
+  `--event video_played`. Headless-only run → `skip`.

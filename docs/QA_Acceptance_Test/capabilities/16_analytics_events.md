@@ -71,3 +71,14 @@ attributable to it.
   (`sign_up_completed` is deliberately untested — it requires creating a real
   account, which QA never does; it is validated implicitly by the Clerk
   webhook's own tests.)
+
+### A7: Demo video play event fires (browser environments)
+- Load the landing page and start playback on one of the Descript demo
+  embeds — click its play control; if the embed ignores automated clicks,
+  trigger playback from the page console instead
+  (`document.querySelector('iframe[src*="share.descript.com"]').contentWindow.postMessage(JSON.stringify({context:'player.js',version:'0.0.11',method:'play'}),'*')`
+  — this still exercises FGAC's listener + capture path end-to-end); then
+  `npx tsx scripts/qa-posthog-events.ts --event video_played --since 10 --environment <tier>`
+- **Expected**: ≥ 1 row whose `video_id` matches the embed and whose `page`
+  is `/` (or the use-case page); exactly one event per video per page load
+  regardless of subsequent pause/resume. Headless environments `skip`.
