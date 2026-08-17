@@ -82,3 +82,15 @@ attributable to it.
 - **Expected**: ≥ 1 row whose `video_id` matches the embed and whose `page`
   is `/` (or the use-case page); exactly one event per video per page load
   regardless of subsequent pause/resume. Headless environments `skip`.
+
+### A8: Non-success outcomes carry a reason and a diagnostic message
+- Re-run the A1 query over the run window, selecting `outcome`,
+  `properties.outcome_reason`, and `properties.result_message` for rows where
+  `outcome != 'success'` (ensure the run included at least one policy-denied
+  call, e.g. capability 01 A2, and one sheets denial, e.g. capability 09's
+  unexposed-sheet case)
+- **Expected**: policy-denial and upstream-failure rows carry a snake_case
+  `outcome_reason` (e.g. `send_not_whitelisted`, `sheets_not_exposed`,
+  `sheets_grant_missing`, `connection_pending_approval`, `google_404`); every
+  non-success row carries a `result_message` that contains NO `http`/`https`
+  URL (signed approval links must be stripped) and is ≤ 200 chars
