@@ -18,11 +18,21 @@ allowed-tools: Bash(gh:*), Bash(npx vercel ls:*), Bash(npx vercel inspect:*), Ba
    gh pr merge --auto --merge
    ```
 
-2. **Wait for the production deployment** (~5 minutes):
+2. **Wait for the production deployment.** Successful builds typically go
+   Ready in under 1 minute — poll every ~15 seconds for up to **90 seconds**
+   instead of one long sleep:
 
    ```bash
-   sleep 300
+   for i in 1 2 3 4 5 6; do
+     npx vercel ls fine-grain-access-control --prod --limit 1 2>&1 | grep -E "Ready|Error|Building|Queued"
+     sleep 15
+   done
    ```
+
+   (Pipe through `grep` rather than picking lines positionally — the CLI
+   splits its output across stdout and stderr, so line numbers shift.)
+   If it still isn't Ready after 90 seconds, treat that as unusual: check the
+   status once more and move to step 5 rather than waiting longer blindly.
 
 3. **Validate the deployment**:
 
