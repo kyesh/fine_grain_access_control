@@ -201,6 +201,13 @@ const textResult = (text: string) => ({ content: [{ type: 'text' as const, text 
  * health metrics) see it as a genuine tool error. */
 const errorResult = (text: string) => ({ content: [{ type: 'text' as const, text }], isError: true });
 
+/** Upstream Google failure → tool result. States the user can fix (expired
+ * Google auth, a sheet not shared with the connected account, a bad resource
+ * id) are the connector guiding the user, not malfunctioning — returned as
+ * plain text, so only genuine failures (network, 429, 5xx) carry isError. */
+const upstreamResult = (r: { error: string; recoverable: boolean }) =>
+  r.recoverable ? textResult(r.error) : errorResult(r.error);
+
 const jsonResult = (data: unknown) => textResult(JSON.stringify(data, null, 2));
 
 // ─── Pending Approval Message ───────────────────────────────────────────────
@@ -372,7 +379,11 @@ async function sendDenialWithLinks(
 
 type GoogleFetchResult =
   | { ok: true; data: unknown }
-  | { ok: false; error: string };
+  | { ok: false; error: string; recoverable: boolean };
+
+/** Statuses a user can fix themselves (reconnect Google, share the sheet,
+ * correct an id). Everything else — network, 429, 5xx — is a genuine failure. */
+const RECOVERABLE_GOOGLE_STATUSES = new Set([401, 403, 404]);
 
 function describeGoogleError(status: number, data: unknown, targetEmail: string): string {
   const detail = (data as { error?: { message?: string } })?.error?.message
@@ -381,7 +392,7 @@ function describeGoogleError(status: number, data: unknown, targetEmail: string)
     case 401:
       return `❌ Google authorization expired for '${targetEmail}'. The account owner needs to reconnect Google in the FGAC dashboard, then retry.`;
     case 403:
-      return `❌ Google denied the request (403): ${detail || 'insufficient permissions or missing OAuth scope for this operation'}.`;
+      return `❌ Google denied the request (403): ${detail || 'insufficient permissions or missing OAuth scope for this operation'}.${targetEmail ? ` If this is a spreadsheet, share it with '${targetEmail}' and retry; otherwise the account owner may need to reconnect Google from the FGAC dashboard to grant the needed scopes.` : ''}`;
     case 404:
       return `❌ Google resource not found (404)${detail ? `: ${detail}` : ''}. Check the ID and try again.`;
     case 429:
@@ -405,7 +416,7 @@ async function googleFetch(
       body,
     });
   } catch (err) {
-    return { ok: false, error: `❌ Could not reach the Google API: ${err instanceof Error ? err.message : 'network error'}.` };
+    return { ok: false, error: `❌ Could not reach the Google API: ${err instanceof Error ? err.message : 'network error'}.`, recoverable: false };
   }
 
   const text = await res.text();
@@ -413,7 +424,11 @@ async function googleFetch(
   try { data = text ? JSON.parse(text) : {}; } catch { /* non-JSON body: keep text */ }
 
   if (!res.ok) {
-    return { ok: false, error: describeGoogleError(res.status, data, targetEmail) };
+    return {
+      ok: false,
+      error: describeGoogleError(res.status, data, targetEmail),
+      recoverable: RECOVERABLE_GOOGLE_STATUSES.has(res.status),
+    };
   }
   return { ok: true, data };
 }
@@ -687,7 +702,7 @@ async function executeRawGoogleCall(
 
     const url = `https://sheets.googleapis.com/${cleanPath.replace(/^sheets\//, '')}`;
     const result = await googleFetch(url, resolved.token, method, serializeBody(body), resolved.targetEmail);
-    if (!result.ok) return errorResult(result.error);
+    if (!result.ok) return upstreamResult(result);
     return jsonResult(result.data);
   }
 
@@ -700,7 +715,7 @@ async function executeRawGoogleCall(
 
   const url = `https://www.googleapis.com/${cleanPath}`;
   const result = await googleFetch(url, resolved.token, method, serializeBody(body), resolved.targetEmail);
-  if (!result.ok) return errorResult(result.error);
+  if (!result.ok) return upstreamResult(result);
 
   if (cls.kind === 'gmail_read') {
     const restriction = checkReadRestrictions(rules, result.data);
@@ -775,7 +790,7 @@ const handler = createMcpHandler(
         params.set('maxResults', String(max || 10));
 
         const result = await gmailFetch(resolved.token, resolved.targetEmail, `messages?${params}`);
-        if (!result.ok) return errorResult(result.error);
+        if (!result.ok) return upstreamResult(result);
         return jsonResult(result.data);
       }
     );
@@ -798,7 +813,7 @@ const handler = createMcpHandler(
         // Read-time enforcement: label blacklist/whitelist + content blacklist
         const rules = await loadApplicableRules(conn.user.id, resolved.proxyKeyId, resolved.targetEmail);
         const result = await gmailFetch(resolved.token, resolved.targetEmail, `messages/${messageId}?format=${format || 'full'}`);
-        if (!result.ok) return errorResult(result.error);
+        if (!result.ok) return upstreamResult(result);
 
         const restriction = checkReadRestrictions(rules, result.data);
         if (restriction) {
@@ -834,7 +849,7 @@ const handler = createMcpHandler(
         // an attachment is only as readable as the email that carries it
         const rules = await loadApplicableRules(conn.user.id, resolved.proxyKeyId, resolved.targetEmail);
         const parentResult = await gmailFetch(resolved.token, resolved.targetEmail, `messages/${messageId}?format=full`);
-        if (!parentResult.ok) return errorResult(parentResult.error);
+        if (!parentResult.ok) return upstreamResult(parentResult);
 
         const restriction = checkReadRestrictions(rules, parentResult.data);
         if (restriction) {
@@ -847,7 +862,7 @@ const handler = createMcpHandler(
           resolved.targetEmail,
           `messages/${messageId}/attachments/${attachmentId}`
         );
-        if (!attachmentResult.ok) return errorResult(attachmentResult.error);
+        if (!attachmentResult.ok) return upstreamResult(attachmentResult);
 
         const attachment = attachmentResult.data as { size?: number; data?: string };
         if (attachment.data && attachment.data.length > MAX_ATTACHMENT_CHARS) {
@@ -885,7 +900,7 @@ const handler = createMcpHandler(
         ).toString('base64url');
 
         const result = await gmailFetch(resolved.token, resolved.targetEmail, 'messages/send', 'POST', JSON.stringify({ raw }));
-        if (!result.ok) return errorResult(result.error);
+        if (!result.ok) return upstreamResult(result);
         return jsonResult(result.data);
       }
     );
@@ -904,7 +919,7 @@ const handler = createMcpHandler(
         if ('error' in resolved) return textResult(resolved.error);
 
         const result = await gmailFetch(resolved.token, resolved.targetEmail, 'labels');
-        if (!result.ok) return errorResult(result.error);
+        if (!result.ok) return upstreamResult(result);
         return jsonResult(result.data);
       }
     );
@@ -927,7 +942,7 @@ const handler = createMcpHandler(
         if (!perm.allowed) return policyDenialWithLink(conn, resolved.proxyKeyId, perm.reason, sheetsDenialAction(perm, spreadsheetId, false));
 
         const result = await sheetsFetch(resolved.token, `${spreadsheetId}`, 'GET', undefined, resolved.targetEmail);
-        if (!result.ok) return errorResult(result.error);
+        if (!result.ok) return upstreamResult(result);
         return jsonResult(result.data);
       }
     );
@@ -952,7 +967,7 @@ const handler = createMcpHandler(
 
         const encodedRange = encodeURIComponent(range);
         const result = await sheetsFetch(resolved.token, `${spreadsheetId}/values/${encodedRange}`, 'GET', undefined, resolved.targetEmail);
-        if (!result.ok) return errorResult(result.error);
+        if (!result.ok) return upstreamResult(result);
         return jsonResult(result.data);
       }
     );
@@ -979,7 +994,7 @@ const handler = createMcpHandler(
         const encodedRange = encodeURIComponent(range);
         const body = JSON.stringify({ values, range });
         const result = await sheetsFetch(resolved.token, `${spreadsheetId}/values/${encodedRange}?valueInputOption=USER_ENTERED`, 'PUT', body, resolved.targetEmail);
-        if (!result.ok) return errorResult(result.error);
+        if (!result.ok) return upstreamResult(result);
         return jsonResult(result.data);
       }
     );
@@ -1006,7 +1021,7 @@ const handler = createMcpHandler(
         const encodedRange = encodeURIComponent(range);
         const body = JSON.stringify({ values });
         const result = await sheetsFetch(resolved.token, `${spreadsheetId}/values/${encodedRange}:append?valueInputOption=USER_ENTERED`, 'POST', body, resolved.targetEmail);
-        if (!result.ok) return errorResult(result.error);
+        if (!result.ok) return upstreamResult(result);
         return jsonResult(result.data);
       }
     );
