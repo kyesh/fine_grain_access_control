@@ -57,8 +57,9 @@ export default async function LandingPage() {
             </Link>
           </div>
 
-          {/* Demo videos, framed as browser windows */}
-          <div className="mt-6 grid w-full max-w-[1000px] gap-5 md:grid-cols-2">
+          {/* Demo videos, framed as browser windows — stacked full-width so
+              titles and content stay legible */}
+          <div className="mt-6 grid w-full max-w-[920px] gap-8">
             <div className="rounded-lg border border-border bg-card p-2.5 shadow-lg">
               <div className="flex items-center gap-1.5 px-1.5 pb-2.5 pt-0.5">
                 <span className="h-2.5 w-2.5 rounded-full bg-secondary" />
