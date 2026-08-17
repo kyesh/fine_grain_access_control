@@ -201,6 +201,13 @@ const textResult = (text: string) => ({ content: [{ type: 'text' as const, text 
  * health metrics) see it as a genuine tool error. */
 const errorResult = (text: string) => ({ content: [{ type: 'text' as const, text }], isError: true });
 
+/** Upstream Google failure → tool result. States the user can fix (expired
+ * Google auth, a sheet not shared with the connected account, a bad resource
+ * id) are the connector guiding the user, not malfunctioning — returned as
+ * plain text, so only genuine failures (network, 429, 5xx) carry isError. */
+const upstreamResult = (r: { error: string; recoverable: boolean }) =>
+  r.recoverable ? textResult(r.error) : errorResult(r.error);
+
 const jsonResult = (data: unknown) => textResult(JSON.stringify(data, null, 2));
 
 // ─── Pending Approval Message ───────────────────────────────────────────────
@@ -374,7 +381,11 @@ async function sendDenialWithLinks(
 
 type GoogleFetchResult =
   | { ok: true; data: unknown }
-  | { ok: false; error: string; status?: number };
+  | { ok: false; error: string; status?: number; recoverable: boolean };
+
+/** Statuses a user can fix themselves (reconnect Google, finish sheet setup,
+ * correct an id). Everything else — network, 429, 5xx — is a genuine failure. */
+const RECOVERABLE_GOOGLE_STATUSES = new Set([401, 403, 404]);
 
 function describeGoogleError(status: number, data: unknown, targetEmail: string): string {
   const detail = (data as { error?: { message?: string } })?.error?.message
@@ -383,7 +394,7 @@ function describeGoogleError(status: number, data: unknown, targetEmail: string)
     case 401:
       return `❌ Google authorization expired for '${targetEmail}'. The account owner needs to reconnect Google in the FGAC dashboard, then retry.`;
     case 403:
-      return `❌ Google denied the request (403): ${detail || 'insufficient permissions or missing OAuth scope for this operation'}.`;
+      return `❌ Google denied the request (403): ${detail || 'insufficient permissions or missing OAuth scope for this operation'}.${targetEmail ? ` The account owner may need to reconnect Google for '${targetEmail}' from the FGAC dashboard to grant the needed scopes.` : ''}`;
     case 404:
       return `❌ Google resource not found (404)${detail ? `: ${detail}` : ''}. Check the ID and try again.`;
     case 429:
@@ -407,7 +418,7 @@ async function googleFetch(
       body,
     });
   } catch (err) {
-    return { ok: false, error: `❌ Could not reach the Google API: ${err instanceof Error ? err.message : 'network error'}.` };
+    return { ok: false, error: `❌ Could not reach the Google API: ${err instanceof Error ? err.message : 'network error'}.`, recoverable: false };
   }
 
   const text = await res.text();
@@ -415,7 +426,12 @@ async function googleFetch(
   try { data = text ? JSON.parse(text) : {}; } catch { /* non-JSON body: keep text */ }
 
   if (!res.ok) {
-    return { ok: false, error: describeGoogleError(res.status, data, targetEmail), status: res.status };
+    return {
+      ok: false,
+      error: describeGoogleError(res.status, data, targetEmail),
+      status: res.status,
+      recoverable: RECOVERABLE_GOOGLE_STATUSES.has(res.status),
+    };
   }
   return { ok: true, data };
 }
@@ -429,16 +445,18 @@ async function googleFetch(
  * 2026-08 connector cohort into a retry loop; say what is actually wrong and
  * where the one-click fix lives.
  */
-function sheetsErrorResult(result: { error: string; status?: number }, spreadsheetId: string) {
+function sheetsErrorResult(result: { error: string; status?: number; recoverable: boolean }, spreadsheetId: string) {
   if (result.status === 403 || result.status === 404) {
-    return errorResult(
+    // Missing-grant setup is the user completing onboarding, not the
+    // connector failing — plain text keeps it out of isError health metrics.
+    return textResult(
       `❌ FGAC allows this spreadsheet, but Google hasn't shared the sheet itself with FGAC yet, so Google rejected the call (${result.status}). ` +
       `This is a one-time setup step only the user can do: they must pick this sheet in Google's file picker. ` +
       `👉 Send the user here to finish setup (includes a short how-to video): ${DASHBOARD_URL}/dashboard/sheets-setup?sid=${encodeURIComponent(spreadsheetId)} ` +
       `Note: a wrong spreadsheet ID produces this same error — the setup page verifies real access before reporting success, so it resolves either case. Retry after the user confirms.`,
     );
   }
-  return errorResult(result.error);
+  return upstreamResult(result);
 }
 
 async function gmailFetch(token: string, email: string, path: string, method = 'GET', body?: string): Promise<GoogleFetchResult> {
@@ -723,7 +741,7 @@ async function executeRawGoogleCall(
 
   const url = `https://www.googleapis.com/${cleanPath}`;
   const result = await googleFetch(url, resolved.token, method, serializeBody(body), resolved.targetEmail);
-  if (!result.ok) return errorResult(result.error);
+  if (!result.ok) return upstreamResult(result);
 
   if (cls.kind === 'gmail_read') {
     const restriction = checkReadRestrictions(rules, result.data);
@@ -798,7 +816,7 @@ const handler = createMcpHandler(
         params.set('maxResults', String(max || 10));
 
         const result = await gmailFetch(resolved.token, resolved.targetEmail, `messages?${params}`);
-        if (!result.ok) return errorResult(result.error);
+        if (!result.ok) return upstreamResult(result);
         return jsonResult(result.data);
       }
     );
@@ -821,7 +839,7 @@ const handler = createMcpHandler(
         // Read-time enforcement: label blacklist/whitelist + content blacklist
         const rules = await loadApplicableRules(conn.user.id, resolved.proxyKeyId, resolved.targetEmail);
         const result = await gmailFetch(resolved.token, resolved.targetEmail, `messages/${messageId}?format=${format || 'full'}`);
-        if (!result.ok) return errorResult(result.error);
+        if (!result.ok) return upstreamResult(result);
 
         const restriction = checkReadRestrictions(rules, result.data);
         if (restriction) {
@@ -857,7 +875,7 @@ const handler = createMcpHandler(
         // an attachment is only as readable as the email that carries it
         const rules = await loadApplicableRules(conn.user.id, resolved.proxyKeyId, resolved.targetEmail);
         const parentResult = await gmailFetch(resolved.token, resolved.targetEmail, `messages/${messageId}?format=full`);
-        if (!parentResult.ok) return errorResult(parentResult.error);
+        if (!parentResult.ok) return upstreamResult(parentResult);
 
         const restriction = checkReadRestrictions(rules, parentResult.data);
         if (restriction) {
@@ -870,7 +888,7 @@ const handler = createMcpHandler(
           resolved.targetEmail,
           `messages/${messageId}/attachments/${attachmentId}`
         );
-        if (!attachmentResult.ok) return errorResult(attachmentResult.error);
+        if (!attachmentResult.ok) return upstreamResult(attachmentResult);
 
         const attachment = attachmentResult.data as { size?: number; data?: string };
         if (attachment.data && attachment.data.length > MAX_ATTACHMENT_CHARS) {
@@ -908,7 +926,7 @@ const handler = createMcpHandler(
         ).toString('base64url');
 
         const result = await gmailFetch(resolved.token, resolved.targetEmail, 'messages/send', 'POST', JSON.stringify({ raw }));
-        if (!result.ok) return errorResult(result.error);
+        if (!result.ok) return upstreamResult(result);
         return jsonResult(result.data);
       }
     );
@@ -927,7 +945,7 @@ const handler = createMcpHandler(
         if ('error' in resolved) return textResult(resolved.error);
 
         const result = await gmailFetch(resolved.token, resolved.targetEmail, 'labels');
-        if (!result.ok) return errorResult(result.error);
+        if (!result.ok) return upstreamResult(result);
         return jsonResult(result.data);
       }
     );
