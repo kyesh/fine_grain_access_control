@@ -96,6 +96,12 @@ export async function createDelegation(formData: FormData) {
   // default key. Custom profiles remain per-mailbox opt-in.
   await syncDefaultProfileDelegatedAccess(delegateUser.email);
 
+  const { captureServerEvent } = await import("@/lib/posthogServer");
+  captureServerEvent(dbUser.clerkUserId, "delegation_created", {
+    delegate_email: delegateEmail,
+    reactivated: existing?.status === 'revoked',
+  });
+
   revalidatePath("/dashboard");
 }
 
@@ -176,6 +182,13 @@ export async function createProxyKey(formData: FormData) {
       proxyKeyId: newKey.id,
       delegationId,
       targetEmail: email,
+    });
+
+    const { captureServerEvent } = await import("@/lib/posthogServer");
+    captureServerEvent(dbUser.clerkUserId, "account_linked", {
+      target_email: email,
+      delegated: !!delegationId,
+      via: "create_key",
     });
   }
 

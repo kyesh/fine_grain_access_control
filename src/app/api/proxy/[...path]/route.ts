@@ -31,7 +31,14 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
 }
 
 /** Identity resolved inside handleProxyRequest, reported back for analytics. */
-type ProxyTelemetry = { clerkUserId?: string; proxyKeyId?: string };
+type ProxyTelemetry = {
+  clerkUserId?: string;
+  proxyKeyId?: string;
+  /** Google account the call resolved to (own or delegated mailbox). */
+  targetEmail?: string;
+  /** True when access came through an email delegation rather than the key owner's own mailbox. */
+  accountDelegated?: boolean;
+};
 
 /**
  * Captures one `proxy_request` PostHog event per pass-through call. Distinct id
@@ -61,6 +68,8 @@ async function trackedProxyRequest(request: NextRequest, params: { path: string[
     outcome,
     duration_ms: Date.now() - started,
     proxy_key_id: telemetry.proxyKeyId,
+    account_email: telemetry.targetEmail,
+    account_delegated: telemetry.accountDelegated,
   });
 
   return response;
@@ -184,6 +193,10 @@ async function handleProxyRequest(request: NextRequest, params: { path: string[]
 
     // ─── GOOGLE SHEETS PROXY HANDLER ─────────────────────────────────────────
     if (fullPath.includes('spreadsheets')) {
+      // Sheets calls always use the key owner's own Google token — no
+      // delegated-mailbox path exists here.
+      telemetry.targetEmail = dbUser.email;
+      telemetry.accountDelegated = false;
       const spreadsheetId = extractSheetsSpreadsheetId(fullPath);
       if (!spreadsheetId) {
         return NextResponse.json({ error: 'Invalid Google Sheets API path' }, { status: 400 });
@@ -311,6 +324,11 @@ async function handleProxyRequest(request: NextRequest, params: { path: string[]
         error: `This API key does not have access to '${targetEmail}'.`
       }, { status: 403 });
     }
+
+    // Delegation observability: which mailbox this call resolved to, and
+    // whether access came through a delegation.
+    telemetry.targetEmail = emailAccessFallback.targetEmail;
+    telemetry.accountDelegated = !!emailAccessFallback.delegationId;
 
     // ─── 3b. Re-check the delegation behind delegated access ────────────────
     // key_email_access is a grant record, not proof the grant is still valid.
@@ -518,7 +536,7 @@ async function handleProxyRequest(request: NextRequest, params: { path: string[]
       const labelWhitelistRules = applicableRules.filter(r => r.service === 'gmail' && r.actionType === 'label_whitelist');
 
       let parsedBody: Record<string, unknown> | null = null;
-      try { parsedBody = JSON.parse(returnBody); } catch (e: unknown) { }
+      try { parsedBody = JSON.parse(returnBody); } catch { /* not JSON */ }
 
       if (parsedBody && parsedBody.labelIds && Array.isArray(parsedBody.labelIds)) {
         // 1. Check Label Blacklists First (Precedence)

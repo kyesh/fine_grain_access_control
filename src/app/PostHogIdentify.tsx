@@ -18,10 +18,21 @@ export default function PostHogIdentify() {
     if (!isLoaded || !posthog) return
     if (isSignedIn && user) {
       if (posthog.get_distinct_id() !== user.id) {
-        posthog.identify(user.id, {
-          email: user.primaryEmailAddress?.emailAddress,
-          name: user.fullName ?? undefined,
-        })
+        // signup_source: a FRESH account identifying on the website signed up
+        // here; connector-flow accounts get 'claude_connector' stamped
+        // server-side at their first MCP connection (usually seconds after
+        // creation, before any dashboard visit). $set_once means first
+        // touchpoint wins, and the freshness guard keeps pre-existing
+        // accounts from being mislabeled on their next visit.
+        const accountAgeMs = user.createdAt ? Date.now() - user.createdAt.getTime() : null
+        posthog.identify(
+          user.id,
+          {
+            email: user.primaryEmailAddress?.emailAddress,
+            name: user.fullName ?? undefined,
+          },
+          accountAgeMs !== null && accountAgeMs < 600_000 ? { signup_source: 'website' } : undefined,
+        )
       }
     } else if (posthog._isIdentified()) {
       posthog.reset()

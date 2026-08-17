@@ -12,6 +12,14 @@ keep internal/QA traffic out of the numbers.
   `email`/`name` person properties.
 - Signed-out visitors stay anonymous (`person_profiles: 'identified_only'`).
   `posthog.reset()` runs on sign-out so shared browsers don't cross-link users.
+- **`signup_source` person property** (`$set_once`): fresh accounts (<10 min
+  old) are stamped `website` on their first identified dashboard visit
+  (`PostHogIdentify`) or `claude_connector` on their first MCP connection —
+  whichever touchpoint a new account reaches first wins.
+- **Delegation observability**: tool/proxy events carry `account_email` and
+  `account_delegated` (which mailbox a call resolved to, own vs delegated) via
+  `src/lib/toolCallContext.ts` (AsyncLocalStorage rides the props from account
+  resolution to the single capture site).
 
 ## Event catalog
 
@@ -20,13 +28,35 @@ keep internal/QA traffic out of the numbers.
 | `$pageview` | client (`PostHogPageView.tsx`) | `$current_url` |
 | `sign_up_started` | client (`SignUpCta.tsx`, all sign-up CTAs) | `cta_location`: nav / hero / bottom_cta |
 | `sign_up_completed` | server (Clerk webhook, `user.created`) | `$set.email` |
-| `mcp_tool_call` | server (`/api/mcp`, every tool) | `tool`, `client_id`, `outcome`, `duration_ms` |
-| `proxy_request` | server (`/api/proxy/[...path]`) | `service` (gmail/sheets/drive), `method`, `status`, `outcome`, `duration_ms`, `proxy_key_id` |
+| `video_played` | client (`TrackedVideoEmbed.tsx`, all Descript demo embeds) | `video_id`, `video_title`, `page` |
+| `$mcp_tool_call` | server (`/api/mcp`, every tool) | `$mcp_tool_name`, `$mcp_duration_ms`, `$mcp_is_error`, `client_id`, `outcome`, `account_email`, `account_delegated` |
+| `proxy_request` | server (`/api/proxy/[...path]`) | `service` (gmail/sheets/drive), `method`, `status`, `outcome`, `duration_ms`, `proxy_key_id`, `account_email`, `account_delegated` |
+| `mcp_connection_created` | server (`/api/mcp` auth layer) | `connection_id`, `client_id`, `auto_attached`, `account_age_seconds` |
+| `delegation_created` | server (dashboard action) | `delegate_email`, `reactivated` |
+| `account_linked` | server (dashboard action) | `target_email`, `delegated`, `via` |
+| `approval_link_minted` | server (`/api/mcp`) | `action` |
+| `read_restriction_enforced` | server (`/api/mcp`) | `via` (tool name), `restriction` |
 
-`mcp_tool_call.outcome`: `success`, `denied_by_policy` (🚫 FGAC rule), `pending_approval`
-(⏳ connection not yet approved), `failed` (❌ auth/input problems), `error`
-(upstream Google failure), `exception`.
+`$mcp_tool_call` uses PostHog's **canonical MCP Analytics schema** (event and
+`$mcp_*` property names) so PostHog's built-in MCP views resolve the tool name.
+`$mcp_is_error` is true only for upstream failures/exceptions; the finer-grained
+FGAC story is in the custom `outcome` property: `success`, `denied_by_policy`
+(🚫 FGAC rule), `pending_approval` (⏳ connection not yet approved), `failed`
+(❌ auth/input problems), `error` (upstream Google failure), `exception`.
 Unauthenticated calls attribute to the `anonymous-mcp` / `anonymous-proxy` persons.
+
+> **Legacy naming (before 2026-08):** tool calls were captured as a custom
+> `mcp_tool_call` event with `tool` / `duration_ms` properties. That name
+> collides with the event PostHog's archived beta MCP SDK once emitted, so the
+> PostHog UI labels it "MCP tool call (legacy)" and its MCP views show no tool
+> name (they read `$mcp_tool_name`). The old events still exist under the old
+> name — insights spanning the rename must query both. Nothing in this codebase
+> should ever emit `mcp_tool_call` again; QA capability 16 asserts this.
+
+Payload capture is deliberately **off**: we never send `$mcp_parameters` or
+`$mcp_response` (they would carry customer mail/sheet content into PostHog).
+For the same reason, do not adopt `@posthog/mcp` / `npx @posthog/wizard
+mcp-analytics`, which captures both with no redaction option.
 
 Every event (client and server) carries an `environment` property:
 `development` (localhost), `preview` (`*.vercel.app`), or `production` — all three
@@ -64,4 +94,9 @@ endpoint `/api/webhooks/clerk` must be subscribed to `user.created` in addition 
   serverless responses aren't delayed and events aren't dropped.
 - MCP instrumentation wraps `server.registerTool` once (see `/api/mcp/route.ts`),
   so newly added tools are instrumented automatically.
+- Video plays: Descript embeds implement the player.js (Embedly) protocol and
+  also post a bare `descript:embed:played` string to the parent window on
+  play (verified empirically 2026-08). `TrackedVideoEmbed` listens for either,
+  scoped per-iframe via `event.source`, and captures `video_played` once per
+  mount. New demo videos must use `TrackedVideoEmbed`, not a raw `<iframe>`.
 - The proxy records `proxy_key_id` (the row's UUID) — never the `sk_proxy_` secret.
