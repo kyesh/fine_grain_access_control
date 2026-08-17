@@ -160,6 +160,15 @@ No tmux sessions to clean up. Results are saved to `test/qa-envs/cc-cli/evals/re
 > Channel-inapplicable here: server-side pipeline, executed once per cycle via
 > agents/01_hosted_mcp.md. Record as skip with reason "runs in hosted-mcp runbook".
 
+## Capability: Sheets Grant Recovery (→ capabilities/17_sheets_grant_recovery.md)
+
+- A1/A7: headless `claude -p` evals calling `sheets_get_spreadsheet` on the
+  never-picked fixture sheet — assert the denial link in the transcript
+  (A1) and the stranded-sheet error text after approval (A7).
+- A2–A6 are browser assertions; run them from the hosted-MCP runbook (or
+  `skip` here with reason "browser assertions covered by 01_hosted_mcp").
+- A4 retry: re-run the eval post-recovery → success payload in transcript.
+
 ## Capability: Analytics Events (→ capabilities/16_analytics_events.md)
 
 > Run LAST — it inspects the PostHog events the capabilities above generated.

@@ -204,6 +204,33 @@ curl -s $BASE_URL/api/mcp -X POST \
 - A11: unauthenticated POST to `/api/webhooks/gmail` → 401.
 - A12: `setup-gmail-push.ts --project dev-fgac-ai` dry run → all ✔.
 
+## Capability: Sheets Grant Recovery (→ capabilities/17_sheets_grant_recovery.md)
+
+> Needs a spreadsheet that has NEVER been picked in this environment (create
+> a fresh one as USER_A) plus the standing picked QA fixture sheet. Browser
+> assertions run in the built-in browser signed in as USER_A.
+
+- A1: `sheets_get_spreadsheet` on the fresh sheet via hosted MCP → capture
+  the denial text and its `/dashboard/approve` link.
+- A2: open the link, approve Read Only → assert the recovery ("one more
+  step") state, not the plain success copy; rule exists via
+  `GET /api/rules/grant-sheets-access`.
+- A3: assert the picker launch affordance AND the Descript embed
+  (`iframe[src*='Fv9pwXugLUa']`) on the recovery page.
+- A4: full pick via Playwright CDP path (capability 09 harness note); else
+  app-API seam + re-verify, marking the pick itself `skip` with reason.
+  Retry the MCP call → success.
+- A5: mint a denial for the standing fixture sheet (delete its FGAC rule
+  first if present), approve → plain success state, no picker step; retried
+  read succeeds.
+- A6: `/dashboard` and `/dashboard/accounts` → "needs Google access" chip on
+  the stranded rule only; recovery panel opens from the chip.
+- A7: retry the sheets call while stranded → error text names FGAC approval
+  vs Google setup and points at the dashboard; no "Check the ID" copy.
+- A8: covered by the capability-16 event script:
+  `qa-posthog-events.ts --event sheets_grant_verification` and
+  `--event sheets_grant_recovered` scoped to the run window.
+
 ## Capability: Analytics Events (→ capabilities/16_analytics_events.md)
 
 > Run LAST — it inspects the PostHog events the capabilities above generated.
