@@ -204,6 +204,39 @@ curl -s $BASE_URL/api/mcp -X POST \
 - A11: unauthenticated POST to `/api/webhooks/gmail` → 401.
 - A12: `setup-gmail-push.ts --project dev-fgac-ai` dry run → all ✔.
 
+## Capability: Sheets Grant Recovery (→ capabilities/17_sheets_grant_recovery.md)
+
+> Needs a spreadsheet that has NEVER been picked in this environment (create
+> a fresh one as USER_A) plus the standing picked QA fixture sheet. Browser
+> assertions run in the built-in browser signed in as USER_A.
+
+- A1: `sheets_get_spreadsheet` on the fresh sheet via hosted MCP → capture
+  the denial text and its `/dashboard/approve` link.
+- A2: open the link → assert the pick-first state (`sheets-flow-pick-first`
+  testid): no approve/submit control rendered, no rule created, link not
+  consumed (reload still shows the flow).
+- A3: assert the pick button AND the Descript embed
+  (`iframe[src*='Fv9pwXugLUa']`) on the approve page's pick-first state.
+- A4: full pick (of the requested sheet) via Playwright CDP path
+  (capability 09 harness note) → confirm step shows the real title →
+  approve Read Only → success page; retry the MCP call → success. Legacy
+  path: `/dashboard/sheets-setup?sid=…` still picks→verifies for stranded
+  rules.
+- A5: mint a denial for the standing fixture sheet (delete its FGAC rule
+  first if present), open link → straight confirm (no pick step) → approve
+  → success; retried read succeeds.
+- A9: from the pick-first state pick a DIFFERENT owned sheet → substitution
+  confirm (`sheets-flow-substitution` testid) → approve → rule for picked id
+  only; requested id has no rule; retry on requested id still errors
+  honestly (A7) while the picked sheet's call succeeds.
+- A6: `/dashboard` and `/dashboard/accounts` → "needs Google access" chip on
+  the stranded rule only; recovery panel opens from the chip.
+- A7: retry the sheets call while stranded → error text names FGAC approval
+  vs Google setup and points at the dashboard; no "Check the ID" copy.
+- A8: covered by the capability-16 event script:
+  `qa-posthog-events.ts --event sheets_grant_verification` and
+  `--event sheets_grant_recovered` scoped to the run window.
+
 ## Capability: Analytics Events (→ capabilities/16_analytics_events.md)
 
 > Run LAST — it inspects the PostHog events the capabilities above generated.

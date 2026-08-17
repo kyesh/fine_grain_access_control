@@ -30,7 +30,7 @@ import { loadApplicableRules, checkReadRestrictions, type ApplicableRules } from
 import { captureServerEvent } from '@/lib/posthogServer';
 import { runWithToolCallProps, addToolCallProps, getToolCallProps } from '@/lib/toolCallContext';
 import { ensureDefaultProfile } from '@/db/defaultProfile';
-import { mintApprovalUrl, type ApprovalAction } from '@/lib/approvalLinks';
+import { mintApprovalUrl, approvalLinkMinutes, type ApprovalAction } from '@/lib/approvalLinks';
 import { TOOL_DEFS, toolAnnotations, type FgacToolDef } from './toolDefs';
 import {
   classifyGoogleApiCall, extractSendRecipients, sheetsApprovalAction,
@@ -316,9 +316,11 @@ function checkSendWhitelist(rules: ApplicableRules, recipients: string[] | null)
 
 /**
  * Magic-link denial (connector-growth Phase C): policy denials that a user
- * would plausibly want to approve carry a signed, single-use, 15-minute link
- * that pre-fills exactly that grant. Explicit blocks and read restrictions
- * never get links — weakening those stays a deliberate dashboard act.
+ * would plausibly want to approve carry a signed, single-use, short-lived
+ * link that pre-fills exactly that grant (15 min; sheets 30 — the approval
+ * can include a Picker pick + consent round-trip). Explicit blocks and read
+ * restrictions never get links — weakening those stays a deliberate
+ * dashboard act.
  */
 async function policyDenialWithLink(
   conn: ConnectionApproved,
@@ -331,7 +333,7 @@ async function policyDenialWithLink(
     const url = await mintApprovalUrl(DASHBOARD_URL, conn.user.id, proxyKeyId, action);
     captureServerEvent(conn.user.clerkUserId, 'approval_link_minted', { action: action.action });
     return textResult(
-      `${message}\n👉 Share this link with the user to approve it in one click (single-use, expires in 15 minutes): ${url}`,
+      `${message}\n👉 Share this link with the user to approve it in one click (single-use, expires in ${approvalLinkMinutes(action.action)} minutes): ${url}`,
     );
   } catch (err) {
     console.error('[MCP] Failed to mint approval link:', err);
@@ -372,7 +374,7 @@ async function sendDenialWithLinks(
 
 type GoogleFetchResult =
   | { ok: true; data: unknown }
-  | { ok: false; error: string };
+  | { ok: false; error: string; status?: number };
 
 function describeGoogleError(status: number, data: unknown, targetEmail: string): string {
   const detail = (data as { error?: { message?: string } })?.error?.message
@@ -413,9 +415,30 @@ async function googleFetch(
   try { data = text ? JSON.parse(text) : {}; } catch { /* non-JSON body: keep text */ }
 
   if (!res.ok) {
-    return { ok: false, error: describeGoogleError(res.status, data, targetEmail) };
+    return { ok: false, error: describeGoogleError(res.status, data, targetEmail), status: res.status };
   }
   return { ok: true, data };
+}
+
+/**
+ * Post-policy Google failure on a sheets call. A 403/404 HERE — after FGAC's
+ * own permission check passed — almost always means the FGAC rule exists but
+ * Google never registered a drive.file grant for the sheet (it was approved
+ * via magic link but never picked in the Google Picker; a mistyped id looks
+ * identical from outside). The generic "check the ID" text sent the whole
+ * 2026-08 connector cohort into a retry loop; say what is actually wrong and
+ * where the one-click fix lives.
+ */
+function sheetsErrorResult(result: { error: string; status?: number }, spreadsheetId: string) {
+  if (result.status === 403 || result.status === 404) {
+    return errorResult(
+      `❌ FGAC allows this spreadsheet, but Google hasn't shared the sheet itself with FGAC yet, so Google rejected the call (${result.status}). ` +
+      `This is a one-time setup step only the user can do: they must pick this sheet in Google's file picker. ` +
+      `👉 Send the user here to finish setup (includes a short how-to video): ${DASHBOARD_URL}/dashboard/sheets-setup?sid=${encodeURIComponent(spreadsheetId)} ` +
+      `Note: a wrong spreadsheet ID produces this same error — the setup page verifies real access before reporting success, so it resolves either case. Retry after the user confirms.`,
+    );
+  }
+  return errorResult(result.error);
 }
 
 async function gmailFetch(token: string, email: string, path: string, method = 'GET', body?: string): Promise<GoogleFetchResult> {
@@ -687,7 +710,7 @@ async function executeRawGoogleCall(
 
     const url = `https://sheets.googleapis.com/${cleanPath.replace(/^sheets\//, '')}`;
     const result = await googleFetch(url, resolved.token, method, serializeBody(body), resolved.targetEmail);
-    if (!result.ok) return errorResult(result.error);
+    if (!result.ok) return sheetsErrorResult(result, cls.spreadsheetId);
     return jsonResult(result.data);
   }
 
@@ -927,7 +950,7 @@ const handler = createMcpHandler(
         if (!perm.allowed) return policyDenialWithLink(conn, resolved.proxyKeyId, perm.reason, sheetsDenialAction(perm, spreadsheetId, false));
 
         const result = await sheetsFetch(resolved.token, `${spreadsheetId}`, 'GET', undefined, resolved.targetEmail);
-        if (!result.ok) return errorResult(result.error);
+        if (!result.ok) return sheetsErrorResult(result, spreadsheetId);
         return jsonResult(result.data);
       }
     );
@@ -952,7 +975,7 @@ const handler = createMcpHandler(
 
         const encodedRange = encodeURIComponent(range);
         const result = await sheetsFetch(resolved.token, `${spreadsheetId}/values/${encodedRange}`, 'GET', undefined, resolved.targetEmail);
-        if (!result.ok) return errorResult(result.error);
+        if (!result.ok) return sheetsErrorResult(result, spreadsheetId);
         return jsonResult(result.data);
       }
     );
@@ -979,7 +1002,7 @@ const handler = createMcpHandler(
         const encodedRange = encodeURIComponent(range);
         const body = JSON.stringify({ values, range });
         const result = await sheetsFetch(resolved.token, `${spreadsheetId}/values/${encodedRange}?valueInputOption=USER_ENTERED`, 'PUT', body, resolved.targetEmail);
-        if (!result.ok) return errorResult(result.error);
+        if (!result.ok) return sheetsErrorResult(result, spreadsheetId);
         return jsonResult(result.data);
       }
     );
@@ -1006,7 +1029,7 @@ const handler = createMcpHandler(
         const encodedRange = encodeURIComponent(range);
         const body = JSON.stringify({ values });
         const result = await sheetsFetch(resolved.token, `${spreadsheetId}/values/${encodedRange}:append?valueInputOption=USER_ENTERED`, 'POST', body, resolved.targetEmail);
-        if (!result.ok) return errorResult(result.error);
+        if (!result.ok) return sheetsErrorResult(result, spreadsheetId);
         return jsonResult(result.data);
       }
     );

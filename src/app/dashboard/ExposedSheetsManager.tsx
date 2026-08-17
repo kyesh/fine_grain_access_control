@@ -21,6 +21,12 @@ export function ExposedSheetsManager({ activeKeys = [] }: { activeKeys?: ProxyKe
   const [sheetsRules, setSheetsRules] = useState<SheetsRule[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  // spreadsheetId → Google-side grant state ('ok' | 'missing' | 'unknown').
+  // A rule can exist without Google ever having shared the sheet (approved
+  // via magic link, never picked) — those rows get a "Needs Google access"
+  // chip. Verification failing entirely degrades to no chips, never a
+  // broken card.
+  const [grantStates, setGrantStates] = useState<Record<string, { state: string }>>({});
 
   const fetchSheetsRules = useCallback(async () => {
     try {
@@ -33,6 +39,13 @@ export function ExposedSheetsManager({ activeKeys = [] }: { activeKeys?: ProxyKe
       console.error('Failed to load sheets rules:', err);
     } finally {
       setIsLoading(false);
+    }
+    try {
+      const res = await fetch('/api/rules/verify-sheets-access');
+      const data = await res.json();
+      setGrantStates(data.grants ?? {});
+    } catch {
+      setGrantStates({});
     }
   }, []);
 
@@ -158,6 +171,15 @@ export function ExposedSheetsManager({ activeKeys = [] }: { activeKeys?: ProxyKe
                       <path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-2 10h-4v4h-2v-4H7v-2h4V7h2v4h4v2z" />
                     </svg>
                     <span>{rule.resourceName || rule.ruleName}</span>
+                    {grantStates[rule.targetResourceId]?.state === 'missing' && (
+                      <a
+                        href={`/dashboard/sheets-setup?sid=${encodeURIComponent(rule.targetResourceId)}${rule.resourceName ? `&name=${encodeURIComponent(rule.resourceName)}` : ''}`}
+                        className="inline-flex items-center gap-1 rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-800 hover:bg-amber-100 transition-colors flex-shrink-0"
+                        title="FGAC has this rule, but Google hasn't shared the sheet with FGAC yet — agents get errors until you pick it in the Google Picker."
+                      >
+                        ⚠ Needs Google access — finish setup
+                      </a>
+                    )}
                   </td>
                   <td className="py-3 px-4 font-mono text-xs text-slate-600">
                     {rule.targetResourceId ? (

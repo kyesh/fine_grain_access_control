@@ -30,3 +30,4 @@
 | 14 | `14_magic_link_approvals.md` | Magic approval links: signing, expiry, single-use, owner-only |
 | 15 | `15_request_access_tool.md` | Conversational permission upgrades via `request_access` |
 | 16 | `16_analytics_events.md` | PostHog events arrive with canonical schema (`$mcp_tool_call` + tool names, outcomes, environment tags) |
+| 17 | `17_sheets_grant_recovery.md` | Sheets approval verifies the Google-side grant; picker + video recovery when missing; honest post-policy errors |

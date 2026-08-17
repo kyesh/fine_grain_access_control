@@ -139,6 +139,15 @@ curl -X POST http://localhost:18790/api/chat \
 docker compose -f test/qa-envs/openclaw/docker-compose.yml down
 ```
 
+## Capability: Sheets Grant Recovery (→ capabilities/17_sheets_grant_recovery.md)
+
+- A1/A7: drive the OpenClaw instance to call `sheets_get_spreadsheet` on the
+  never-picked fixture sheet; assert the denial link surfaces to the end
+  user intact (A9 of capability 14 applies) and the stranded-sheet error is
+  relayed verbatim (A7).
+- A2–A6: browser assertions — cover via 01_hosted_mcp or `skip` with reason.
+- A4 retry: repeat the OpenClaw task after recovery → success.
+
 ## Capability: Analytics Events (→ capabilities/16_analytics_events.md)
 
 > Run LAST — it inspects the PostHog events the capabilities above generated.

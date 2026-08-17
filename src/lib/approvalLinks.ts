@@ -8,7 +8,9 @@
  *
  * Security properties (QA capability 12):
  *   - HMAC-signed; any tampering invalidates the token
- *   - 15-minute expiry
+ *   - short expiry: 15 minutes, except sheets grants get 30 — approving a
+ *     sheet can include a Google Picker pick plus a first-time drive.file
+ *     consent round-trip, which real users don't finish in 15
  *   - single-use (jti recorded on consumption)
  *   - approval requires the OWNING user's signed-in session — the token
  *     carries the FGAC userId and the approve path re-checks it
@@ -21,6 +23,12 @@
 import * as jose from 'jose';
 
 export const APPROVAL_LINK_TTL_SECONDS = 15 * 60;
+export const SHEETS_APPROVAL_LINK_TTL_SECONDS = 30 * 60;
+
+/** Link lifetime in minutes for user-facing copy — keep messages honest. */
+export function approvalLinkMinutes(action: ApprovalAction['action']): number {
+  return action.startsWith('sheets') ? SHEETS_APPROVAL_LINK_TTL_SECONDS / 60 : APPROVAL_LINK_TTL_SECONDS / 60;
+}
 
 export type ApprovalAction =
   | { action: 'send_whitelist'; recipient: string }
@@ -52,8 +60,10 @@ export async function mintApprovalToken(
   userId: string,
   proxyKeyId: string,
   action: ApprovalAction,
-  ttlSeconds: number = APPROVAL_LINK_TTL_SECONDS, // overridable for tests only
+  ttlSecondsOverride?: number, // for tests only
 ): Promise<string> {
+  const ttlSeconds = ttlSecondsOverride
+    ?? (action.action.startsWith('sheets') ? SHEETS_APPROVAL_LINK_TTL_SECONDS : APPROVAL_LINK_TTL_SECONDS);
   const key = await signingKey();
   return new jose.SignJWT({ userId, proxyKeyId, ...action })
     .setProtectedHeader({ alg: 'HS256' })

@@ -35,8 +35,7 @@
       "Bash(npx vercel cancel:*)",
       "Bash(vercel link:*)",
       "Bash(npx vercel link:*)",
-      "Bash(git commit --no-verify:*)",
-      "Bash(npx tsx scripts/cleanup-neon-branches.ts:*)"
+      "Bash(git commit --no-verify:*)"
     ],
     "allow": [
       "Bash(git pull:*)",
@@ -64,7 +63,9 @@
       "Bash(npx vercel project ls:*)",
       "Bash(npx @playwright/cli:*)",
       "Bash(curl -s http://localhost:9222/json/version)",
-      "Bash(curl -sf http://localhost:3000:*)"
+      "Bash(curl -sf http://localhost:3000:*)",
+      "Bash(npx tsx scripts/cleanup-neon-branches.ts:*)",
+      "Bash(bash scripts/cleanup-neon-branches.sh)"
     ]
   },
   "hooks": {

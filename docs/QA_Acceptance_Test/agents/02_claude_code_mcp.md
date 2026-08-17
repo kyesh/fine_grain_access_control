@@ -173,6 +173,17 @@ tmux kill-session -t fgac-qa
 > Channel-inapplicable here: server-side pipeline, executed once per cycle via
 > agents/01_hosted_mcp.md. Record as skip with reason "runs in hosted-mcp runbook".
 
+## Capability: Sheets Grant Recovery (→ capabilities/17_sheets_grant_recovery.md)
+
+- A1/A7: issue `sheets_get_spreadsheet` through the Claude Code MCP
+  connection (tmux session) on the never-picked fixture sheet; capture the
+  denial link (A1) and, post-approval, the honest stranded-sheet error (A7).
+- A2–A6: browser-side and identical to the hosted-MCP runbook — execute
+  there or re-run here with this runtime's denial links; either satisfies
+  coverage as long as qa-results.json attributes the environment that ran it.
+- A4 retry + A8 events: retry via this MCP connection; events via the
+  capability-16 script with `--environment development`.
+
 ## Capability: Analytics Events (→ capabilities/16_analytics_events.md)
 
 > Run LAST — it inspects the PostHog events the capabilities above generated.
