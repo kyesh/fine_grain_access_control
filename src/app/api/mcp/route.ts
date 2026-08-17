@@ -205,8 +205,13 @@ const errorResult = (text: string) => ({ content: [{ type: 'text' as const, text
  * Google auth, a sheet not shared with the connected account, a bad resource
  * id) are the connector guiding the user, not malfunctioning — returned as
  * plain text, so only genuine failures (network, 429, 5xx) carry isError. */
-const upstreamResult = (r: { error: string; recoverable: boolean }) =>
-  r.recoverable ? textResult(r.error) : errorResult(r.error);
+const upstreamResult = (r: { error: string; status?: number; recoverable: boolean }) => {
+  addToolCallProps({
+    outcome_reason: r.status ? `google_${r.status}` : 'google_network_error',
+    ...(r.status ? { google_status: r.status } : {}),
+  });
+  return r.recoverable ? textResult(r.error) : errorResult(r.error);
+};
 
 const jsonResult = (data: unknown) => textResult(JSON.stringify(data, null, 2));
 
@@ -292,10 +297,12 @@ function checkSendWhitelist(rules: ApplicableRules, recipients: string[] | null)
   const sendRules = rules.filter(r => r.service === 'gmail' && r.actionType === 'send_whitelist');
 
   if (!recipients || recipients.length === 0) {
+    addToolCallProps({ outcome_reason: 'send_recipients_unparseable' });
     return { message: '🚫 Could not determine the message recipients, so sending was denied. Provide a standard RFC 2822 message with To/Cc/Bcc headers.' };
   }
 
   if (sendRules.length === 0) {
+    addToolCallProps({ outcome_reason: 'send_disabled' });
     return {
       message: '🚫 Sending is disabled on this profile (no send whitelist configured). This is the safe default.',
       deniedRecipient: recipients[0],
@@ -311,6 +318,7 @@ function checkSendWhitelist(rules: ApplicableRules, recipients: string[] | null)
       if (new RegExp(regexStr, 'i').test(recipient)) { isWhitelisted = true; break; }
     }
     if (!isWhitelisted) {
+      addToolCallProps({ outcome_reason: 'send_not_whitelisted' });
       return {
         message: `🚫 Unauthorized recipient. '${recipient}' is not in the send whitelist.`,
         deniedRecipient: recipient,
@@ -447,6 +455,7 @@ async function googleFetch(
  */
 function sheetsErrorResult(result: { error: string; status?: number; recoverable: boolean }, spreadsheetId: string) {
   if (result.status === 403 || result.status === 404) {
+    addToolCallProps({ outcome_reason: 'sheets_grant_missing', google_status: result.status });
     // Missing-grant setup is the user completing onboarding, not the
     // connector failing — plain text keeps it out of isError health metrics.
     return textResult(
@@ -488,16 +497,19 @@ async function checkSheetsPermission(userId: string, proxyKeyId: string, spreads
   });
 
   if (sheetsRules.length === 0) {
+    addToolCallProps({ outcome_reason: 'sheets_not_exposed' });
     return { allowed: false as const, denial: 'not_exposed' as const, reason: `🚫 Access Denied: Spreadsheet '${spreadsheetId}' is not exposed in your FGAC rules.` };
   }
 
   if (sheetsRules.some(r => r.actionType === 'sheet_block')) {
+    addToolCallProps({ outcome_reason: 'sheets_blocked' });
     return { allowed: false as const, denial: 'blocked' as const, reason: `🚫 Access Denied: Access to spreadsheet '${spreadsheetId}' is explicitly blocked.` };
   }
 
   if (isMutating) {
     const hasReadWrite = sheetsRules.some(r => r.actionType === 'sheet_read_write');
     if (!hasReadWrite) {
+      addToolCallProps({ outcome_reason: 'sheets_read_only' });
       return { allowed: false as const, denial: 'read_only' as const, reason: `🚫 Access Denied: Write access to spreadsheet '${spreadsheetId}' is restricted (Read Only).` };
     }
   }
@@ -605,6 +617,7 @@ async function requireApproval(authInfo: AuthInfo | undefined): Promise<Connecti
 
   const result = await resolveConnection(userId, clientId);
   if (!result.authorized) {
+    addToolCallProps({ outcome_reason: `connection_${result.reason}` });
     return textResult(pendingMessage(result));
   }
   return result;
@@ -628,6 +641,14 @@ function classifyToolOutcome(result: ToolAnalyticsResult): string {
   return 'success';
 }
 
+/** Diagnostic snippet for non-success outcomes. URLs are stripped (approval
+ * links embed signed single-use tokens) and length is capped — enough to
+ * answer "what happened" in PostHog without shipping payload content. */
+function sanitizeResultMessage(text: string | undefined): string | undefined {
+  if (!text) return undefined;
+  return text.replace(/https?:\/\/\S+/g, '<url>').slice(0, 200);
+}
+
 function withToolAnalytics<R extends ToolAnalyticsResult>(
   tool: string,
   fn: (params: unknown, extra: { authInfo?: AuthInfo }) => Promise<R> | R,
@@ -641,7 +662,7 @@ function withToolAnalytics<R extends ToolAnalyticsResult>(
     // the tool name; `outcome` and `client_id` are FGAC-specific extras, and
     // context props (account_email / account_delegated, set during account
     // resolution) ride along so delegation usage is attributable per call.
-    const track = (outcome: string) => captureServerEvent(
+    const track = (outcome: string, message?: string) => captureServerEvent(
       extra?.authInfo?.extra?.userId ?? 'anonymous-mcp',
       '$mcp_tool_call',
       {
@@ -650,15 +671,20 @@ function withToolAnalytics<R extends ToolAnalyticsResult>(
         $mcp_is_error: outcome === 'error' || outcome === 'exception',
         client_id: extra?.authInfo?.clientId,
         outcome,
+        // outcome_reason / google_status ride in via addToolCallProps from
+        // the site that produced the denial or failure; result_message is the
+        // catch-all for paths no reason code covers yet.
+        ...(message ? { result_message: message } : {}),
         ...getToolCallProps(),
       },
     );
     try {
       const result = await fn(params, extra);
-      track(classifyToolOutcome(result));
+      const outcome = classifyToolOutcome(result);
+      track(outcome, outcome === 'success' ? undefined : sanitizeResultMessage(result.content?.[0]?.text));
       return result;
     } catch (err) {
-      track('exception');
+      track('exception', sanitizeResultMessage(err instanceof Error ? err.message : String(err)));
       throw err;
     }
   });
@@ -672,17 +698,20 @@ async function resolveAccountAndToken(
   account?: string,
 ): Promise<ResolvedAccount | ResolvedError> {
   if (!conn.proxyKeyId) {
+    addToolCallProps({ outcome_reason: 'no_proxy_key' });
     return { error: '❌ No proxy key assigned to this connection. Ask the user to update it in the dashboard.' };
   }
 
   const emails = await getAccessibleEmails(conn.proxyKeyId);
   if (emails.length === 0) {
+    addToolCallProps({ outcome_reason: 'no_accessible_emails' });
     return { error: '❌ No email accounts are accessible with this proxy key.' };
   }
 
   const targetEmail = account || conn.user.email;
   const access = await checkEmailAccess(conn.proxyKeyId, targetEmail);
   if (!access) {
+    addToolCallProps({ outcome_reason: 'account_not_accessible' });
     return { error: `❌ This proxy key does not have access to '${targetEmail}'. Accessible: ${emails.map(e => e.targetEmail).join(', ')}` };
   }
 
@@ -696,6 +725,7 @@ async function resolveAccountAndToken(
 
   const token = await getGoogleToken(targetEmail, conn.user);
   if (!token) {
+    addToolCallProps({ outcome_reason: 'google_token_unavailable' });
     return { error: `❌ Could not fetch Google token for '${targetEmail}'. The account owner may need to reconnect Google.` };
   }
 
@@ -722,7 +752,10 @@ async function executeRawGoogleCall(
   body?: string | Record<string, unknown>,
 ) {
   const cls = classifyGoogleApiCall(path, method);
-  if (cls.kind === 'denied') return textResult(cls.reason);
+  if (cls.kind === 'denied') {
+    addToolCallProps({ outcome_reason: 'google_api_call_denied' });
+    return textResult(cls.reason);
+  }
 
   const cleanPath = path.replace(/^\/+/, '');
 
@@ -750,6 +783,7 @@ async function executeRawGoogleCall(
   if (cls.kind === 'gmail_read') {
     const restriction = checkReadRestrictions(rules, result.data);
     if (restriction) {
+      addToolCallProps({ outcome_reason: 'read_restricted' });
       captureServerEvent(conn.user.clerkUserId, 'read_restriction_enforced', { via: 'google_api_get', restriction });
       return textResult(restriction);
     }
@@ -847,6 +881,7 @@ const handler = createMcpHandler(
 
         const restriction = checkReadRestrictions(rules, result.data);
         if (restriction) {
+          addToolCallProps({ outcome_reason: 'read_restricted' });
           captureServerEvent(conn.user.clerkUserId, 'read_restriction_enforced', { via: 'gmail_read', restriction });
           return textResult(restriction);
         }
@@ -883,6 +918,7 @@ const handler = createMcpHandler(
 
         const restriction = checkReadRestrictions(rules, parentResult.data);
         if (restriction) {
+          addToolCallProps({ outcome_reason: 'read_restricted' });
           captureServerEvent(conn.user.clerkUserId, 'read_restriction_enforced', { via: 'gmail_get_attachment', restriction });
           return textResult(restriction);
         }
@@ -1112,11 +1148,13 @@ const handler = createMcpHandler(
         let action: ApprovalAction;
         if (type === 'send') {
           if (!recipient || !/^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/.test(recipient)) {
+            addToolCallProps({ outcome_reason: 'request_access_invalid_args' });
             return textResult('🚫 A valid "recipient" email address is required to request send access. Requestable permissions: sending to a specific recipient, or read/read-write access to a specific spreadsheet.');
           }
           action = { action: 'send_whitelist', recipient };
         } else {
           if (!spreadsheetId) {
+            addToolCallProps({ outcome_reason: 'request_access_invalid_args' });
             return textResult('🚫 A "spreadsheetId" is required to request spreadsheet access. Requestable permissions: sending to a specific recipient, or read/read-write access to a specific spreadsheet.');
           }
           action = type === 'sheets_read'

@@ -29,7 +29,7 @@ keep internal/QA traffic out of the numbers.
 | `sign_up_started` | client (`SignUpCta.tsx`, all sign-up CTAs) | `cta_location`: nav / hero / bottom_cta |
 | `sign_up_completed` | server (Clerk webhook, `user.created`) | `$set.email` |
 | `video_played` | client (`TrackedVideoEmbed.tsx`, all Descript demo embeds) | `video_id`, `video_title`, `page` |
-| `$mcp_tool_call` | server (`/api/mcp`, every tool) | `$mcp_tool_name`, `$mcp_duration_ms`, `$mcp_is_error`, `client_id`, `outcome`, `account_email`, `account_delegated` |
+| `$mcp_tool_call` | server (`/api/mcp`, every tool) | `$mcp_tool_name`, `$mcp_duration_ms`, `$mcp_is_error`, `client_id`, `outcome`, `outcome_reason`, `google_status`, `result_message` (non-success only), `account_email`, `account_delegated`, `spreadsheet_id` (sheets calls) |
 | `proxy_request` | server (`/api/proxy/[...path]`) | `service` (gmail/sheets/drive), `method`, `status`, `outcome`, `duration_ms`, `proxy_key_id`, `account_email`, `account_delegated` |
 | `mcp_connection_created` | server (`/api/mcp` auth layer) | `connection_id`, `client_id`, `auto_attached`, `account_age_seconds` |
 | `delegation_created` | server (dashboard action) | `delegate_email`, `reactivated` |
@@ -76,6 +76,26 @@ FGAC story is in the custom `outcome` property: `success`, `denied_by_policy`
 (🚫 FGAC rule), `pending_approval` (⏳ connection not yet approved), `failed`
 (❌ auth/input problems), `error` (upstream Google failure), `exception`.
 Unauthenticated calls attribute to the `anonymous-mcp` / `anonymous-proxy` persons.
+
+Every non-success outcome also answers **why**, via two layers:
+
+- **`outcome_reason`** — a stable snake_case code set at the site that produced
+  the denial/failure (`addToolCallProps`): `connection_pending_approval` /
+  `connection_blocked` / `connection_no_client_id` / `connection_user_not_found`,
+  `no_proxy_key`, `no_accessible_emails`, `account_not_accessible`,
+  `google_token_unavailable`, `send_not_whitelisted` / `send_disabled` /
+  `send_recipients_unparseable`, `sheets_not_exposed` / `sheets_blocked` /
+  `sheets_read_only`, `sheets_grant_missing` (post-policy Google 403/404 on a
+  sheet — the missing-Picker-grant case), `read_restricted`,
+  `google_api_call_denied`, `request_access_invalid_args`, and
+  `google_<status>` / `google_network_error` for other upstream failures
+  (`google_status` carries the numeric HTTP status).
+- **`result_message`** — the tool's returned text, URL-stripped (approval links
+  embed signed tokens) and capped at 200 chars; on `exception`, the thrown
+  error's message. The catch-all for any path without a reason code.
+
+Debugging "why is this user erroring" should never need code archaeology
+again: group their `$mcp_tool_call` by `outcome_reason`.
 
 > **Legacy naming (before 2026-08):** tool calls were captured as a custom
 > `mcp_tool_call` event with `tool` / `duration_ms` properties. That name
