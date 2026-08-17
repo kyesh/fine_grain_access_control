@@ -121,10 +121,19 @@ async function resolveConnection(userId: string, clientId: string | undefined): 
       connection = newConn;
 
       console.log(`[MCP] New connection: user=${user.email} client=${clientId} conn=${connection.id} auto-attached to default profile`);
+      // account_age_seconds separates connector-flow sign-ups (Clerk hosted
+      // OAuth → first MCP request within seconds/minutes of account creation;
+      // no fgac.ai pageview ever) from established users adding a client. A
+      // fresh account stamps signup_source once — the website flow's competing
+      // $set_once fires from PostHogIdentify on the first dashboard visit,
+      // and whichever touchpoint a new account reaches first wins.
+      const accountAgeSeconds = Math.round((Date.now() - user.createdAt.getTime()) / 1000);
       captureServerEvent(user.clerkUserId, 'mcp_connection_created', {
         connection_id: newConn.id,
         client_id: clientId,
         auto_attached: true,
+        account_age_seconds: accountAgeSeconds,
+        ...(accountAgeSeconds < 600 ? { $set_once: { signup_source: 'claude_connector' } } : {}),
       });
     } catch (err) {
       // The auth-layer eager resolve and the tool handler can race this
