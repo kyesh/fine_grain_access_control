@@ -21,7 +21,7 @@ QA execution is delegated to cost-tiered subagents defined in `.claude/agents/`:
 `docs/QA_Acceptance_Test/qa-results.json`; `qa-smoke` and `deploy-watcher` (Haiku) handle
 mechanical polling and smoke checks; `qa-coverage-auditor` (Sonnet) adversarially reviews
 results; `qa-setup-driver` (inherits the session model) drives the browser setup flows.
-Two rules bind this architecture:
+Three rules bind this architecture:
 
 1. **Only the orchestrator (main session) edits source, schema, or config.** Runners
    execute and report; a runner that hits a code problem records it, never fixes it.
@@ -29,6 +29,14 @@ Two rules bind this architecture:
    parses the `### A<n>:` assertions in `docs/QA_Acceptance_Test/capabilities/` and
    validates `qa-results.json` (schema in `docs/QA_Acceptance_Test/README.md`). Prose
    assertion counts are informational.
+3. **Production QA is user-confirmed, every time.** Routine validation is local +
+   preview (`/deploy-pr-preview`) only. `/qa-production` and the
+   `docs/QA_Acceptance_Test/production/` runbooks never run autonomously or as a step
+   of another workflow, and even a user-typed `/qa-production` requires an in-session
+   scope confirmation before any runner is dispatched (the suite mutates the shared
+   production QA account, which can back live claude.ai connectors — breakage there
+   registers as connector-directory disconnect/health events). Expect production QA
+   to be rare.
 
 QA environments run sequentially (they share one dev server, one Neon branch, and the QA
 accounts/keys — lifecycle capabilities mutate that shared state). Targeted re-tests
