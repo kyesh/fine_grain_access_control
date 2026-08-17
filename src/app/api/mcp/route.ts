@@ -28,6 +28,7 @@ import safeRegex from 'safe-regex';
 import { resolveDbUser } from '@/db/userHelpers';
 import { loadApplicableRules, checkReadRestrictions, type ApplicableRules } from '@/lib/gmailRules';
 import { captureServerEvent } from '@/lib/posthogServer';
+import { runWithToolCallProps, addToolCallProps, getToolCallProps } from '@/lib/toolCallContext';
 import { ensureDefaultProfile } from '@/db/defaultProfile';
 import { mintApprovalUrl, type ApprovalAction } from '@/lib/approvalLinks';
 import { TOOL_DEFS, toolAnnotations, type FgacToolDef } from './toolDefs';
@@ -554,10 +555,12 @@ function withToolAnalytics<R extends ToolAnalyticsResult>(
   tool: string,
   fn: (params: unknown, extra: { authInfo?: AuthInfo }) => Promise<R> | R,
 ) {
-  return async (params: unknown, extra: { authInfo?: AuthInfo }): Promise<R> => {
+  return async (params: unknown, extra: { authInfo?: AuthInfo }): Promise<R> => runWithToolCallProps(async () => {
     const started = Date.now();
     // Distinct id = the caller's Clerk user id, matching the dashboard's
-    // identify() — MCP usage lands on the same PostHog person.
+    // identify() — MCP usage lands on the same PostHog person. Context props
+    // (account_email / account_delegated, set during account resolution) ride
+    // along so delegation usage is attributable per call.
     const track = (outcome: string) => captureServerEvent(
       extra?.authInfo?.extra?.userId ?? 'anonymous-mcp',
       'mcp_tool_call',
@@ -566,6 +569,7 @@ function withToolAnalytics<R extends ToolAnalyticsResult>(
         client_id: extra?.authInfo?.clientId,
         outcome,
         duration_ms: Date.now() - started,
+        ...getToolCallProps(),
       },
     );
     try {
@@ -576,7 +580,7 @@ function withToolAnalytics<R extends ToolAnalyticsResult>(
       track('exception');
       throw err;
     }
-  };
+  });
 }
 
 type ResolvedAccount = { targetEmail: string; token: string; proxyKeyId: string };
@@ -600,6 +604,14 @@ async function resolveAccountAndToken(
   if (!access) {
     return { error: `❌ This proxy key does not have access to '${targetEmail}'. Accessible: ${emails.map(e => e.targetEmail).join(', ')}` };
   }
+
+  // Delegation observability: record which account this call resolved to, so
+  // the mcp_tool_call event can attribute usage across own vs delegated
+  // mailboxes (one user may access several Gmail accounts).
+  addToolCallProps({
+    account_email: access.targetEmail,
+    account_delegated: !!access.delegationId,
+  });
 
   const token = await getGoogleToken(targetEmail, conn.user);
   if (!token) {
