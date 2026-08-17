@@ -29,6 +29,26 @@ export default function MultipleGmailAccountsPage() {
       </div>
 
       <div className="mx-auto mt-12 flex max-w-3xl flex-col gap-8 px-6 sm:px-8">
+        {/* Walkthrough video, framed as a browser window (matches the home-page demos) */}
+        <div className="rounded-lg border border-border bg-card p-2.5 shadow-lg">
+          <div className="flex items-center gap-1.5 px-1.5 pb-2.5 pt-0.5">
+            <span className="h-2.5 w-2.5 rounded-full bg-secondary" />
+            <span className="h-2.5 w-2.5 rounded-full bg-secondary" />
+            <span className="h-2.5 w-2.5 rounded-full bg-secondary" />
+            <span className="flex-1 text-center font-mono text-[12px] text-subtle">
+              Multiple Gmail accounts — setup walkthrough
+            </span>
+          </div>
+          <div className="relative aspect-video w-full overflow-hidden rounded-sm bg-surface-inverse">
+            <iframe
+              src="https://share.descript.com/embed/ZQ0snxtpdAK"
+              title="Setting up multiple Gmail accounts with FGAC"
+              allowFullScreen
+              className="absolute inset-0 h-full w-full border-0"
+            />
+          </div>
+        </div>
+
         <section className="rounded-lg border border-border bg-card p-6">
           <h2 className="mb-3 text-xl font-bold text-foreground">How it works</h2>
           <ol className="m-0 flex list-decimal flex-col gap-2.5 pl-5 text-sm leading-relaxed text-muted-foreground">
@@ -45,7 +65,9 @@ export default function MultipleGmailAccountsPage() {
               inbox — no password sharing, no Google Workspace admin needed.
             </li>
             <li>
-              Your agent targets any granted inbox with the{" "}
+              That&apos;s it — the delegated inbox attaches to your Default
+              Profile automatically, read-only like your own. Your agent
+              targets any inbox with the{" "}
               <code className="rounded-xs bg-primary-muted px-1.5 py-0.5 font-mono text-xs text-primary">
                 account
               </code>{" "}
@@ -53,6 +75,12 @@ export default function MultipleGmailAccountsPage() {
               <em>&ldquo;Summarize unread mail in the support inbox&rdquo;</em>.
             </li>
           </ol>
+          <p className="mt-4 text-sm leading-relaxed text-muted-foreground">
+            Building a custom profile instead? Delegated inboxes stay opt-in
+            there — pick the mailboxes when you create the profile. And when a
+            delegation is revoked, the inbox disappears from every profile
+            immediately.
+          </p>
         </section>
 
         <section className="rounded-lg border border-border bg-card p-6">

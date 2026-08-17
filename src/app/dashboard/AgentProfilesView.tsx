@@ -1,8 +1,9 @@
 'use client';
 
+import Link from 'next/link';
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Card, CardHeader, Badge, EmptyState, buttonPrimary, buttonSecondary, buttonDanger } from '@/components/ui';
-import { assignRulesToKey, unassignRuleFromKey, revokeProxyKey, setSheetRulePermission, exposeSheetsFromPicker, applyRecommendedSecurityRules } from './actions';
+import { assignRulesToKey, unassignRuleFromKey, revokeProxyKey, setSheetRulePermission, exposeSheetsFromPicker, applyRecommendedSecurityRules, enableSendToAnyone } from './actions';
 import { useGooglePicker, PickedSheet } from './useGooglePicker';
 import { EditRuleButton } from './EditRuleButton';
 import { DeleteRuleButton } from './DeleteRuleButton';
@@ -15,6 +16,7 @@ export interface Profile {
   id: string;
   key: string;
   label: string;
+  isDefault: boolean;
   createdAt: string;
   revokedAt: string | null;
   emailAccess: string[];
@@ -184,6 +186,7 @@ export function AgentProfilesView({
                 allRules={rules}
                 accessibleEmails={emailList}
                 activeKeys={activeKeyList}
+                isDefaultProfile={active.isDefault || active.label === 'Default Profile'}
                 onCreateNew={() => setCreateRuleSignal(n => n + 1)}
               />
             </div>
@@ -276,7 +279,7 @@ function RecentConnectionsBanner({ connections, rules }: { connections: Connecti
     <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-primary/30 bg-primary-muted px-5 py-3.5">
       <div className="min-w-0">
         <p className="text-[13px] font-bold text-foreground">
-          {label} with safe defaults: it can read this account&apos;s mail, and cannot send, edit, or delete.
+          {label} with safe defaults: it can read this account&apos;s mail (and inboxes delegated to you), and cannot send, edit, or delete.
         </p>
         <p className="mt-0.5 text-xs text-muted-foreground">
           {hasShield
@@ -556,6 +559,7 @@ function GmailRulesCard({
   allRules,
   accessibleEmails,
   activeKeys,
+  isDefaultProfile,
   onCreateNew,
 }: {
   profileId: string;
@@ -563,9 +567,17 @@ function GmailRulesCard({
   allRules: Rule[];
   accessibleEmails: string[];
   activeKeys: { id: string; label: string }[];
+  isDefaultProfile: boolean;
   onCreateNew: () => void;
 }) {
   const [popoverOpen, setPopoverOpen] = useState(false);
+  const [enablingSendAll, setEnablingSendAll] = useState(false);
+
+  // The one-click escape hatch from per-recipient whitelisting. Shown on the
+  // Default Profile until an all-recipients send rule covers it.
+  const hasSendAll = rules.some(
+    r => r.actionType === 'send_whitelist' && r.regexPattern === '*',
+  );
 
   // Only rules that exist but are not yet on this profile can be applied.
   // Global rules are excluded — they already apply everywhere.
@@ -600,6 +612,24 @@ function GmailRulesCard({
         }
       />
       <div className="px-5 pb-5 space-y-2">
+        {isDefaultProfile && !hasSendAll && (
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-sm border border-border bg-card px-4 py-3">
+            <p className="min-w-0 flex-1 text-xs leading-relaxed text-muted-foreground">
+              Don&apos;t want to whitelist recipients one at a time? Let this
+              profile email anyone — revocable any time by deleting the rule.
+            </p>
+            <button
+              className={buttonSecondary}
+              disabled={enablingSendAll}
+              onClick={async () => {
+                setEnablingSendAll(true);
+                try { await enableSendToAnyone(profileId); } finally { setEnablingSendAll(false); }
+              }}
+            >
+              {enablingSendAll ? 'Enabling…' : 'Enable sending to anyone'}
+            </button>
+          </div>
+        )}
         {rules.length === 0 ? (
           <EmptyState>
             No Gmail rules on this profile. With no rules, access is denied by default.
@@ -1095,6 +1125,19 @@ function GmailAccessCard({
             );
           })
         )}
+        <p className="pt-1 text-xs leading-relaxed text-subtle">
+          {/* Legacy default keys are only flagged at their next MCP connection
+              (ensureDefaultProfile adoption), so match on the label too. */}
+          {profile.isDefault || profile.label === 'Default Profile'
+            ? 'Inboxes other people delegate to you are added here automatically.'
+            : 'Mailboxes are chosen when a profile is created; inboxes delegated to you attach to your Default Profile automatically.'}{' '}
+          <Link
+            href="/use-cases/multiple-gmail-accounts"
+            className="text-primary underline underline-offset-2 hover:opacity-80"
+          >
+            How to set up multiple Gmail accounts
+          </Link>
+        </p>
       </div>
     </Card>
   );

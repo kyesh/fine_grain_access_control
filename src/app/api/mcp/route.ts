@@ -329,10 +329,33 @@ async function policyDenialWithLink(
   }
 }
 
-function sendDenialAction(denial: SendDenial): ApprovalAction | null {
-  return denial.deniedRecipient
-    ? { action: 'send_whitelist', recipient: denial.deniedRecipient }
-    : null;
+/**
+ * Send denials offer BOTH one-click options: approve just this recipient, or
+ * flip the profile to "Send to Anyone" — the escape hatch for users who find
+ * per-recipient whitelisting confusing. Each is its own signed single-use
+ * link; only the human choosing one applies anything.
+ */
+async function sendDenialWithLinks(
+  conn: ConnectionApproved,
+  proxyKeyId: string,
+  denial: SendDenial,
+) {
+  const lines = [denial.message];
+  try {
+    if (denial.deniedRecipient) {
+      const oneUrl = await mintApprovalUrl(DASHBOARD_URL, conn.user.id, proxyKeyId, {
+        action: 'send_whitelist', recipient: denial.deniedRecipient,
+      });
+      lines.push(`👉 Allow sending to '${denial.deniedRecipient}' only — share this one-click link with the user (single-use, expires in 15 minutes): ${oneUrl}`);
+    }
+    const allUrl = await mintApprovalUrl(DASHBOARD_URL, conn.user.id, proxyKeyId, { action: 'send_all' });
+    lines.push(`👉 Or allow sending to ANY recipient from this profile — share this one-click link with the user instead (single-use, expires in 15 minutes): ${allUrl}`);
+    lines.push('Present both options and let the user pick; "any recipient" is the convenient choice if they expect to send freely, and it stays revocable from the dashboard rules.');
+    captureServerEvent(conn.user.clerkUserId, 'approval_link_minted', { action: 'send' });
+  } catch (err) {
+    console.error('[MCP] Failed to mint approval link:', err);
+  }
+  return textResult(lines.join('\n'));
 }
 
 // ─── Google API Helpers ─────────────────────────────────────────────────────
@@ -651,7 +674,7 @@ async function executeRawGoogleCall(
 
   if (cls.kind === 'gmail_send') {
     const denial = checkSendWhitelist(rules, extractSendRecipients(body));
-    if (denial) return policyDenialWithLink(conn, resolved.proxyKeyId, denial.message, sendDenialAction(denial));
+    if (denial) return sendDenialWithLinks(conn, resolved.proxyKeyId, denial);
   }
 
   const url = `https://www.googleapis.com/${cleanPath}`;
@@ -833,7 +856,7 @@ const handler = createMcpHandler(
         // Enforce send whitelist
         const rules = await loadApplicableRules(conn.user.id, resolved.proxyKeyId, resolved.targetEmail);
         const denial = checkSendWhitelist(rules, [to]);
-        if (denial) return policyDenialWithLink(conn, resolved.proxyKeyId, denial.message, sendDenialAction(denial));
+        if (denial) return sendDenialWithLinks(conn, resolved.proxyKeyId, denial);
 
         // Build RFC 2822 message
         const raw = Buffer.from(

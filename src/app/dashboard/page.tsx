@@ -49,6 +49,7 @@ export default async function DashboardPage() {
     id: k.id,
     key: k.key,
     label: k.label,
+    isDefault: k.isDefault,
     createdAt: k.createdAt.toISOString(),
     revokedAt: k.revokedAt ? k.revokedAt.toISOString() : null,
     emailAccess: allKeyEmailAccess

@@ -302,8 +302,9 @@ export default function SetupPage() {
           </div>
           <p className="mb-4 max-w-[580px] text-sm leading-[1.65] text-foreground">
             One agent connection can reach several inboxes. Other people delegate
-            access from their own FGAC dashboard — no password sharing — then
-            your agent targets an inbox with the{" "}
+            access from their own FGAC dashboard — no password sharing — and the
+            inbox joins your Default Profile automatically. Your agent then
+            targets it with the{" "}
             <code className="rounded-xs bg-brand-purple/10 px-1.5 py-0.5 font-mono text-xs text-brand-purple">
               account
             </code>{" "}

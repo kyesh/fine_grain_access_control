@@ -62,12 +62,13 @@
 - **Expected**: Works immediately; dashboard shows both connections on the
   Default profile as distinct entries
 
-### A10: Delegated inboxes are never auto-granted
+### A10: Undelegated inboxes are never reachable
 - On the fresh connection, call `gmail_list` with `account=USER_B_EMAIL`
   (no active delegation from USER_B)
-- **Expected**: Denied — auto-attach grants access only to the OAuth-ed
-  user's own mailbox; delegation still requires the owner's explicit action
-  (capability 04 flow)
+- **Expected**: Denied — without a delegation, auto-attach grants access only
+  to the OAuth-ed user's own mailbox. (Mailboxes with an ACTIVE delegation to
+  this user DO ride along on the Default profile — that is the owner's own
+  explicit grant; see capability 04 A7 for the positive case)
 
 ### A11: Auto-attached connections can still be blocked
 - Block the A1 connection from the dashboard, then retry a read tool

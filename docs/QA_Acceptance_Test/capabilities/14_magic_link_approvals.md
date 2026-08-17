@@ -8,11 +8,12 @@
 
 ## Assertions
 
-### A1: Send denial includes a pre-filled approval link
+### A1: Send denial includes pre-filled approval links for both scopes
 - With no matching whitelist entry, call `gmail_send` to `USER_B_EMAIL`
-- **Expected**: Denial text includes an approval URL on the FGAC origin
-  whose parameters identify the recipient and the connection/profile;
-  nothing is sent
+- **Expected**: Denial text includes TWO approval URLs on the FGAC origin —
+  one granting just the denied recipient, one enabling sending to ANY
+  recipient on the profile — with the message presenting them as
+  alternatives; nothing is sent
 
 ### A2: Approving a send link grants exactly the requested recipient
 - Open the A1 link in a browser signed in as the owning user; approve
@@ -77,3 +78,12 @@
   the retried operation
 - **Regression**: 2026-08-15 tester finding — write denials minted
   `sheets_expose`, creating an approve→retry→fail loop with no signal
+
+### A11: Approving the send-to-anyone link enables all recipients
+- From an A1 denial, open the ANY-recipient link signed in as the owning
+  user; approve
+- **Expected**: The confirmation UI states sending to ANY recipient from
+  every mailbox on the profile is being granted; after approval a
+  "Send to Anyone" rule (pattern `*`) is assigned to the profile;
+  `gmail_send` to arbitrary addresses succeeds; the link is single-use and
+  the grant is removable from the dashboard rules
