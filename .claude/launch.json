@@ -10,18 +10,6 @@
       ],
       "port": 3000,
       "autoPort": true
-    },
-    {
-      "name": "embed-probe",
-      "runtimeExecutable": "python3",
-      "runtimeArgs": [
-        "-m",
-        "http.server",
-        "8899",
-        "-d",
-        "/private/tmp/claude-501/-Users-kyesh-GitRepos-fine-grain-access-control--claude-worktrees-gifted-bhaskara-861ce8/3430f8e9-1f25-4df4-9171-88f6fdf50885/scratchpad/embed-probe"
-      ],
-      "port": 8899
     }
   ]
 }
