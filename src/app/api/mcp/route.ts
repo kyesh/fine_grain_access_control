@@ -30,7 +30,7 @@ import { loadApplicableRules, checkReadRestrictions, type ApplicableRules } from
 import { captureServerEvent } from '@/lib/posthogServer';
 import { runWithToolCallProps, addToolCallProps, getToolCallProps } from '@/lib/toolCallContext';
 import { ensureDefaultProfile } from '@/db/defaultProfile';
-import { mintApprovalUrl, type ApprovalAction } from '@/lib/approvalLinks';
+import { mintApprovalUrl, approvalLinkMinutes, type ApprovalAction } from '@/lib/approvalLinks';
 import { TOOL_DEFS, toolAnnotations, type FgacToolDef } from './toolDefs';
 import {
   classifyGoogleApiCall, extractSendRecipients, sheetsApprovalAction,
@@ -316,9 +316,11 @@ function checkSendWhitelist(rules: ApplicableRules, recipients: string[] | null)
 
 /**
  * Magic-link denial (connector-growth Phase C): policy denials that a user
- * would plausibly want to approve carry a signed, single-use, 15-minute link
- * that pre-fills exactly that grant. Explicit blocks and read restrictions
- * never get links — weakening those stays a deliberate dashboard act.
+ * would plausibly want to approve carry a signed, single-use, short-lived
+ * link that pre-fills exactly that grant (15 min; sheets 30 — the approval
+ * can include a Picker pick + consent round-trip). Explicit blocks and read
+ * restrictions never get links — weakening those stays a deliberate
+ * dashboard act.
  */
 async function policyDenialWithLink(
   conn: ConnectionApproved,
@@ -331,7 +333,7 @@ async function policyDenialWithLink(
     const url = await mintApprovalUrl(DASHBOARD_URL, conn.user.id, proxyKeyId, action);
     captureServerEvent(conn.user.clerkUserId, 'approval_link_minted', { action: action.action });
     return textResult(
-      `${message}\n👉 Share this link with the user to approve it in one click (single-use, expires in 15 minutes): ${url}`,
+      `${message}\n👉 Share this link with the user to approve it in one click (single-use, expires in ${approvalLinkMinutes(action.action)} minutes): ${url}`,
     );
   } catch (err) {
     console.error('[MCP] Failed to mint approval link:', err);

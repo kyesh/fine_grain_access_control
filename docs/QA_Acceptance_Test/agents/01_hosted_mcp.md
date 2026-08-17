@@ -212,17 +212,23 @@ curl -s $BASE_URL/api/mcp -X POST \
 
 - A1: `sheets_get_spreadsheet` on the fresh sheet via hosted MCP → capture
   the denial text and its `/dashboard/approve` link.
-- A2: open the link, approve Read Only → assert the recovery ("one more
-  step") state, not the plain success copy; rule exists via
-  `GET /api/rules/grant-sheets-access`.
-- A3: assert the picker launch affordance AND the Descript embed
-  (`iframe[src*='Fv9pwXugLUa']`) on the recovery page.
-- A4: full pick via Playwright CDP path (capability 09 harness note); else
-  app-API seam + re-verify, marking the pick itself `skip` with reason.
-  Retry the MCP call → success.
+- A2: open the link → assert the pick-first state (`sheets-flow-pick-first`
+  testid): no approve/submit control rendered, no rule created, link not
+  consumed (reload still shows the flow).
+- A3: assert the pick button AND the Descript embed
+  (`iframe[src*='Fv9pwXugLUa']`) on the approve page's pick-first state.
+- A4: full pick (of the requested sheet) via Playwright CDP path
+  (capability 09 harness note) → confirm step shows the real title →
+  approve Read Only → success page; retry the MCP call → success. Legacy
+  path: `/dashboard/sheets-setup?sid=…` still picks→verifies for stranded
+  rules.
 - A5: mint a denial for the standing fixture sheet (delete its FGAC rule
-  first if present), approve → plain success state, no picker step; retried
-  read succeeds.
+  first if present), open link → straight confirm (no pick step) → approve
+  → success; retried read succeeds.
+- A9: from the pick-first state pick a DIFFERENT owned sheet → substitution
+  confirm (`sheets-flow-substitution` testid) → approve → rule for picked id
+  only; requested id has no rule; retry on requested id still errors
+  honestly (A7) while the picked sheet's call succeeds.
 - A6: `/dashboard` and `/dashboard/accounts` → "needs Google access" chip on
   the stranded rule only; recovery panel opens from the chip.
 - A7: retry the sheets call while stranded → error text names FGAC approval

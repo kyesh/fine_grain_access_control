@@ -661,6 +661,10 @@ export type MagicApprovalResult =
 export async function approveMagicLink(
   token: string,
   sheetsWriteChoice?: boolean,
+  /** Sheets the user just picked in the Google Picker (picker-first flow).
+   * Client-supplied and therefore untrusted: rules are created only for
+   * picked ids that verify against Google with the owner's token. */
+  pickedSheets?: { id: string; name?: string }[],
 ): Promise<MagicApprovalResult> {
   const { verifyApprovalToken, describeApproval } = await import("@/lib/approvalLinks");
   const { approvalConsumptions } = await import("@/db/schema");
@@ -691,13 +695,24 @@ export async function approveMagicLink(
   }
 
   // Single-use: the PK on jti turns a replay into a unique violation.
-  try {
-    await db.insert(approvalConsumptions).values({ jti: p.jti, userId: dbUser.id });
-  } catch {
-    return { ok: false, reason: "This approval link was already used. Each link works exactly once." };
-  }
+  // Consumption is deferred per-branch so read-only pre-checks (Google grant
+  // verification in the picker-first sheets path) can fail WITHOUT burning
+  // the link — only a branch that is about to write rules consumes it.
+  const consume = async (): Promise<boolean> => {
+    try {
+      await db.insert(approvalConsumptions).values({ jti: p.jti, userId: dbUser.id });
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const alreadyUsed = {
+    ok: false as const,
+    reason: "This approval link was already used. Each link works exactly once.",
+  };
 
   if (p.action === "send_whitelist" && p.recipient) {
+    if (!(await consume())) return alreadyUsed;
     const escaped = p.recipient.replace(/[.+?^${}()|[\]\\]/g, "\\$&");
     const [rule] = await db.insert(accessRules).values({
       userId: dbUser.id,
@@ -708,27 +723,78 @@ export async function approveMagicLink(
     }).returning();
     await db.insert(keyRuleAssignments).values({ proxyKeyId: key.id, accessRuleId: rule.id });
   } else if (p.action === "send_all") {
+    if (!(await consume())) return alreadyUsed;
     // Idempotent: an already-granted key still consumes the token and reports
     // success — the agent's retry will work either way.
     await grantSendToAnyone(dbUser.id, key.id);
   } else if ((p.action === "sheets_expose" || p.action === "sheets_write") && p.spreadsheetId) {
     const readWrite = p.action === "sheets_write" || sheetsWriteChoice === true;
-    const [rule] = await db.insert(accessRules).values({
-      userId: dbUser.id,
-      ruleName: `${readWrite ? "Read & Write" : "Read Only"}: ${p.resourceName || p.spreadsheetId}`,
-      service: "sheets",
-      actionType: readWrite ? "sheet_read_write" : "sheet_read",
-      targetResourceId: p.spreadsheetId,
-      resourceName: p.resourceName || null,
-    }).returning();
-    await db.insert(keyRuleAssignments).values({ proxyKeyId: key.id, accessRuleId: rule.id });
-
-    // The rule is only half of sheets access: Google grants the file via
-    // drive.file ONLY after a Picker pick. Verify before telling the user
-    // the agent can retry — an unverified "success" here is exactly the
-    // approve→retry→404 dead end the 2026-08 launch cohort churned on.
     const { verifySheetsGrant, getOwnerGoogleToken } = await import("@/lib/sheetsGrantCheck");
     const googleToken = await getOwnerGoogleToken(dbUser.clerkUserId);
+
+    const insertSheetRule = async (id: string, name: string | null) => {
+      const [rule] = await db.insert(accessRules).values({
+        userId: dbUser.id,
+        ruleName: `${readWrite ? "Read & Write" : "Read Only"}: ${name || id}`,
+        service: "sheets",
+        actionType: readWrite ? "sheet_read_write" : "sheet_read",
+        targetResourceId: id,
+        resourceName: name,
+      }).returning();
+      await db.insert(keyRuleAssignments).values({ proxyKeyId: key.id, accessRuleId: rule.id });
+    };
+
+    if (pickedSheets && pickedSheets.length > 0) {
+      // Picker-first path. The pick is the real authorization moment — it
+      // registers the Google-side drive.file grant AND confirms the file's
+      // identity. Rules are created only for picked ids Google confirms the
+      // owner's token can reach; the token's id gets NO rule unless it is
+      // among them (no phantom rules for ids the agent guessed wrong).
+      const verified: { id: string; name: string | null }[] = [];
+      for (const s of pickedSheets.slice(0, 10)) {
+        if (typeof s?.id !== "string" || !s.id) continue;
+        const check = googleToken
+          ? await verifySheetsGrant(googleToken, s.id)
+          : { state: "missing" as const };
+        if (check.state === "ok") {
+          verified.push({ id: s.id, name: (typeof s.name === "string" && s.name) || ("title" in check ? check.title : null) });
+        }
+      }
+      if (verified.length === 0) {
+        // Read-only failure — the link was NOT consumed; the user can retry.
+        return {
+          ok: false,
+          reason: "Google hasn't finished sharing the picked sheet(s) with FGAC yet. Wait a few seconds and try the pick again — the link is still valid.",
+        };
+      }
+      if (!(await consume())) return alreadyUsed;
+      for (const v of verified) await insertSheetRule(v.id, v.name);
+
+      const substituted = !verified.some(v => v.id === p.spreadsheetId);
+      captureServerEvent(dbUser.clerkUserId, "sheets_grant_verification", {
+        result: "ok", via: "magic_link", spreadsheet_id: verified[0].id,
+      });
+      captureServerEvent(dbUser.clerkUserId, "approval_link_approved", {
+        action: p.action, substituted, granted_count: verified.length,
+      });
+      revalidatePath("/dashboard");
+      const names = verified.map(v => v.name || v.id).join(", ");
+      const level = readWrite ? "read & write" : "read-only";
+      return {
+        ok: true,
+        description: substituted
+          ? `Granted ${level} access to ${names}. That's the sheet you picked — not the ID the agent originally sent, which you don't appear to have. The agent will find the right sheet in its permissions.`
+          : `Granted ${level} access to ${names}.`,
+      };
+    }
+
+    // Fallback path (no pick info — verification was inconclusive at page
+    // load, or a client without the picker flow). Create the rule, verify
+    // the Google half, and route to the recovery page when it's missing —
+    // never claim "retry now" for a sheet Google can't reach (the
+    // approve→retry→404 dead end the 2026-08 launch cohort churned on).
+    if (!(await consume())) return alreadyUsed;
+    await insertSheetRule(p.spreadsheetId, p.resourceName || null);
     const grant = googleToken
       ? await verifySheetsGrant(googleToken, p.spreadsheetId)
       : { state: "missing" as const };

@@ -36,15 +36,20 @@ keep internal/QA traffic out of the numbers.
 | `account_linked` | server (dashboard action) | `target_email`, `delegated`, `via` |
 | `approval_link_minted` | server (`/api/mcp`) | `action` |
 | `read_restriction_enforced` | server (`/api/mcp`) | `via` (tool name), `restriction` |
-| `sheets_grant_verification` | server (magic-link approval, `actions.ts`) | `result` (`ok`/`missing`/`unknown`), `via`, `spreadsheet_id` |
+| `sheets_grant_verification` | server (approve-page load via `/api/rules/verify-sheets-access`, and approval in `actions.ts`) | `result` (`ok`/`missing`/`unknown`), `via` (`link_open`/`magic_link`), `spreadsheet_id` |
 | `sheets_grant_recovered` | server (`/api/rules/verify-sheets-access`) | `spreadsheet_id` |
 
-The two `sheets_grant_*` events instrument the **sheets grant-recovery loop**
-(`/dashboard/sheets-setup`): approving a sheets magic link verifies the
-Google-side `drive.file` grant before claiming success; `result=missing`
-routes the user into the Picker + demo-video recovery page, and a verified
-re-check from that page fires `sheets_grant_recovered`. Recovery rate =
-`sheets_grant_recovered` / `sheets_grant_verification{result=missing}`.
+The two `sheets_grant_*` events instrument the **picker-first sheets
+approval funnel**: opening a sheets approval link verifies the Google-side
+`drive.file` grant (`via=link_open`); `result=missing` puts the Picker +
+demo-video step BEFORE the approve button, and the approval itself re-fires
+with `via=magic_link`. Picking a different sheet than the agent asked for is
+an explicit substitution — `approval_link_approved` then carries
+`substituted: true` and `granted_count`, making wrong-agent-id frequency
+measurable. `/dashboard/sheets-setup` remains the recovery path for
+pre-existing stranded rules (dashboard chips, MCP error links); a verified
+re-check there fires `sheets_grant_recovered`. Funnel health =
+`link_open{missing}` → `magic_link{ok}` conversion.
 
 `$mcp_tool_call` uses PostHog's **canonical MCP Analytics schema** (event and
 `$mcp_*` property names) so PostHog's built-in MCP views resolve the tool name.

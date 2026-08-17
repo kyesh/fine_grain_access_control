@@ -41,6 +41,13 @@ export async function GET(request: NextRequest) {
       if (context === 'recovery' && result.state === 'ok') {
         captureServerEvent(clerkUserId, 'sheets_grant_recovered', { spreadsheet_id: sid });
       }
+      // link_open = the approve page checking the grant before showing the
+      // flow — the top of the picker-first funnel.
+      if (context === 'link_open') {
+        captureServerEvent(clerkUserId, 'sheets_grant_verification', {
+          result: result.state, via: 'link_open', spreadsheet_id: sid,
+        });
+      }
       return NextResponse.json({ spreadsheetId: sid, ...result });
     }
 

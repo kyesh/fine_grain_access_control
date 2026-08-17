@@ -2,9 +2,12 @@
 
 > Phase C of `connector-growth_v1.md`. Send and Sheets denials carry a signed
 > deep link that pre-fills the fix; the owning user approves in one click at
-> the moment of need. Links are signed, single-use, expire (~15 min), and
-> require the owning user's session — an agent can mint the request, only the
-> human can approve. Read-block denials deliberately carry NO link.
+> the moment of need. Links are signed, single-use, expire (15 min; sheets
+> links 30 min — their approval can include a Picker pick + first-time
+> drive.file consent round-trip), and require the owning user's session — an
+> agent can mint the request, only the human can approve. Read-block denials
+> deliberately carry NO link. Sheets approvals run picker-first when Google
+> lacks a grant for the sheet — see capability 17.
 
 ## Assertions
 
@@ -26,8 +29,10 @@
 - Call `sheets_read_range` on an unexposed spreadsheet; open the denial link
   as the owning user
 - **Expected**: Approval UI shows the spreadsheet (id and, where resolvable,
-  name) with an explicit Read-only vs Read & Write choice; choosing Read-only
-  exposes it; the retried read succeeds and a write still fails
+  name) with an explicit Read-only vs Read & Write choice. When Google
+  already grants the sheet, approval is one click; when it does not, the
+  Picker pick comes first (capability 17 A2/A4). After approving Read-only,
+  the retried read succeeds and a write still fails
 
 ### A4: Links are single-use and expire
 - Reuse the already-approved A2 link; separately, open a link older than its

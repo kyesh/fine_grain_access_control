@@ -88,7 +88,10 @@ export function useGooglePicker(onSheetsPicked: (sheets: PickedSheet[], context?
         }
 
         // Return to the page the user is on, and re-open the picker there.
-        const params = new URLSearchParams({ autoOpenPicker: 'true' });
+        // Existing query params ride along — the approve page's signed token
+        // must survive the consent round-trip or the flow dead-ends.
+        const params = new URLSearchParams(window.location.search);
+        params.set('autoOpenPicker', 'true');
         if (context) params.set('pickerContext', context);
         const autoRedirectUrl = `${window.location.origin}${window.location.pathname}?${params.toString()}`;
         let verificationUrl: string | undefined;
@@ -170,8 +173,12 @@ export function useGooglePicker(onSheetsPicked: (sheets: PickedSheet[], context?
     const urlParams = new URLSearchParams(window.location.search);
     if (urlParams.get('autoOpenPicker') === 'true') {
       const context = urlParams.get('pickerContext') ?? undefined;
-      // Clean up URL parameters without page reload
-      const newUrl = window.location.pathname;
+      // Consume only our params; anything else (e.g. the approve page's
+      // token) must survive the cleanup.
+      urlParams.delete('autoOpenPicker');
+      urlParams.delete('pickerContext');
+      const rest = urlParams.toString();
+      const newUrl = `${window.location.pathname}${rest ? `?${rest}` : ''}`;
       window.history.replaceState({}, document.title, newUrl);
       // Auto-launch picker; fromOAuthReturn tolerates scope-propagation lag
       openPickerFlow(context, true);

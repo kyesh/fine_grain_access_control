@@ -1,17 +1,25 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { verifyApprovalToken, describeApproval } from "@/lib/approvalLinks";
+import { verifyApprovalToken, describeApproval, approvalLinkMinutes } from "@/lib/approvalLinks";
 import { approveMagicLink } from "../actions";
+import { SheetsApprovalFlow } from "./SheetsApprovalFlow";
 
 /* ─── Magic-link approval page (connector-growth Phase C) ────────────────
    Reached from a signed, single-use link embedded in an agent's denial (or
    minted by the request_access tool). Shows exactly one grant and applies it
    only on explicit confirmation by the owning, signed-in user. The dashboard
-   route group is Clerk-protected, so a signed-out visitor signs in first. */
+   route group is Clerk-protected, so a signed-out visitor signs in first.
+
+   Sheets grants run picker-first (SheetsApprovalFlow): the page verifies the
+   Google-side drive.file grant on load, and when it's missing the user picks
+   the sheet in Google's Picker BEFORE anything is approved — the pick is
+   what registers Google access and confirms the file's identity. Approving a
+   raw, unverifiable id is how users ended up with rules for sheets Google
+   couldn't serve. */
 
 function Card({ children }: { children: React.ReactNode }) {
   return (
-    <div className="mx-auto mt-16 max-w-lg px-6">
+    <div className="mx-auto mt-16 max-w-lg px-6 pb-16">
       <div className="rounded-lg border border-border bg-card p-8">{children}</div>
       <p className="mt-4 text-center text-xs text-subtle">
         <Link href="/dashboard" className="underline hover:text-foreground">
@@ -69,7 +77,7 @@ export default async function ApprovePage({
         </h1>
         <p className="text-sm text-muted-foreground">
           {verified.reason === "expired"
-            ? "Approval links last 15 minutes. Ask the agent to request access again."
+            ? "This approval link has expired (links last 15–30 minutes). Ask the agent to request access again."
             : "This link is not valid. If an agent gave it to you, ask it to request access again."}
         </p>
       </Card>
@@ -77,16 +85,24 @@ export default async function ApprovePage({
   }
 
   const p = verified.payload;
+  const linkMinutes = approvalLinkMinutes(p.action);
 
   async function approve(formData: FormData) {
     "use server";
     const rw = formData.get("permission") === "read_write";
-    const result = await approveMagicLink(formData.get("token") as string, rw);
+    let picked: { id: string; name?: string }[] | undefined;
+    const rawPicked = formData.get("picked");
+    if (typeof rawPicked === "string" && rawPicked) {
+      try {
+        const parsed: unknown = JSON.parse(rawPicked);
+        if (Array.isArray(parsed)) picked = parsed as { id: string; name?: string }[];
+      } catch { /* malformed picked payload → treated as no pick info */ }
+    }
+    const result = await approveMagicLink(formData.get("token") as string, rw, picked);
     if (result.ok) {
       if (result.needsSheetsGrant) {
-        // FGAC rule created, but Google has no drive.file grant for this
-        // sheet yet — "retry now" would be a lie (the 404 dead end the
-        // connector-launch cohort hit). Route into the Picker recovery flow.
+        // Fallback only (verification was inconclusive at page load): the
+        // rule exists but Google can't reach the sheet — finish in recovery.
         const q = new URLSearchParams({ sid: result.needsSheetsGrant.spreadsheetId, from: "approval" });
         if (result.needsSheetsGrant.resourceName) q.set("name", result.needsSheetsGrant.resourceName);
         redirect(`/dashboard/sheets-setup?${q.toString()}`);
@@ -95,6 +111,8 @@ export default async function ApprovePage({
     }
     redirect(`/dashboard/approve?result=error&message=${encodeURIComponent(result.reason)}`);
   }
+
+  const isSheets = (p.action === "sheets_expose" || p.action === "sheets_write") && p.spreadsheetId;
 
   return (
     <Card>
@@ -105,31 +123,29 @@ export default async function ApprovePage({
       <div className="mb-5 rounded-md border border-warning-foreground/30 bg-warning px-4 py-3 text-sm font-medium text-warning-foreground">
         {describeApproval(p)}
       </div>
-      <form action={approve} className="flex flex-col gap-4">
-        <input type="hidden" name="token" value={token} />
-        {p.action === "sheets_expose" && (
-          <fieldset className="flex flex-col gap-2 text-sm text-foreground">
-            <label className="flex items-center gap-2">
-              <input type="radio" name="permission" value="read_only" defaultChecked />
-              Read only
-            </label>
-            <label className="flex items-center gap-2">
-              <input type="radio" name="permission" value="read_write" />
-              Read &amp; write
-            </label>
-          </fieldset>
-        )}
-        <button
-          type="submit"
-          className="rounded-sm bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground hover:opacity-90"
-        >
-          Approve this grant
-        </button>
-        <p className="text-xs text-subtle">
-          Single-use link · expires 15 minutes after it was created · grants
-          only what is shown above, scoped to the requesting agent&apos;s profile.
-        </p>
-      </form>
+      {isSheets ? (
+        <SheetsApprovalFlow
+          token={token}
+          spreadsheetId={p.spreadsheetId!}
+          resourceName={p.resourceName || null}
+          action={p.action as "sheets_expose" | "sheets_write"}
+          approveAction={approve}
+        />
+      ) : (
+        <form action={approve} className="flex flex-col gap-4">
+          <input type="hidden" name="token" value={token} />
+          <button
+            type="submit"
+            className="rounded-sm bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground hover:opacity-90"
+          >
+            Approve this grant
+          </button>
+        </form>
+      )}
+      <p className="mt-4 text-xs text-subtle">
+        Single-use link · expires {linkMinutes} minutes after it was created · grants
+        only what is shown above, scoped to the requesting agent&apos;s profile.
+      </p>
     </Card>
   );
 }

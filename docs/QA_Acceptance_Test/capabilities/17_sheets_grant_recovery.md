@@ -44,38 +44,60 @@ sheet tells the truth.
   incident. (This assertion pins the replication baseline; A2–A8 assert the
   new behavior on top of it.)
 
-### A2: Approving a sheet without a Google grant does NOT claim success
-- Open the A1 link signed in as USER_A; choose Read Only; approve.
-- **Expected**: The FGAC rule is created (visible via
-  `GET /api/rules/grant-sheets-access`), but the result page does NOT say
-  the agent can retry now. It shows the "one more step" recovery state
-  naming the spreadsheet and explaining Google hasn't shared this sheet
-  with FGAC yet.
+### A2: A missing Google grant makes the pick come FIRST — no blind approve
+- Open the A1 link signed in as USER_A.
+- **Expected**: The page verifies the Google-side grant on load (fires
+  `sheets_grant_verification {via: link_open, result: missing}`) and shows
+  the picker-first state: an explanation that Google hasn't shared the
+  sheet, a "Step 1 — Pick the sheet in Google Picker" button, and **no
+  approve/submit control** until a pick happens. No FGAC rule exists yet
+  (`GET /api/rules/grant-sheets-access` unchanged) and the link is NOT
+  consumed by merely opening the page.
 
-### A3: The recovery state offers the Picker and embeds the setup video
-- On the A2 recovery page.
-- **Expected**: A button launches the Google Picker flow (the
+### A3: The pick-first state embeds the setup video
+- On the A2 page.
+- **Expected**: The pick button launches the Google Picker flow (the
   `.picker-dialog` iframe opens, or the first-time `drive.file` consent
-  redirect per capability 09 A2), AND the Sheets demo video
-  (Descript embed `Fv9pwXugLUa`, rendered via `TrackedVideoEmbed`) is
-  present on the page. Playing it fires `video_played` with the approve
-  page's `page` property.
+  redirect per capability 09 A2 — which must return to the approve page
+  WITH the token still in the URL), AND the Sheets demo video (Descript
+  embed `Fv9pwXugLUa`, rendered via `TrackedVideoEmbed`) is present.
+  Playing it fires `video_played` with the approve page's `page` property.
 
-### A4: Completing the pick flips the recovery page to verified success
-- Complete a pick for a grant-carrying sheet (Playwright CDP path for the
-  real pick; app-API seam otherwise — see Pre-requisites).
-- **Expected**: The page re-verifies and shows the verified success state
-  ("the agent can retry"), and a `sheets_grant_recovered` event fires. The
-  retried MCP call succeeds (`$mcp_tool_call` outcome=success) with no new
-  approval link minted.
+### A4: Picking the requested sheet leads to confirm → approve → success
+- Complete a pick that includes the requested sheet (Playwright CDP path
+  for the real pick; app-API seam otherwise — see Pre-requisites), then
+  approve (Read Only) on the confirm step that appears.
+- **Expected**: The confirm step shows the sheet's real title; approval
+  creates the rule and lands on the success page. The retried MCP call
+  succeeds (`$mcp_tool_call` outcome=success) with no new approval link
+  minted. The legacy recovery page at `/dashboard/sheets-setup` still
+  performs pick → `sheets_grant_recovered` → verified for rules stranded
+  before this flow existed (dashboard-chip entry path).
 
-### A5: Approving a sheet that already has a Google grant skips recovery
+### A5: Approving a sheet that already has a Google grant skips the pick
 - Mint a fresh denial link for a spreadsheet that HAS been picked before
   (standing QA fixture sheet) by calling `sheets_read_range` on it before
-  any FGAC rule exists; approve the link as USER_A.
-- **Expected**: Straight to the normal success state ("the agent can retry
-  its request now") with no picker step, and `sheets_grant_verification`
-  fires with `result=ok`; the retried read succeeds.
+  any FGAC rule exists; open and approve the link as USER_A.
+- **Expected**: The page goes straight to the one-click confirm (no pick
+  step), showing the sheet's title resolved from Google; approving lands
+  on the success state and `sheets_grant_verification` fires with
+  `result=ok` (once via `link_open`, once via `magic_link`); the retried
+  read succeeds.
+
+### A9: Picking a DIFFERENT sheet becomes an explicit substitution
+- From the A2 pick-first state, pick a sheet that is NOT the requested id
+  (any real sheet USER_A owns).
+- **Expected**: An explicit substitution confirmation appears — naming
+  both the picked sheet and the agent's wrong id — and approving creates
+  rule(s) for the PICKED sheet only; the requested id gets NO rule
+  (`GET /api/rules/grant-sheets-access` shows no row for it, and no
+  "needs Google access" chip appears later). `approval_link_approved`
+  carries `substituted: true`. The agent's retry on the wrong id gets a
+  fresh not-exposed denial (no phantom rule means no misleading A7 state),
+  while `get_my_permissions` lists the picked sheet, and a call on the
+  picked sheet succeeds. Server-side guard: a
+  forged `picked` payload naming a sheet Google does NOT grant creates
+  nothing and leaves the link unconsumed (retryable).
 
 ### A6: Dashboard flags rules whose sheets lack a Google grant
 - With the A2 rule present but its sheet still un-picked, load `/dashboard`
