@@ -407,6 +407,7 @@ async function googleFetch(
       body,
     });
   } catch (err) {
+    addToolCallProps({ error_status: 'network' });
     return { ok: false, error: `❌ Could not reach the Google API: ${err instanceof Error ? err.message : 'network error'}.` };
   }
 
@@ -415,6 +416,7 @@ async function googleFetch(
   try { data = text ? JSON.parse(text) : {}; } catch { /* non-JSON body: keep text */ }
 
   if (!res.ok) {
+    addToolCallProps({ error_status: res.status });
     return { ok: false, error: describeGoogleError(res.status, data, targetEmail), status: res.status };
   }
   return { ok: true, data };
@@ -450,6 +452,55 @@ async function sheetsFetch(token: string, path: string, method = 'GET', body?: s
   return googleFetch(`https://sheets.googleapis.com/v4/spreadsheets/${path}`, token, method, body, targetEmail);
 }
 
+/** How recently a matching sheets rule must have been created for a 403/404 to
+ * be treated as grant propagation rather than a genuinely missing grant. */
+const SHEETS_GRACE_WINDOW_MS = 120_000;
+const SHEETS_GRACE_RETRIES = 2;
+const SHEETS_GRACE_DELAY_MS = 3_500;
+
+const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
+
+/**
+ * sheetsFetch with a propagation grace window. Approval-time verification
+ * passes with the owner's token, yet the MCP call path can still see 403/404
+ * for tens of seconds while Google's per-file drive.file grant settles
+ * (observed on three launch-cohort users: one error immediately after
+ * approval, success seconds later). When the matching rule is younger than
+ * the grace window, a 403/404 is retried with a short pause instead of being
+ * surfaced — the agent sees a slower success, not an error. Rules older than
+ * the window fail fast exactly as before.
+ */
+async function withSheetsGrace(
+  perm: SheetsPermission,
+  doFetch: () => Promise<GoogleFetchResult>,
+): Promise<GoogleFetchResult> {
+  let result = await doFetch();
+  const ruleAt = perm.allowed ? perm.newestRuleAt : null;
+  if (!ruleAt) return result;
+
+  const grantAgeSeconds = () => Math.round((Date.now() - ruleAt.getTime()) / 1000);
+  const inGrace = () => Date.now() - ruleAt.getTime() < SHEETS_GRACE_WINDOW_MS;
+  const retriable = () => !result.ok && (result.status === 403 || result.status === 404);
+
+  if (retriable()) addToolCallProps({ sheets_grant_age_seconds: grantAgeSeconds() });
+
+  let retries = 0;
+  while (retriable() && inGrace() && retries < SHEETS_GRACE_RETRIES) {
+    await sleep(SHEETS_GRACE_DELAY_MS);
+    retries += 1;
+    result = await doFetch();
+  }
+  if (retries > 0) {
+    addToolCallProps({ sheets_grace_retries: retries, sheets_grace_recovered: result.ok });
+    if (result.ok) {
+      // Don't let the first attempt's transient status ride on a success event.
+      addToolCallProps({ error_status: undefined });
+      console.log(`[MCP] Sheets grace retry recovered after ${retries} attempt(s) (rule age ${grantAgeSeconds()}s)`);
+    }
+  }
+  return result;
+}
+
 async function checkSheetsPermission(userId: string, proxyKeyId: string, spreadsheetId: string, isMutating: boolean) {
   const allRules = await db.select().from(accessRules).where(eq(accessRules.userId, userId));
   const keyAssignments = await db.select().from(keyRuleAssignments).where(eq(keyRuleAssignments.proxyKeyId, proxyKeyId));
@@ -480,7 +531,13 @@ async function checkSheetsPermission(userId: string, proxyKeyId: string, spreads
     }
   }
 
-  return { allowed: true as const };
+  // Newest matching rule's age drives the post-approval grace retry: a rule
+  // created seconds ago means Google's drive.file grant may still be
+  // propagating even though approval-time verification passed.
+  const newestRuleAt = sheetsRules.reduce<Date | null>(
+    (acc, r) => (!acc || r.createdAt > acc ? r.createdAt : acc), null,
+  );
+  return { allowed: true as const, newestRuleAt };
 }
 
 type SheetsPermission = Awaited<ReturnType<typeof checkSheetsPermission>>;
@@ -709,7 +766,7 @@ async function executeRawGoogleCall(
     if (!perm.allowed) return policyDenialWithLink(conn, resolved.proxyKeyId, perm.reason, sheetsDenialAction(perm, cls.spreadsheetId, cls.isMutating));
 
     const url = `https://sheets.googleapis.com/${cleanPath.replace(/^sheets\//, '')}`;
-    const result = await googleFetch(url, resolved.token, method, serializeBody(body), resolved.targetEmail);
+    const result = await withSheetsGrace(perm, () => googleFetch(url, resolved.token, method, serializeBody(body), resolved.targetEmail));
     if (!result.ok) return sheetsErrorResult(result, cls.spreadsheetId);
     return jsonResult(result.data);
   }
@@ -949,7 +1006,7 @@ const handler = createMcpHandler(
         const perm = await checkSheetsPermission(conn.user.id, resolved.proxyKeyId, spreadsheetId, false);
         if (!perm.allowed) return policyDenialWithLink(conn, resolved.proxyKeyId, perm.reason, sheetsDenialAction(perm, spreadsheetId, false));
 
-        const result = await sheetsFetch(resolved.token, `${spreadsheetId}`, 'GET', undefined, resolved.targetEmail);
+        const result = await withSheetsGrace(perm, () => sheetsFetch(resolved.token, `${spreadsheetId}`, 'GET', undefined, resolved.targetEmail));
         if (!result.ok) return sheetsErrorResult(result, spreadsheetId);
         return jsonResult(result.data);
       }
@@ -974,7 +1031,7 @@ const handler = createMcpHandler(
         if (!perm.allowed) return policyDenialWithLink(conn, resolved.proxyKeyId, perm.reason, sheetsDenialAction(perm, spreadsheetId, false));
 
         const encodedRange = encodeURIComponent(range);
-        const result = await sheetsFetch(resolved.token, `${spreadsheetId}/values/${encodedRange}`, 'GET', undefined, resolved.targetEmail);
+        const result = await withSheetsGrace(perm, () => sheetsFetch(resolved.token, `${spreadsheetId}/values/${encodedRange}`, 'GET', undefined, resolved.targetEmail));
         if (!result.ok) return sheetsErrorResult(result, spreadsheetId);
         return jsonResult(result.data);
       }
@@ -1001,7 +1058,7 @@ const handler = createMcpHandler(
 
         const encodedRange = encodeURIComponent(range);
         const body = JSON.stringify({ values, range });
-        const result = await sheetsFetch(resolved.token, `${spreadsheetId}/values/${encodedRange}?valueInputOption=USER_ENTERED`, 'PUT', body, resolved.targetEmail);
+        const result = await withSheetsGrace(perm, () => sheetsFetch(resolved.token, `${spreadsheetId}/values/${encodedRange}?valueInputOption=USER_ENTERED`, 'PUT', body, resolved.targetEmail));
         if (!result.ok) return sheetsErrorResult(result, spreadsheetId);
         return jsonResult(result.data);
       }
@@ -1028,7 +1085,7 @@ const handler = createMcpHandler(
 
         const encodedRange = encodeURIComponent(range);
         const body = JSON.stringify({ values });
-        const result = await sheetsFetch(resolved.token, `${spreadsheetId}/values/${encodedRange}:append?valueInputOption=USER_ENTERED`, 'POST', body, resolved.targetEmail);
+        const result = await withSheetsGrace(perm, () => sheetsFetch(resolved.token, `${spreadsheetId}/values/${encodedRange}:append?valueInputOption=USER_ENTERED`, 'POST', body, resolved.targetEmail));
         if (!result.ok) return sheetsErrorResult(result, spreadsheetId);
         return jsonResult(result.data);
       }
@@ -1242,7 +1299,7 @@ async function verifyClerkJwtDirect(token: string) {
   }
 }
 
-const verifyMcpAuth = async (_req: Request, bearerToken?: string) => {
+const verifyMcpAuth = async (req: Request, bearerToken?: string) => {
   let authInfo: ReturnType<typeof verifyClerkToken> | Awaited<ReturnType<typeof verifyClerkJwtDirect>> | undefined;
 
   // Strategy 1: Try Clerk's built-in auth() + verifyClerkToken
@@ -1258,6 +1315,22 @@ const verifyMcpAuth = async (_req: Request, bearerToken?: string) => {
   if (!authInfo && bearerToken) {
     console.log('[MCP] Falling back to direct JWT verification');
     authInfo = await verifyClerkJwtDirect(bearerToken);
+  }
+
+  // Install-funnel measurement (pre-Clerk visibility): an unauthenticated MCP
+  // request is the first FGAC-owned touchpoint when a client adds the
+  // connector — the 401 issued below is what sends it into OAuth discovery.
+  // Anonymous by design (distinct_id is already excluded from user metrics);
+  // this is a rate metric, not an identity metric. reason='no_token' on POST
+  // approximates fresh install attempts; 'invalid_token' is mostly token
+  // expiry/refresh noise from established clients.
+  if (!authInfo) {
+    captureServerEvent('anonymous-mcp', 'connector_install_started', {
+      touchpoint: 'mcp_401',
+      reason: bearerToken ? 'invalid_token' : 'no_token',
+      method: req.method,
+      user_agent: req.headers.get('user-agent') ?? undefined,
+    });
   }
 
   // Eagerly create/touch agent_connection on ANY authenticated request
@@ -1295,3 +1368,7 @@ const authedHandler = experimental_withMcpAuth(
 export const POST = authedHandler;
 export const GET = authedHandler;
 export const DELETE = authedHandler;
+
+// Headroom for the sheets grant-propagation grace retries (≤ ~7 s added on
+// top of normal Google latency) — never let them race the function timeout.
+export const maxDuration = 60;

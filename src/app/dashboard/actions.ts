@@ -648,6 +648,11 @@ export type MagicApprovalResult =
        * grant for the sheet yet — the approve page must route the user into
        * the Picker recovery flow instead of claiming the agent can retry. */
       needsSheetsGrant?: { spreadsheetId: string; resourceName?: string };
+      /** Set on successful sheets approvals: the primary spreadsheet a rule
+       * was created for. The approve page's success card polls the Google
+       * grant for this id before telling the user "the agent can retry now"
+       * (drive.file grants are eventually consistent — see sheetsGrantCheck). */
+      grantedSpreadsheetId?: string;
     }
   | { ok: false; reason: string };
 
@@ -782,6 +787,7 @@ export async function approveMagicLink(
       const level = readWrite ? "read & write" : "read-only";
       return {
         ok: true,
+        grantedSpreadsheetId: verified[0].id,
         description: substituted
           ? `Granted ${level} access to ${names}. That's the sheet you picked — not the ID the agent originally sent, which you don't appear to have. The agent will find the right sheet in its permissions.`
           : `Granted ${level} access to ${names}.`,
@@ -815,6 +821,9 @@ export async function approveMagicLink(
         },
       };
     }
+    captureServerEvent(dbUser.clerkUserId, "approval_link_approved", { action: p.action });
+    revalidatePath("/dashboard");
+    return { ok: true, description: describeApproval(p), grantedSpreadsheetId: p.spreadsheetId };
   } else {
     return { ok: false, reason: "This approval link is malformed." };
   }

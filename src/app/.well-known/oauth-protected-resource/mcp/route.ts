@@ -15,8 +15,18 @@ import {
   corsHeaders,
 } from '@clerk/mcp-tools/server';
 import { metadataCorsOptionsRequestHandler } from '@clerk/mcp-tools/next';
+import { captureServerEvent } from '@/lib/posthogServer';
 
 export function GET(req: Request) {
+  // Install-funnel measurement: clients fetch this metadata when they begin
+  // the connector OAuth handshake — the earliest FGAC-owned touchpoint before
+  // any Clerk account exists. Anonymous rate metric (recurs on reconnects).
+  captureServerEvent('anonymous-mcp', 'connector_install_started', {
+    touchpoint: 'oauth_discovery',
+    endpoint: 'protected-resource',
+    user_agent: req.headers.get('user-agent') ?? undefined,
+  });
+
   const publishableKey = process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
   if (!publishableKey) {
     return Response.json({ error: 'server_misconfigured' }, { status: 500 });
