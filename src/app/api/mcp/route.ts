@@ -492,7 +492,11 @@ async function withSheetsGrace(
   }
   if (retries > 0) {
     addToolCallProps({ sheets_grace_retries: retries, sheets_grace_recovered: result.ok });
-    if (result.ok) console.log(`[MCP] Sheets grace retry recovered after ${retries} attempt(s) (rule age ${grantAgeSeconds()}s)`);
+    if (result.ok) {
+      // Don't let the first attempt's transient status ride on a success event.
+      addToolCallProps({ error_status: undefined });
+      console.log(`[MCP] Sheets grace retry recovered after ${retries} attempt(s) (rule age ${grantAgeSeconds()}s)`);
+    }
   }
   return result;
 }

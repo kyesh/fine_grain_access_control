@@ -26,7 +26,7 @@ const trackedGet = (req: Request) => {
     endpoint: 'authorization-server',
     user_agent: req.headers.get('user-agent') ?? undefined,
   });
-  return handler(req);
+  return handler();
 };
 
 export const GET = trackedGet;
