@@ -70,7 +70,7 @@ export function ApprovedSettling({ spreadsheetId, message }: { spreadsheetId: st
       <div data-testid="approved-verified">
         <h1 className="mb-2 text-xl font-bold text-success-foreground">✓ Approved &amp; verified with Google</h1>
         <p className="text-sm text-muted-foreground">
-          {message} The agent can retry its request now. You can review or
+          {message}{" "}The agent can retry its request now. You can review or
           remove this grant any time from your dashboard rules.
         </p>
       </div>
@@ -81,7 +81,7 @@ export function ApprovedSettling({ spreadsheetId, message }: { spreadsheetId: st
     <div data-testid="approved-unconfirmed">
       <h1 className="mb-2 text-xl font-bold text-foreground">✓ Approved — one more step may be needed</h1>
       <p className="text-sm text-muted-foreground">
-        {message} However, Google hasn&apos;t confirmed the sheet is shared with
+        {message}{" "}However, Google hasn&apos;t confirmed the sheet is shared with
         FGAC yet. This usually settles within a minute — if the agent still
         gets an error, finish the share on the{" "}
         <Link
