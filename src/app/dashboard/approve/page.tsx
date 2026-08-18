@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { verifyApprovalToken, describeApproval, approvalLinkMinutes } from "@/lib/approvalLinks";
 import { approveMagicLink } from "../actions";
 import { SheetsApprovalFlow } from "./SheetsApprovalFlow";
+import { ApprovedSettling } from "./ApprovedSettling";
 
 /* ─── Magic-link approval page (connector-growth Phase C) ────────────────
    Reached from a signed, single-use link embedded in an agent's denial (or
@@ -33,11 +34,23 @@ function Card({ children }: { children: React.ReactNode }) {
 export default async function ApprovePage({
   searchParams,
 }: {
-  searchParams: Promise<{ token?: string; result?: string; message?: string }>;
+  searchParams: Promise<{ token?: string; result?: string; message?: string; sid?: string }>;
 }) {
   const params = await searchParams;
 
   if (params.result === "ok") {
+    // Sheets approvals settle asynchronously on Google's side — verify the
+    // grant is live before claiming the agent can retry (grant-race fix).
+    if (params.sid) {
+      return (
+        <Card>
+          <ApprovedSettling
+            spreadsheetId={params.sid}
+            message={params.message || "The permission has been granted."}
+          />
+        </Card>
+      );
+    }
     return (
       <Card>
         <h1 className="mb-2 text-xl font-bold text-success-foreground">✓ Approved</h1>
@@ -107,7 +120,10 @@ export default async function ApprovePage({
         if (result.needsSheetsGrant.resourceName) q.set("name", result.needsSheetsGrant.resourceName);
         redirect(`/dashboard/sheets-setup?${q.toString()}`);
       }
-      redirect(`/dashboard/approve?result=ok&message=${encodeURIComponent(result.description)}`);
+      const settle = result.grantedSpreadsheetId
+        ? `&sid=${encodeURIComponent(result.grantedSpreadsheetId)}`
+        : "";
+      redirect(`/dashboard/approve?result=ok&message=${encodeURIComponent(result.description)}${settle}`);
     }
     redirect(`/dashboard/approve?result=error&message=${encodeURIComponent(result.reason)}`);
   }

@@ -36,8 +36,9 @@ keep internal/QA traffic out of the numbers.
 | `account_linked` | server (dashboard action) | `target_email`, `delegated`, `via` |
 | `approval_link_minted` | server (`/api/mcp`) | `action` |
 | `read_restriction_enforced` | server (`/api/mcp`) | `via` (tool name), `restriction` |
-| `sheets_grant_verification` | server (approve-page load via `/api/rules/verify-sheets-access`, and approval in `actions.ts`) | `result` (`ok`/`missing`/`unknown`), `via` (`link_open`/`magic_link`), `spreadsheet_id` |
+| `sheets_grant_verification` | server (approve-page load via `/api/rules/verify-sheets-access`, and approval in `actions.ts`) | `result` (`ok`/`missing`/`unknown`), `via` (`link_open`/`magic_link`/`post_approval`), `spreadsheet_id` |
 | `sheets_grant_recovered` | server (`/api/rules/verify-sheets-access`) | `spreadsheet_id` |
+| `connector_install_started` | server (`.well-known` OAuth discovery routes, `/api/mcp` auth layer) | `touchpoint` (`oauth_discovery`/`mcp_401`), `endpoint`, `reason` (`no_token`/`invalid_token`), `method`, `user_agent` |
 
 The two `sheets_grant_*` events instrument the **picker-first sheets
 approval funnel**: opening a sheets approval link verifies the Google-side
@@ -66,6 +67,24 @@ Unauthenticated calls attribute to the `anonymous-mcp` / `anonymous-proxy` perso
 > name (they read `$mcp_tool_name`). The old events still exist under the old
 > name — insights spanning the rename must query both. Nothing in this codebase
 > should ever emit `mcp_tool_call` again; QA capability 16 asserts this.
+
+**Failure detail (2026-08 grant-race fixes):** every non-OK Google response
+adds `error_status` (HTTP status, or `network`) to the `$mcp_tool_call` event.
+Sheets failures whose matching FGAC rule is fresh also carry
+`sheets_grant_age_seconds`, and when the post-approval grace retry engaged,
+`sheets_grace_retries` + `sheets_grace_recovered` — `recovered=true` volume is
+the direct measure of how often the drive.file propagation race would have
+surfaced an error to an agent.
+
+**`connector_install_started` is a rate metric, not an identity metric.** It
+fires anonymously (distinct_id `anonymous-mcp`) from the only FGAC-owned
+touchpoints that exist before a Clerk account: the OAuth discovery endpoints
+(`touchpoint=oauth_discovery`, recurs on reconnects) and unauthenticated MCP
+requests (`touchpoint=mcp_401`; `reason=no_token` on POST ≈ fresh install
+attempts, `invalid_token` ≈ token-expiry noise from established clients).
+Estimate Clerk-step abandonment by comparing daily `mcp_401{no_token,POST}`
+volume against `mcp_connection_created`. Filter obvious crawlers by
+`user_agent`.
 
 Payload capture is deliberately **off**: we never send `$mcp_parameters` or
 `$mcp_response` (they would carry customer mail/sheet content into PostHog).

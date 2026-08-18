@@ -12,9 +12,22 @@ import {
   authServerMetadataHandlerClerk,
   metadataCorsOptionsRequestHandler,
 } from '@clerk/mcp-tools/next';
+import { captureServerEvent } from '@/lib/posthogServer';
 
 const handler = authServerMetadataHandlerClerk();
 const corsHandler = metadataCorsOptionsRequestHandler();
 
-export const GET = handler;
+// Install-funnel measurement: fetched when a client begins the connector
+// OAuth handshake — pre-Clerk-account visibility. Anonymous rate metric
+// (recurs on reconnects). The Clerk helper handles the response itself.
+const trackedGet = (req: Request) => {
+  captureServerEvent('anonymous-mcp', 'connector_install_started', {
+    touchpoint: 'oauth_discovery',
+    endpoint: 'authorization-server',
+    user_agent: req.headers.get('user-agent') ?? undefined,
+  });
+  return handler(req);
+};
+
+export const GET = trackedGet;
 export const OPTIONS = corsHandler;

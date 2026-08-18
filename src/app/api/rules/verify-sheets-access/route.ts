@@ -42,10 +42,12 @@ export async function GET(request: NextRequest) {
         captureServerEvent(clerkUserId, 'sheets_grant_recovered', { spreadsheet_id: sid });
       }
       // link_open = the approve page checking the grant before showing the
-      // flow — the top of the picker-first funnel.
-      if (context === 'link_open') {
+      // flow — the top of the picker-first funnel. post_approval = the
+      // success card confirming the grant settled before telling the user
+      // "the agent can retry now" (grant-race fix).
+      if (context === 'link_open' || context === 'post_approval') {
         captureServerEvent(clerkUserId, 'sheets_grant_verification', {
-          result: result.state, via: 'link_open', spreadsheet_id: sid,
+          result: result.state, via: context, spreadsheet_id: sid,
         });
       }
       return NextResponse.json({ spreadsheetId: sid, ...result });
