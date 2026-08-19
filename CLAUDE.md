@@ -12,7 +12,15 @@
 4. Review the `docs/` folder and update the docs and data model to match your changes.
 5. Commit frequently as you work through the problem.
 6. **Validation**: Validate changes locally, then in the preview branch via `/deploy-pr-preview`, running the applicable `docs/QA_Acceptance_Test` suites before handing back to the user.
-7. **Browser Automation**: In Claude Code, use the **built-in browser tools** (`mcp__Claude_Browser__*`) for ALL UI testing — `preview_start`, `navigate`, `get_page_text`, `read_page`, `read_console_messages`, `read_network_requests`, `computer`, `resize_window` (viewport + light/dark emulation). NEVER write ad-hoc Node.js browser scripts. **The built-in browser keeps persistent cookies, and both QA Google accounts (`USER_A`, `USER_B`) are signed in there** — so signed-in flows (dashboard, Clerk sign-in via the Google account chooser, OAuth consent) run in the built-in browser too; switching accounts through the chooser is the standing-approved routine step. Verify rather than assume: if a flow lands on a Google *password* prompt, the session has expired — STOP (never type a password) and fall back to the Playwright CLI CDP path (Path B in `/browser-agent`), which attaches to the dedicated signed-in Chrome profile. Path B is the backup for expired/missing built-in sessions, not an alternative default. See `/browser-agent` for both paths.
+7. **Browser Automation**: In Claude Code, use the **built-in browser tools** (`mcp__Claude_Browser__*`) for ALL UI testing — `preview_start`, `navigate`, `get_page_text`, `read_page`, `read_console_messages`, `read_network_requests`, `computer`, `resize_window` (viewport + light/dark emulation). NEVER write ad-hoc Node.js browser scripts. **The built-in browser keeps persistent cookies, and both QA Google accounts (`USER_A`, `USER_B`) are signed in there** — so signed-in flows (dashboard, Clerk sign-in via the Google account chooser, OAuth consent) run in the built-in browser too; switching accounts through the chooser is the standing-approved routine step.
+
+   **Fall back to Path B (Playwright CLI CDP-attached Chrome, see `/browser-agent`) BY DEFAULT — without asking — whenever the built-in browser cannot drive a flow.** Known triggers, from QA experience:
+   - a flow lands on a Google *password* prompt (session expired — STOP, never type a password, switch to Path B);
+   - Google Picker / `drive.file` consent flows (the embedded pane cannot complete them);
+   - the session is unattended (scheduled task / remote dispatch): `preview_start {name}` is blocked there, and a hidden pane reports 0×0 / black screenshots — DOM tools still work, but input-gesture flows need Path B;
+   - any flow that silently ignores clicks in the embedded pane (Google surfaces requiring trusted gestures).
+
+   A QA pass that leaves a flow untested because the built-in browser couldn't drive it is incomplete — run it via Path B before reporting, and say which path each flow used. **Hard stop that overrides the fallback**: never push automation through a flow whose failure/retry branch mutates *shared* auth state (e.g. `useGooglePicker`'s non-verified branch destroys and recreates the Clerk Google external account on the shared dev instance). Report those and hand the single manual step to the user instead.
 
 ## QA Subagent Architecture
 

@@ -14,10 +14,27 @@ built-in browser keeps persistent cookies and both QA Google accounts (`USER_A`,
 consent, and dashboard flows all work in Path A. Path B is the backup for when the
 built-in session is missing or expired.
 
-**Decision rule:** try Path A first, always. Fall back to Path B only when a signed-in
-flow in Path A lands on a Google *password* prompt (session expired — never type a
-password) or the account chooser doesn't list the needed QA account. When falling back,
-tell the user the built-in session needs re-establishing.
+**Decision rule:** try Path A first, always. Fall back to Path B **by default, without
+asking**, whenever Path A cannot drive the flow:
+
+- a signed-in flow lands on a Google *password* prompt (session expired — never type a
+  password), or the account chooser doesn't list the needed QA account (tell the user
+  the built-in session needs re-establishing);
+- Google Picker / `drive.file` consent flows — the embedded pane cannot complete them;
+- unattended sessions (scheduled task / remote dispatch): `preview_start {name}` is
+  blocked and a hidden pane reports 0×0 / black screenshots; DOM tools may still work,
+  but gesture-driven flows need Path B;
+- clicks are silently ignored in the embedded pane (surfaces requiring trusted gestures).
+
+A QA pass that skips a flow because Path A couldn't drive it is incomplete — run it via
+Path B and report which path each flow used.
+
+**Hard stop overriding the fallback:** never push automation through a flow whose
+failure/retry branch mutates shared auth state — e.g. `useGooglePicker`'s non-verified
+branch destroys and recreates the Clerk Google external account on the shared dev Clerk
+instance. Google's OAuth account chooser can also ignore synthetic/stale-transaction
+clicks; retry ONCE with a fresh transaction (restart from the in-app button), then stop
+and hand the single manual click to the user rather than looping.
 
 ---
 
