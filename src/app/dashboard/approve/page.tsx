@@ -1,6 +1,8 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { verifyApprovalToken, describeApproval, approvalLinkMinutes } from "@/lib/approvalLinks";
+import { auth } from "@clerk/nextjs/server";
+import { verifyApprovalToken, describeApproval, approvalLinkMinutes, peekApprovalToken } from "@/lib/approvalLinks";
+import { captureServerEvent } from "@/lib/posthogServer";
 import { approveMagicLink } from "../actions";
 import { SheetsApprovalFlow } from "./SheetsApprovalFlow";
 import { ApprovedSettling } from "./ApprovedSettling";
@@ -82,6 +84,20 @@ export default async function ApprovePage({
   }
 
   const verified = await verifyApprovalToken(token);
+
+  // Link-funnel instrumentation: joins minted → opened → approved by link_id
+  // (the token jti). The 2026-08 launch cohort's biggest approval leak was
+  // links never opened at all — this event is what makes that measurable.
+  const { userId: clerkUserId } = await auth();
+  const peek = verified.ok
+    ? { jti: verified.payload.jti, action: verified.payload.action }
+    : peekApprovalToken(token);
+  captureServerEvent(clerkUserId ?? "anonymous-approve", "approval_link_opened", {
+    status: verified.ok ? "valid" : verified.reason,
+    link_id: peek.jti,
+    action: peek.action,
+  });
+
   if (!verified.ok) {
     return (
       <Card>

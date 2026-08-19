@@ -777,10 +777,10 @@ export async function approveMagicLink(
 
       const substituted = !verified.some(v => v.id === p.spreadsheetId);
       captureServerEvent(dbUser.clerkUserId, "sheets_grant_verification", {
-        result: "ok", via: "magic_link", spreadsheet_id: verified[0].id,
+        result: "ok", via: "magic_link", spreadsheet_id: verified[0].id, link_id: p.jti,
       });
       captureServerEvent(dbUser.clerkUserId, "approval_link_approved", {
-        action: p.action, substituted, granted_count: verified.length,
+        action: p.action, substituted, granted_count: verified.length, link_id: p.jti,
       });
       revalidatePath("/dashboard");
       const names = verified.map(v => v.name || v.id).join(", ");
@@ -808,9 +808,10 @@ export async function approveMagicLink(
       result: grant.state,
       via: "magic_link",
       spreadsheet_id: p.spreadsheetId,
+      link_id: p.jti,
     });
     if (grant.state === "missing") {
-      captureServerEvent(dbUser.clerkUserId, "approval_link_approved", { action: p.action });
+      captureServerEvent(dbUser.clerkUserId, "approval_link_approved", { action: p.action, link_id: p.jti });
       revalidatePath("/dashboard");
       return {
         ok: true,
@@ -821,14 +822,14 @@ export async function approveMagicLink(
         },
       };
     }
-    captureServerEvent(dbUser.clerkUserId, "approval_link_approved", { action: p.action });
+    captureServerEvent(dbUser.clerkUserId, "approval_link_approved", { action: p.action, link_id: p.jti });
     revalidatePath("/dashboard");
     return { ok: true, description: describeApproval(p), grantedSpreadsheetId: p.spreadsheetId };
   } else {
     return { ok: false, reason: "This approval link is malformed." };
   }
 
-  captureServerEvent(dbUser.clerkUserId, "approval_link_approved", { action: p.action });
+  captureServerEvent(dbUser.clerkUserId, "approval_link_approved", { action: p.action, link_id: p.jti });
   revalidatePath("/dashboard");
   return { ok: true, description: describeApproval(p) };
 }

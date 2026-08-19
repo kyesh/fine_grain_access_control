@@ -13,7 +13,14 @@ export type RawCallClass =
   | { kind: 'sheets'; spreadsheetId: string; isMutating: boolean }
   | { kind: 'gmail_read' }
   | { kind: 'gmail_send' }
-  | { kind: 'denied'; reason: string };
+  | { kind: 'denied'; reason: string; code: DenialCode };
+
+/** Machine-readable denial reasons, stamped onto $mcp_tool_call as `denial_code`. */
+export type DenialCode =
+  | 'raw_api_batch_unsupported'
+  | 'sheets_create_unsupported'
+  | 'gmail_write_unsupported'
+  | 'raw_api_not_exposed';
 
 export function extractSheetsSpreadsheetId(path: string): string | null {
   const match = path.match(/(?:v4\/spreadsheets|sheets\/v4\/spreadsheets|spreadsheets)\/([^/?:#]+)/);
@@ -32,7 +39,7 @@ export function classifyGoogleApiCall(rawPath: string, method: string): RawCallC
   // method and path) inside one POST body, which would smuggle reads past
   // read-restriction checks and writes past the deny-by-default policy.
   if (segments.includes('batch') || segments.some(s => s.startsWith('batch'))) {
-    return { kind: 'denied', reason: '🚫 Access Denied: Google batch endpoints are not supported through FGAC. Call individual endpoints instead.' };
+    return { kind: 'denied', code: 'raw_api_batch_unsupported', reason: '🚫 Access Denied: Google batch endpoints are not supported through FGAC. Call individual endpoints instead.' };
   }
 
   const isMutating = method !== 'GET';
@@ -40,7 +47,7 @@ export function classifyGoogleApiCall(rawPath: string, method: string): RawCallC
   if (segments.includes('spreadsheets')) {
     const spreadsheetId = extractSheetsSpreadsheetId(path);
     if (!spreadsheetId) {
-      return { kind: 'denied', reason: '🚫 Access Denied: A spreadsheet ID is required — FGAC Sheets rules are granted per spreadsheet. Creating spreadsheets is not supported.' };
+      return { kind: 'denied', code: 'sheets_create_unsupported', reason: '🚫 Access Denied: A spreadsheet ID is required — FGAC Sheets rules are granted per spreadsheet. Creating spreadsheets is not supported through FGAC: the user must create the sheet themselves (e.g. sheets.new), then grant access to it via request_access or the approval link a denial returns.' };
     }
     return { kind: 'sheets', spreadsheetId, isMutating };
   }
@@ -50,10 +57,10 @@ export function classifyGoogleApiCall(rawPath: string, method: string): RawCallC
     if (segments[segments.length - 1] === 'send' && segments[segments.length - 2] === 'messages') {
       return { kind: 'gmail_send' };
     }
-    return { kind: 'denied', reason: '🚫 Access Denied: This Gmail write endpoint is not permitted through FGAC. The only supported Gmail write is messages/send (recipients are checked against the send whitelist).' };
+    return { kind: 'denied', code: 'gmail_write_unsupported', reason: '🚫 Access Denied: This Gmail write endpoint is not permitted through FGAC. The only supported Gmail write is messages/send (recipients are checked against the send whitelist).' };
   }
 
-  return { kind: 'denied', reason: '🚫 Access Denied: This Google API is not exposed through FGAC. Supported paths: Gmail ("gmail/v1/users/...") and Google Sheets ("v4/spreadsheets/{id}/...").' };
+  return { kind: 'denied', code: 'raw_api_not_exposed', reason: '🚫 Access Denied: This Google API is not exposed through FGAC. Supported paths: Gmail ("gmail/v1/users/...") and Google Sheets ("v4/spreadsheets/{id}/...").' };
 }
 
 /**
