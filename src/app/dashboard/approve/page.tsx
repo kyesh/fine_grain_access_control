@@ -37,7 +37,7 @@ function Card({ children }: { children: React.ReactNode }) {
 export default async function ApprovePage({
   searchParams,
 }: {
-  searchParams: Promise<{ token?: string; result?: string; message?: string; sid?: string }>;
+  searchParams: Promise<{ token?: string; result?: string; message?: string; sid?: string; notice?: string }>;
 }) {
   const params = await searchParams;
 
@@ -70,6 +70,14 @@ export default async function ApprovePage({
       <Card>
         <h1 className="mb-2 text-xl font-bold text-foreground">Approval failed</h1>
         <p className="text-sm text-muted-foreground">{params.message || "The link could not be processed."}</p>
+        {params.token && (
+          <Link
+            href={`/dashboard/approve?token=${encodeURIComponent(params.token)}`}
+            className="mt-4 inline-block rounded-sm bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground hover:opacity-90"
+          >
+            Try again with this link
+          </Link>
+        )}
       </Card>
     );
   }
@@ -171,7 +179,15 @@ export default async function ApprovePage({
         : "";
       redirect(`/dashboard/approve?result=ok&message=${encodeURIComponent(result.description)}${settle}`);
     }
-    redirect(`/dashboard/approve?result=error&message=${encodeURIComponent(result.reason)}`);
+    if (result.retryable) {
+      // The link was not consumed — return to the LIVE approve page (token
+      // intact) with an inline notice, never to the token-less error card.
+      redirect(`/dashboard/approve?token=${encodeURIComponent(formData.get("token") as string)}&notice=${encodeURIComponent(result.reason)}`);
+    }
+    // Even terminal-looking failures carry the token so the error card can
+    // offer "Try again" — re-opening re-verifies and renders the true state
+    // (fresh / already approved / used / expired), so it is always safe.
+    redirect(`/dashboard/approve?result=error&message=${encodeURIComponent(result.reason)}&token=${encodeURIComponent(formData.get("token") as string)}`);
   }
 
   const isSheets = (p.action === "sheets_expose" || p.action === "sheets_write") && p.spreadsheetId;
@@ -185,6 +201,11 @@ export default async function ApprovePage({
       <div className="mb-5 rounded-md border border-warning-foreground/30 bg-warning px-4 py-3 text-sm font-medium text-warning-foreground [overflow-wrap:anywhere]">
         {describeApproval(p)}
       </div>
+      {params.notice && (
+        <div className="mb-5 rounded-md border border-border bg-card px-4 py-3 text-sm text-muted-foreground [overflow-wrap:anywhere]" data-testid="approve-notice">
+          {params.notice}
+        </div>
+      )}
       {isSheets ? (
         <SheetsApprovalFlow
           token={token}

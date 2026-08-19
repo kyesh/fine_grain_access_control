@@ -654,7 +654,17 @@ export type MagicApprovalResult =
        * (drive.file grants are eventually consistent — see sheetsGrantCheck). */
       grantedSpreadsheetId?: string;
     }
-  | { ok: false; reason: string };
+  | {
+      ok: false;
+      reason: string;
+      /** The link was NOT consumed and the user can retry from the same
+       * page (e.g. drive.file propagation lag on a just-picked sheet). The
+       * approve page must return to the live token URL with this notice —
+       * never to the token-less "Approval failed" dead end (a user hit
+       * exactly that on 2026-08-19: "the link is still valid" on a page
+       * that had lost the link). */
+      retryable?: boolean;
+    };
 
 /**
  * Is the grant a magic-link payload describes currently active for its key?
@@ -835,21 +845,35 @@ export async function approveMagicLink(
       // identity. Rules are created only for picked ids Google confirms the
       // owner's token can reach; the token's id gets NO rule unless it is
       // among them (no phantom rules for ids the agent guessed wrong).
-      const verified: { id: string; name: string | null }[] = [];
-      for (const s of pickedSheets.slice(0, 10)) {
-        if (typeof s?.id !== "string" || !s.id) continue;
-        const check = googleToken
-          ? await verifySheetsGrant(googleToken, s.id)
-          : { state: "missing" as const };
-        if (check.state === "ok") {
-          verified.push({ id: s.id, name: (typeof s.name === "string" && s.name) || ("title" in check ? check.title : null) });
+      // drive.file grants are eventually consistent: verifying a pick in the
+      // seconds right after a first-time consent (the hottest path for new
+      // users) can see "missing" for a sheet Google IS sharing. Same race as
+      // the MCP-side withSheetsGrace — give the pick the same grace instead
+      // of failing the user's first approval (observed live 2026-08-19).
+      const verifyPicks = async () => {
+        const out: { id: string; name: string | null }[] = [];
+        for (const s of pickedSheets.slice(0, 10)) {
+          if (typeof s?.id !== "string" || !s.id) continue;
+          const check = googleToken
+            ? await verifySheetsGrant(googleToken, s.id)
+            : { state: "missing" as const };
+          if (check.state === "ok") {
+            out.push({ id: s.id, name: (typeof s.name === "string" && s.name) || ("title" in check ? check.title : null) });
+          }
         }
+        return out;
+      };
+      let verified = await verifyPicks();
+      for (let attempt = 0; verified.length === 0 && attempt < 2; attempt++) {
+        await new Promise(r => setTimeout(r, 3500));
+        verified = await verifyPicks();
       }
       if (verified.length === 0) {
         // Read-only failure — the link was NOT consumed; the user can retry.
         return {
           ok: false,
-          reason: "Google hasn't finished sharing the picked sheet(s) with FGAC yet. Wait a few seconds and try the pick again — the link is still valid.",
+          retryable: true,
+          reason: "Google hasn't finished sharing the picked sheet(s) with FGAC yet. Wait a few seconds and pick again — this link is still valid.",
         };
       }
       if (!(await consume())) return await alreadyUsed();
