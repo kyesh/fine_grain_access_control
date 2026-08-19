@@ -10,6 +10,7 @@ import { DelegateAccessButton } from '../DelegateAccessButton';
 import { RevokeDelegationButton } from '../RevokeDelegationButton';
 import { ExposedSheetsManager } from '../ExposedSheetsManager';
 import { AddDelegatedAccountButton } from './AddDelegatedAccountButton';
+import { ReconnectGoogleButton } from './ReconnectGoogleButton';
 import { checkGoogleAccess } from '../googleAccess';
 
 export default async function AccountsPage() {
@@ -51,6 +52,7 @@ export default async function AccountsPage() {
             <CardHeader
               title="Connected Google Account"
               subtitle="FGAC uses this account's OAuth grant to act on your behalf."
+              action={<ReconnectGoogleButton prominent={!hasCompleteGoogleAccess} />}
             />
             <div className="px-5 pb-5">
               <div className="flex flex-wrap items-center justify-between gap-3 rounded-sm border border-border bg-card px-4 py-3">
@@ -78,8 +80,9 @@ export default async function AccountsPage() {
 
               {!hasCompleteGoogleAccess && (
                 <p className="mt-3 text-[13px] text-muted-foreground">
-                  Reconnect from the account menu in the top-right to restore the Gmail
-                  scope. Until then, every rule that touches mail is inert.
+                  Click &quot;Reconnect Google&quot; above and approve Google&apos;s consent
+                  screens to restore access. Until then, every rule that touches mail
+                  or sheets is inert.
                 </p>
               )}
             </div>

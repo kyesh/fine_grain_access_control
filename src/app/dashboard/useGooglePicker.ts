@@ -4,6 +4,7 @@ import { useState, useCallback, useEffect } from 'react';
 import { useUser, useReverification } from '@clerk/nextjs';
 import { isReverificationCancelledError } from '@clerk/nextjs/errors';
 import { usePostHog } from 'posthog-js/react';
+import { startGoogleReconnect, type ClerkUserLike } from './googleReconnect';
 
 declare global {
   interface Window {
@@ -127,37 +128,14 @@ export function useGooglePicker(onSheetsPicked: (sheets: PickedSheet[], context?
         params.set('autoOpenPicker', 'true');
         if (context) params.set('pickerContext', context);
         const autoRedirectUrl = `${window.location.origin}${window.location.pathname}?${params.toString()}`;
-        let verificationUrl: string | undefined;
 
         try {
-          if (existingGoogleAccount && existingGoogleAccount.verification?.status === 'verified') {
-            const response = await existingGoogleAccount.reauthorize({
-              additionalScopes: ['https://www.googleapis.com/auth/drive.file'],
-              redirectUrl: autoRedirectUrl,
-              oidcPrompt: 'consent'
-            });
-            verificationUrl = response.verification?.externalVerificationRedirectURL?.href;
-          } else {
-            if (existingGoogleAccount) {
-              await existingGoogleAccount.destroy();
-            }
-            const response = await user.createExternalAccount({
-              strategy: 'oauth_google',
-              redirectUrl: autoRedirectUrl,
-            });
-            verificationUrl = response.verification?.externalVerificationRedirectURL?.href;
-          }
+          window.location.href = await startGoogleReconnect(
+            user as unknown as ClerkUserLike, autoRedirectUrl,
+          );
         } catch (err) {
           failFlow('google_reauthorize', err, RECONNECT_ADVICE);
-          return;
         }
-
-        if (verificationUrl) {
-          window.location.href = verificationUrl;
-          return;
-        }
-        // No URL and nothing thrown — Clerk gave us nowhere to send the user.
-        failFlow('no_verification_url', 'Clerk returned no verification redirect URL', RECONNECT_ADVICE);
         return;
       }
 

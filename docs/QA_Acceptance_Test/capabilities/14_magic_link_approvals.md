@@ -2,12 +2,16 @@
 
 > Phase C of `connector-growth_v1.md`. Send and Sheets denials carry a signed
 > deep link that pre-fills the fix; the owning user approves in one click at
-> the moment of need. Links are signed, single-use, expire (15 min; sheets
-> links 30 min — their approval can include a Picker pick + first-time
-> drive.file consent round-trip), and require the owning user's session — an
-> agent can mint the request, only the human can approve. Read-block denials
-> deliberately carry NO link. Sheets approvals run picker-first when Google
-> lacks a grant for the sheet — see capability 17.
+> the moment of need. Links are signed, expire (15 min; sheets links 30 min —
+> their approval can include a Picker pick + first-time drive.file consent
+> round-trip), and require the owning user's session — an agent can mint the
+> request, only the human can approve. Consumption is idempotent, not
+> single-use (2026-08-19): re-opening a used link whose grant is still active
+> is a success ("Already approved"); only a used link whose grant was revoked
+> refuses, and never re-grants. Read-block denials deliberately carry NO
+> link. Sheets approvals run picker-first when Google lacks a grant for the
+> sheet — see capability 17; grant repair is capability 18 (google
+> reconnect).
 
 ## Assertions
 
