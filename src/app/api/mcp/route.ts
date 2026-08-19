@@ -788,6 +788,57 @@ async function executeRawGoogleCall(
 
   const cleanPath = path.replace(/^\/+/, '');
 
+  if (cls.kind === 'sheets_create') {
+    // Agent-created sheets are allowed and auto-granted to the calling key
+    // (read & write): the Sheets policy protects the user's EXISTING sheets,
+    // not the agent's own output. The drive.file scope already limits the app
+    // to picked files + files it created, so no new Google-side exposure.
+    const url = `https://sheets.googleapis.com/${cleanPath.replace(/^sheets\//, '')}`;
+    const result = await googleFetch(url, resolved.token, method, serializeBody(body), resolved.targetEmail);
+    if (!result.ok) return errorResult(result.error);
+    const created = result.data as { spreadsheetId?: unknown; properties?: { title?: unknown } };
+    const newId = typeof created?.spreadsheetId === 'string' ? created.spreadsheetId : null;
+    if (newId) {
+      const title = typeof created?.properties?.title === 'string' ? created.properties.title : null;
+      try {
+        const [rule] = await db.insert(accessRules).values({
+          userId: conn.user.id,
+          ruleName: `Agent-created: ${title || newId}`,
+          service: 'sheets',
+          actionType: 'sheet_read_write',
+          targetResourceId: newId,
+          resourceName: title,
+        }).returning();
+        await db.insert(keyRuleAssignments).values({ proxyKeyId: resolved.proxyKeyId, accessRuleId: rule.id });
+        captureServerEvent(conn.user.clerkUserId, 'agent_sheet_created', {
+          spreadsheet_id: newId, auto_granted: true,
+        });
+        addToolCallProps({ sheet_created: true });
+      } catch (err) {
+        // The sheet exists either way; a failed auto-grant just means the next
+        // access denies and mints an approval link — degraded, not broken.
+        console.error('[MCP] Failed to auto-grant agent-created sheet:', err);
+        captureServerEvent(conn.user.clerkUserId, 'agent_sheet_created', {
+          spreadsheet_id: newId, auto_granted: false,
+        });
+      }
+    }
+    return jsonResult(result.data);
+  }
+
+  if (cls.kind === 'passthrough') {
+    // Classify-don't-block: unknown Google API families are forwarded with
+    // the account's token (Google's scopes are the enforcement backstop) and
+    // tagged so demand is visible in analytics before we build rules for it.
+    addToolCallProps({ raw_api_family: cls.family, raw_api_passthrough: true });
+    const url = cleanPath.includes('spreadsheets')
+      ? `https://sheets.googleapis.com/${cleanPath.replace(/^sheets\//, '')}`
+      : `https://www.googleapis.com/${cleanPath}`;
+    const result = await googleFetch(url, resolved.token, method, serializeBody(body), resolved.targetEmail);
+    if (!result.ok) return errorResult(result.error);
+    return jsonResult(result.data);
+  }
+
   if (cls.kind === 'sheets') {
     const perm = await checkSheetsPermission(conn.user.id, resolved.proxyKeyId, cls.spreadsheetId, cls.isMutating);
     if (!perm.allowed) return policyDenialWithLink(conn, resolved.proxyKeyId, perm.reason, sheetsDenialAction(perm, cls.spreadsheetId, cls.isMutating));

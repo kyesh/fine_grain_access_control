@@ -48,18 +48,21 @@ expect('sheets GET values → sheets read',
 expect('sheets append POST → sheets write',
   classifyGoogleApiCall('sheets/v4/spreadsheets/1BxiM/values/Sheet1:append', 'POST'),
   (c: { kind: string; isMutating?: boolean }) => c.kind === 'sheets' && c.isMutating === true);
-expect('sheets create (no id) → denied',
+expect('sheets create (no id) POST → sheets_create (2026-08-19: creation allowed, auto-granted)',
   classifyGoogleApiCall('v4/spreadsheets', 'POST'),
-  (c: { kind: string }) => c.kind === 'denied');
+  (c: { kind: string }) => c.kind === 'sheets_create');
+expect('sheets no-id GET → passthrough (Google rejects it, not us)',
+  classifyGoogleApiCall('v4/spreadsheets', 'GET'),
+  (c: { kind: string; family?: string }) => c.kind === 'passthrough' && c.family === 'spreadsheets');
 expect('batch endpoint → denied',
   classifyGoogleApiCall('batch/gmail/v1', 'POST'),
   (c: { kind: string }) => c.kind === 'denied');
-expect('unknown API (drive) → denied',
+expect('unknown API (drive) → passthrough with family (classify, not block)',
   classifyGoogleApiCall('drive/v3/files', 'GET'),
-  (c: { kind: string }) => c.kind === 'denied');
-expect('unknown API (calendar) → denied',
+  (c: { kind: string; family?: string }) => c.kind === 'passthrough' && c.family === 'drive/v3');
+expect('unknown API (calendar) → passthrough with family',
   classifyGoogleApiCall('calendar/v3/calendars/primary/events', 'GET'),
-  (c: { kind: string }) => c.kind === 'denied');
+  (c: { kind: string; family?: string }) => c.kind === 'passthrough' && c.family === 'calendar/v3');
 
 console.log('extractSendRecipients:');
 const raw = Buffer.from(
