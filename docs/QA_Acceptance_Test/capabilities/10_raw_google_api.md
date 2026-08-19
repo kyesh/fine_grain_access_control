@@ -27,10 +27,13 @@
 - `google_api_get` with path `gmail/v1/users/me/messages?maxResults=2`
 - **Expected**: Real Gmail message list JSON (ids), no error
 
-### A3: Unsupported Google API is denied
+### A3: Unknown Google API passes through with classification
 - `google_api_get` with path `drive/v3/files`
-- **Expected**: Access-denied message naming the supported paths (Gmail,
-  Sheets); no Google API call is made
+- **Expected**: The call is forwarded to Google with the account's token
+  (2026-08-19 posture change: classify, not block — Google's OAuth scopes are
+  the backstop). With the standard grant, drive.file limits results to
+  picked/app-created files. The `$mcp_tool_call` event carries
+  `raw_api_passthrough: true` and `raw_api_family: 'drive/v3'`.
 
 ### A4: Non-send Gmail write is denied
 - `google_api_modify` with path `gmail/v1/users/me/messages/<any-id>/modify`
@@ -61,8 +64,14 @@
   with the read-only message when the rule is Read Only (toggle via dashboard
   UI, as in capability 09 A8)
 
-### A9: Batch and id-less Sheets endpoints are denied
+### A9: Batch is denied (and monitored); sheet creation is allowed and auto-granted
 - `google_api_modify` with path `batch/gmail/v1`; and `google_api_modify`
-  POST with path `v4/spreadsheets` (spreadsheet creation, no id)
-- **Expected**: Both denied — batch endpoints are unsupported; Sheets access
-  requires a spreadsheet id
+  POST with path `v4/spreadsheets` with body `{"properties":{"title":"QA created sheet"}}`
+- **Expected**: Batch is denied (it could smuggle sub-requests past the send
+  whitelist and read restrictions) and the attempt is stamped
+  `denial_code: 'raw_api_batch_unsupported'` for demand monitoring. The
+  spreadsheet creation SUCCEEDS (2026-08-19 posture change), returns the new
+  spreadsheet JSON, auto-creates a read & write rule for the new id scoped to
+  the calling key (visible in dashboard rules as "Agent-created: …"), and a
+  follow-up `sheets_read_range` on the new id succeeds without any approval
+  link. An `agent_sheet_created` event fires with `auto_granted: true`.

@@ -654,7 +654,88 @@ export type MagicApprovalResult =
        * (drive.file grants are eventually consistent — see sheetsGrantCheck). */
       grantedSpreadsheetId?: string;
     }
-  | { ok: false; reason: string };
+  | {
+      ok: false;
+      reason: string;
+      /** The link was NOT consumed and the user can retry from the same
+       * page (e.g. drive.file propagation lag on a just-picked sheet). The
+       * approve page must return to the live token URL with this notice —
+       * never to the token-less "Approval failed" dead end (a user hit
+       * exactly that on 2026-08-19: "the link is still valid" on a page
+       * that had lost the link). */
+      retryable?: boolean;
+    };
+
+/**
+ * Is the grant a magic-link payload describes currently active for its key?
+ * Powers idempotent link re-use: a consumed link whose grant still stands is
+ * a success, not an error (rage-click evidence, 2026-08-17: a user hit the
+ * hard single-use wall seconds after approving a sibling link and churned).
+ * A consumed link whose grant is gone stays refused — silently re-granting
+ * revoked permissions is the replay attack single-use exists to prevent.
+ */
+async function grantActiveForApproval(
+  p: { action: string; userId: string; recipient?: string; spreadsheetId?: string },
+  keyId: string,
+): Promise<boolean> {
+  const assignedOrGlobal = async (ruleId: string): Promise<boolean> => {
+    const asgn = await db.select().from(keyRuleAssignments)
+      .where(eq(keyRuleAssignments.accessRuleId, ruleId));
+    return asgn.length === 0 || asgn.some(a => a.proxyKeyId === keyId);
+  };
+
+  if ((p.action === "send_whitelist" && p.recipient) || p.action === "send_all") {
+    const escaped = p.recipient?.replace(/[.+?^${}()|[\]\\]/g, "\\$&");
+    const wanted = p.action === "send_all" ? ["*"] : [`^${escaped}$`, "*"];
+    const rules = await db.select().from(accessRules).where(and(
+      eq(accessRules.userId, p.userId),
+      eq(accessRules.service, "gmail"),
+      eq(accessRules.actionType, "send_whitelist"),
+    ));
+    for (const r of rules) {
+      if (!r.regexPattern || !wanted.includes(r.regexPattern)) continue;
+      if (await assignedOrGlobal(r.id)) return true;
+    }
+    return false;
+  }
+
+  if ((p.action === "sheets_expose" || p.action === "sheets_write") && p.spreadsheetId) {
+    const needed = p.action === "sheets_write"
+      ? ["sheet_read_write"]
+      : ["sheet_read", "sheet_read_write"];
+    const rules = await db.select().from(accessRules).where(and(
+      eq(accessRules.userId, p.userId),
+      eq(accessRules.service, "sheets"),
+    ));
+    for (const r of rules) {
+      if (r.targetResourceId !== p.spreadsheetId || !needed.includes(r.actionType)) continue;
+      if (await assignedOrGlobal(r.id)) return true;
+    }
+    return false;
+  }
+
+  return false;
+}
+
+/**
+ * Pre-flight state of an approval link, so the approve page can render the
+ * truth at load time instead of letting the user click into an error:
+ * fresh | already_granted (used, grant still active) | used_inactive (used,
+ * grant revoked or never written) | expired | invalid.
+ */
+export async function approvalLinkStatus(token: string): Promise<
+  "fresh" | "already_granted" | "used_inactive" | "expired" | "invalid"
+> {
+  const { verifyApprovalToken } = await import("@/lib/approvalLinks");
+  const { approvalConsumptions } = await import("@/db/schema");
+  const verified = await verifyApprovalToken(token);
+  if (!verified.ok) return verified.reason;
+  const p = verified.payload;
+  const used = await db.select().from(approvalConsumptions)
+    .where(eq(approvalConsumptions.jti, p.jti)).limit(1);
+  if (used.length === 0) return "fresh";
+  return (await grantActiveForApproval(p, p.proxyKeyId)) ? "already_granted" : "used_inactive";
+}
 
 /**
  * Consume a signed approval link and apply exactly the grant it describes.
@@ -711,13 +792,22 @@ export async function approveMagicLink(
       return false;
     }
   };
-  const alreadyUsed = {
-    ok: false as const,
-    reason: "This approval link was already used. Each link works exactly once.",
-  };
+  // Idempotent re-use: a replayed link whose grant still stands reports
+  // success (the agent's retry will work); only a link whose grant is gone —
+  // revoked, or never written — refuses, and says how to recover.
+  const alreadyUsed = async (): Promise<MagicApprovalResult> =>
+    (await grantActiveForApproval(p, key.id))
+      ? {
+          ok: true,
+          description: `${describeApproval(p)} — this was already approved earlier, so nothing changed. The agent can retry its request now.`,
+        }
+      : {
+          ok: false,
+          reason: "This approval link was already used, and the permission it described is not active anymore (it may have been revoked, or granted under a different sheet picked in Google). Ask the agent to request access again for a fresh link.",
+        };
 
   if (p.action === "send_whitelist" && p.recipient) {
-    if (!(await consume())) return alreadyUsed;
+    if (!(await consume())) return await alreadyUsed();
     const escaped = p.recipient.replace(/[.+?^${}()|[\]\\]/g, "\\$&");
     const [rule] = await db.insert(accessRules).values({
       userId: dbUser.id,
@@ -728,7 +818,7 @@ export async function approveMagicLink(
     }).returning();
     await db.insert(keyRuleAssignments).values({ proxyKeyId: key.id, accessRuleId: rule.id });
   } else if (p.action === "send_all") {
-    if (!(await consume())) return alreadyUsed;
+    if (!(await consume())) return await alreadyUsed();
     // Idempotent: an already-granted key still consumes the token and reports
     // success — the agent's retry will work either way.
     await grantSendToAnyone(dbUser.id, key.id);
@@ -755,32 +845,46 @@ export async function approveMagicLink(
       // identity. Rules are created only for picked ids Google confirms the
       // owner's token can reach; the token's id gets NO rule unless it is
       // among them (no phantom rules for ids the agent guessed wrong).
-      const verified: { id: string; name: string | null }[] = [];
-      for (const s of pickedSheets.slice(0, 10)) {
-        if (typeof s?.id !== "string" || !s.id) continue;
-        const check = googleToken
-          ? await verifySheetsGrant(googleToken, s.id)
-          : { state: "missing" as const };
-        if (check.state === "ok") {
-          verified.push({ id: s.id, name: (typeof s.name === "string" && s.name) || ("title" in check ? check.title : null) });
+      // drive.file grants are eventually consistent: verifying a pick in the
+      // seconds right after a first-time consent (the hottest path for new
+      // users) can see "missing" for a sheet Google IS sharing. Same race as
+      // the MCP-side withSheetsGrace — give the pick the same grace instead
+      // of failing the user's first approval (observed live 2026-08-19).
+      const verifyPicks = async () => {
+        const out: { id: string; name: string | null }[] = [];
+        for (const s of pickedSheets.slice(0, 10)) {
+          if (typeof s?.id !== "string" || !s.id) continue;
+          const check = googleToken
+            ? await verifySheetsGrant(googleToken, s.id)
+            : { state: "missing" as const };
+          if (check.state === "ok") {
+            out.push({ id: s.id, name: (typeof s.name === "string" && s.name) || ("title" in check ? check.title : null) });
+          }
         }
+        return out;
+      };
+      let verified = await verifyPicks();
+      for (let attempt = 0; verified.length === 0 && attempt < 2; attempt++) {
+        await new Promise(r => setTimeout(r, 3500));
+        verified = await verifyPicks();
       }
       if (verified.length === 0) {
         // Read-only failure — the link was NOT consumed; the user can retry.
         return {
           ok: false,
-          reason: "Google hasn't finished sharing the picked sheet(s) with FGAC yet. Wait a few seconds and try the pick again — the link is still valid.",
+          retryable: true,
+          reason: "Google hasn't finished sharing the picked sheet(s) with FGAC yet. Wait a few seconds and pick again — this link is still valid.",
         };
       }
-      if (!(await consume())) return alreadyUsed;
+      if (!(await consume())) return await alreadyUsed();
       for (const v of verified) await insertSheetRule(v.id, v.name);
 
       const substituted = !verified.some(v => v.id === p.spreadsheetId);
       captureServerEvent(dbUser.clerkUserId, "sheets_grant_verification", {
-        result: "ok", via: "magic_link", spreadsheet_id: verified[0].id,
+        result: "ok", via: "magic_link", spreadsheet_id: verified[0].id, link_id: p.jti,
       });
       captureServerEvent(dbUser.clerkUserId, "approval_link_approved", {
-        action: p.action, substituted, granted_count: verified.length,
+        action: p.action, substituted, granted_count: verified.length, link_id: p.jti,
       });
       revalidatePath("/dashboard");
       const names = verified.map(v => v.name || v.id).join(", ");
@@ -799,7 +903,7 @@ export async function approveMagicLink(
     // the Google half, and route to the recovery page when it's missing —
     // never claim "retry now" for a sheet Google can't reach (the
     // approve→retry→404 dead end the 2026-08 launch cohort churned on).
-    if (!(await consume())) return alreadyUsed;
+    if (!(await consume())) return await alreadyUsed();
     await insertSheetRule(p.spreadsheetId, p.resourceName || null);
     const grant = googleToken
       ? await verifySheetsGrant(googleToken, p.spreadsheetId)
@@ -808,9 +912,10 @@ export async function approveMagicLink(
       result: grant.state,
       via: "magic_link",
       spreadsheet_id: p.spreadsheetId,
+      link_id: p.jti,
     });
     if (grant.state === "missing") {
-      captureServerEvent(dbUser.clerkUserId, "approval_link_approved", { action: p.action });
+      captureServerEvent(dbUser.clerkUserId, "approval_link_approved", { action: p.action, link_id: p.jti });
       revalidatePath("/dashboard");
       return {
         ok: true,
@@ -821,14 +926,14 @@ export async function approveMagicLink(
         },
       };
     }
-    captureServerEvent(dbUser.clerkUserId, "approval_link_approved", { action: p.action });
+    captureServerEvent(dbUser.clerkUserId, "approval_link_approved", { action: p.action, link_id: p.jti });
     revalidatePath("/dashboard");
     return { ok: true, description: describeApproval(p), grantedSpreadsheetId: p.spreadsheetId };
   } else {
     return { ok: false, reason: "This approval link is malformed." };
   }
 
-  captureServerEvent(dbUser.clerkUserId, "approval_link_approved", { action: p.action });
+  captureServerEvent(dbUser.clerkUserId, "approval_link_approved", { action: p.action, link_id: p.jti });
   revalidatePath("/dashboard");
   return { ok: true, description: describeApproval(p) };
 }

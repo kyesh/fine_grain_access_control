@@ -61,16 +61,38 @@ export async function mintApprovalToken(
   proxyKeyId: string,
   action: ApprovalAction,
   ttlSecondsOverride?: number, // for tests only
+  jti: string = crypto.randomUUID(),
 ): Promise<string> {
   const ttlSeconds = ttlSecondsOverride
     ?? (action.action.startsWith('sheets') ? SHEETS_APPROVAL_LINK_TTL_SECONDS : APPROVAL_LINK_TTL_SECONDS);
   const key = await signingKey();
   return new jose.SignJWT({ userId, proxyKeyId, ...action })
     .setProtectedHeader({ alg: 'HS256' })
-    .setJti(crypto.randomUUID())
+    .setJti(jti)
     .setIssuedAt()
     .setExpirationTime(`${ttlSeconds}s`)
     .sign(key);
+}
+
+/**
+ * Mint a link AND return its jti, which doubles as the analytics `link_id`
+ * joining approval_link_minted → approval_link_opened → approval_link_approved
+ * into a per-link funnel.
+ */
+export async function mintApprovalLink(
+  baseUrl: string,
+  userId: string,
+  proxyKeyId: string,
+  action: ApprovalAction,
+): Promise<{ url: string; jti: string }> {
+  // Env-sourced base URLs have shipped with a trailing newline before (a
+  // pasted Vercel env var), which breaks every link at the client — most
+  // clients truncate at the newline and land on the site root. Sanitize here
+  // so every caller is covered, whatever the env value looks like.
+  const origin = baseUrl.trim().replace(/\/+$/, '');
+  const jti = crypto.randomUUID();
+  const token = await mintApprovalToken(userId, proxyKeyId, action, undefined, jti);
+  return { url: `${origin}/dashboard/approve?token=${encodeURIComponent(token)}`, jti };
 }
 
 export async function mintApprovalUrl(
@@ -79,13 +101,7 @@ export async function mintApprovalUrl(
   proxyKeyId: string,
   action: ApprovalAction,
 ): Promise<string> {
-  // Env-sourced base URLs have shipped with a trailing newline before (a
-  // pasted Vercel env var), which breaks every link at the client — most
-  // clients truncate at the newline and land on the site root. Sanitize here
-  // so every caller is covered, whatever the env value looks like.
-  const origin = baseUrl.trim().replace(/\/+$/, '');
-  const token = await mintApprovalToken(userId, proxyKeyId, action);
-  return `${origin}/dashboard/approve?token=${encodeURIComponent(token)}`;
+  return (await mintApprovalLink(baseUrl, userId, proxyKeyId, action)).url;
 }
 
 export type VerifyResult =
@@ -120,6 +136,23 @@ export async function verifyApprovalToken(token: string): Promise<VerifyResult> 
       ok: false,
       reason: err instanceof jose.errors.JWTExpired ? 'expired' : 'invalid',
     };
+  }
+}
+
+/**
+ * Analytics-only peek at a token that failed verification (expired links most
+ * of all): decodes WITHOUT signature checking so approval_link_opened can
+ * still carry link_id/action. Never use the result for authorization.
+ */
+export function peekApprovalToken(token: string): { jti?: string; action?: string } {
+  try {
+    const payload = jose.decodeJwt(token);
+    return {
+      jti: typeof payload.jti === 'string' ? payload.jti : undefined,
+      action: typeof payload.action === 'string' ? payload.action : undefined,
+    };
+  } catch {
+    return {};
   }
 }
 

@@ -30,7 +30,7 @@ import { loadApplicableRules, checkReadRestrictions, type ApplicableRules } from
 import { captureServerEvent } from '@/lib/posthogServer';
 import { runWithToolCallProps, addToolCallProps, getToolCallProps } from '@/lib/toolCallContext';
 import { ensureDefaultProfile } from '@/db/defaultProfile';
-import { mintApprovalUrl, approvalLinkMinutes, type ApprovalAction } from '@/lib/approvalLinks';
+import { mintApprovalLink, approvalLinkMinutes, type ApprovalAction } from '@/lib/approvalLinks';
 import { TOOL_DEFS, toolAnnotations, type FgacToolDef } from './toolDefs';
 import {
   classifyGoogleApiCall, extractSendRecipients, sheetsApprovalAction,
@@ -279,19 +279,20 @@ async function getGoogleToken(targetEmail: string, keyOwner: { id: string; email
  * allowed. deniedRecipient feeds the magic approval link — absent when we
  * could not even parse who the mail was for (no link in that case).
  */
-type SendDenial = { message: string; deniedRecipient?: string };
+type SendDenial = { message: string; deniedRecipient?: string; code: string };
 
 function checkSendWhitelist(rules: ApplicableRules, recipients: string[] | null): SendDenial | null {
   const sendRules = rules.filter(r => r.service === 'gmail' && r.actionType === 'send_whitelist');
 
   if (!recipients || recipients.length === 0) {
-    return { message: '🚫 Could not determine the message recipients, so sending was denied. Provide a standard RFC 2822 message with To/Cc/Bcc headers.' };
+    return { message: '🚫 Could not determine the message recipients, so sending was denied. Provide a standard RFC 2822 message with To/Cc/Bcc headers.', code: 'recipients_undetermined' };
   }
 
   if (sendRules.length === 0) {
     return {
       message: '🚫 Sending is disabled on this profile (no send whitelist configured). This is the safe default.',
       deniedRecipient: recipients[0],
+      code: 'send_disabled',
     };
   }
 
@@ -307,6 +308,7 @@ function checkSendWhitelist(rules: ApplicableRules, recipients: string[] | null)
       return {
         message: `🚫 Unauthorized recipient. '${recipient}' is not in the send whitelist.`,
         deniedRecipient: recipient,
+        code: 'recipient_not_whitelisted',
       };
     }
   }
@@ -330,16 +332,29 @@ async function policyDenialWithLink(
 ) {
   if (!action) return textResult(message);
   try {
-    const url = await mintApprovalUrl(DASHBOARD_URL, conn.user.id, proxyKeyId, action);
-    captureServerEvent(conn.user.clerkUserId, 'approval_link_minted', { action: action.action });
+    const { url, jti } = await mintApprovalLink(DASHBOARD_URL, conn.user.id, proxyKeyId, action);
+    captureServerEvent(conn.user.clerkUserId, 'approval_link_minted', { action: action.action, link_id: jti });
+    addToolCallProps({ approval_link_id: jti });
     return textResult(
-      `${message}\n👉 Share this link with the user to approve it in one click (single-use, expires in ${approvalLinkMinutes(action.action)} minutes): ${url}`,
+      `${message}\n👉 Share this link with the user to approve it in one click (single-use, expires in ${approvalLinkMinutes(action.action)} minutes): ${url}\n` +
+      AGENT_APPROVAL_PROTOCOL,
     );
   } catch (err) {
     console.error('[MCP] Failed to mint approval link:', err);
     return textResult(message);
   }
 }
+
+/**
+ * Appended to every denial that carries an approval link. Timeline analysis of
+ * the 2026-08 launch cohort showed most minted links were never opened: agents
+ * paraphrased the denial (dropping the URL) and retried the denied call in a
+ * loop, re-minting links the user never saw. Say the quiet part out loud.
+ */
+const AGENT_APPROVAL_PROTOCOL =
+  'IMPORTANT — how to handle this: (1) Show the link above to the user VERBATIM as a clickable URL; only they can open it, and it is the only way to get access. ' +
+  '(2) Do NOT retry the denied call until the user says they approved — retrying just fails again. ' +
+  '(3) If the link expires before they open it, call request_access to mint a fresh one.';
 
 /**
  * Send denials offer BOTH one-click options: approve just this recipient, or
@@ -353,17 +368,20 @@ async function sendDenialWithLinks(
   denial: SendDenial,
 ) {
   const lines = [denial.message];
+  addToolCallProps({ denial_code: denial.code });
   try {
     if (denial.deniedRecipient) {
-      const oneUrl = await mintApprovalUrl(DASHBOARD_URL, conn.user.id, proxyKeyId, {
+      const one = await mintApprovalLink(DASHBOARD_URL, conn.user.id, proxyKeyId, {
         action: 'send_whitelist', recipient: denial.deniedRecipient,
       });
-      lines.push(`👉 Allow sending to '${denial.deniedRecipient}' only — share this one-click link with the user (single-use, expires in 15 minutes): ${oneUrl}`);
+      lines.push(`👉 Allow sending to '${denial.deniedRecipient}' only — share this one-click link with the user (single-use, expires in 15 minutes): ${one.url}`);
+      captureServerEvent(conn.user.clerkUserId, 'approval_link_minted', { action: 'send_whitelist', link_id: one.jti, via: 'send_denial' });
     }
-    const allUrl = await mintApprovalUrl(DASHBOARD_URL, conn.user.id, proxyKeyId, { action: 'send_all' });
-    lines.push(`👉 Or allow sending to ANY recipient from this profile — share this one-click link with the user instead (single-use, expires in 15 minutes): ${allUrl}`);
+    const all = await mintApprovalLink(DASHBOARD_URL, conn.user.id, proxyKeyId, { action: 'send_all' });
+    lines.push(`👉 Or allow sending to ANY recipient from this profile — share this one-click link with the user instead (single-use, expires in 15 minutes): ${all.url}`);
+    captureServerEvent(conn.user.clerkUserId, 'approval_link_minted', { action: 'send_all', link_id: all.jti, via: 'send_denial' });
     lines.push('Present both options and let the user pick; "any recipient" is the convenient choice if they expect to send freely, and it stays revocable from the dashboard rules.');
-    captureServerEvent(conn.user.clerkUserId, 'approval_link_minted', { action: 'send' });
+    lines.push(AGENT_APPROVAL_PROTOCOL);
   } catch (err) {
     console.error('[MCP] Failed to mint approval link:', err);
   }
@@ -381,9 +399,12 @@ function describeGoogleError(status: number, data: unknown, targetEmail: string)
     || (typeof data === 'string' ? data.slice(0, 300) : '');
   switch (status) {
     case 401:
-      return `❌ Google authorization expired for '${targetEmail}'. The account owner needs to reconnect Google in the FGAC dashboard, then retry.`;
+      return `❌ Google authorization expired for '${targetEmail}'. STOP — do not retry; it will keep failing. ` +
+        `Ask the user to reconnect this Google account here: ${DASHBOARD_URL}/dashboard/accounts — then retry once after they confirm.`;
     case 403:
-      return `❌ Google denied the request (403): ${detail || 'insufficient permissions or missing OAuth scope for this operation'}.`;
+      return `❌ Google denied the request (403): ${detail || 'insufficient permissions or missing OAuth scope for this operation'}. ` +
+        `This means Google's grant for '${targetEmail}' is missing a scope or was revoked — retrying will NOT fix it. ` +
+        `Ask the user to reconnect the account here: ${DASHBOARD_URL}/dashboard/accounts — then retry once after they confirm.`;
     case 404:
       return `❌ Google resource not found (404)${detail ? `: ${detail}` : ''}. Check the ID and try again.`;
     case 429:
@@ -517,16 +538,19 @@ async function checkSheetsPermission(userId: string, proxyKeyId: string, spreads
   });
 
   if (sheetsRules.length === 0) {
+    addToolCallProps({ denial_code: 'sheets_not_exposed' });
     return { allowed: false as const, denial: 'not_exposed' as const, reason: `🚫 Access Denied: Spreadsheet '${spreadsheetId}' is not exposed in your FGAC rules.` };
   }
 
   if (sheetsRules.some(r => r.actionType === 'sheet_block')) {
+    addToolCallProps({ denial_code: 'sheets_blocked' });
     return { allowed: false as const, denial: 'blocked' as const, reason: `🚫 Access Denied: Access to spreadsheet '${spreadsheetId}' is explicitly blocked.` };
   }
 
   if (isMutating) {
     const hasReadWrite = sheetsRules.some(r => r.actionType === 'sheet_read_write');
     if (!hasReadWrite) {
+      addToolCallProps({ denial_code: 'sheets_read_only' });
       return { allowed: false as const, denial: 'read_only' as const, reason: `🚫 Access Denied: Write access to spreadsheet '${spreadsheetId}' is restricted (Read Only).` };
     }
   }
@@ -757,9 +781,63 @@ async function executeRawGoogleCall(
   body?: string | Record<string, unknown>,
 ) {
   const cls = classifyGoogleApiCall(path, method);
-  if (cls.kind === 'denied') return textResult(cls.reason);
+  if (cls.kind === 'denied') {
+    addToolCallProps({ denial_code: cls.code });
+    return textResult(cls.reason);
+  }
 
   const cleanPath = path.replace(/^\/+/, '');
+
+  if (cls.kind === 'sheets_create') {
+    // Agent-created sheets are allowed and auto-granted to the calling key
+    // (read & write): the Sheets policy protects the user's EXISTING sheets,
+    // not the agent's own output. The drive.file scope already limits the app
+    // to picked files + files it created, so no new Google-side exposure.
+    const url = `https://sheets.googleapis.com/${cleanPath.replace(/^sheets\//, '')}`;
+    const result = await googleFetch(url, resolved.token, method, serializeBody(body), resolved.targetEmail);
+    if (!result.ok) return errorResult(result.error);
+    const created = result.data as { spreadsheetId?: unknown; properties?: { title?: unknown } };
+    const newId = typeof created?.spreadsheetId === 'string' ? created.spreadsheetId : null;
+    if (newId) {
+      const title = typeof created?.properties?.title === 'string' ? created.properties.title : null;
+      try {
+        const [rule] = await db.insert(accessRules).values({
+          userId: conn.user.id,
+          ruleName: `Agent-created: ${title || newId}`,
+          service: 'sheets',
+          actionType: 'sheet_read_write',
+          targetResourceId: newId,
+          resourceName: title,
+        }).returning();
+        await db.insert(keyRuleAssignments).values({ proxyKeyId: resolved.proxyKeyId, accessRuleId: rule.id });
+        captureServerEvent(conn.user.clerkUserId, 'agent_sheet_created', {
+          spreadsheet_id: newId, auto_granted: true,
+        });
+        addToolCallProps({ sheet_created: true });
+      } catch (err) {
+        // The sheet exists either way; a failed auto-grant just means the next
+        // access denies and mints an approval link — degraded, not broken.
+        console.error('[MCP] Failed to auto-grant agent-created sheet:', err);
+        captureServerEvent(conn.user.clerkUserId, 'agent_sheet_created', {
+          spreadsheet_id: newId, auto_granted: false,
+        });
+      }
+    }
+    return jsonResult(result.data);
+  }
+
+  if (cls.kind === 'passthrough') {
+    // Classify-don't-block: unknown Google API families are forwarded with
+    // the account's token (Google's scopes are the enforcement backstop) and
+    // tagged so demand is visible in analytics before we build rules for it.
+    addToolCallProps({ raw_api_family: cls.family, raw_api_passthrough: true });
+    const url = cleanPath.includes('spreadsheets')
+      ? `https://sheets.googleapis.com/${cleanPath.replace(/^sheets\//, '')}`
+      : `https://www.googleapis.com/${cleanPath}`;
+    const result = await googleFetch(url, resolved.token, method, serializeBody(body), resolved.targetEmail);
+    if (!result.ok) return errorResult(result.error);
+    return jsonResult(result.data);
+  }
 
   if (cls.kind === 'sheets') {
     const perm = await checkSheetsPermission(conn.user.id, resolved.proxyKeyId, cls.spreadsheetId, cls.isMutating);
@@ -827,10 +905,23 @@ const handler = createMcpHandler(
           return textResult('❌ No proxy key assigned.');
         }
         const emails = await getAccessibleEmails(conn.proxyKeyId);
+        // Onboarding nudge: list_accounts is most new users' first (and for
+        // many, only) call — 2026-08 launch analytics showed a large cohort
+        // stopping right here. Tell the agent what a useful next step is and
+        // how more mailboxes get added, so the dead end becomes a path.
         return jsonResult({
           accounts: emails.map(e => e.targetEmail),
           default: conn.user.email,
           nickname: conn.nickname,
+          next_steps: {
+            gmail: "Read a mailbox with gmail_list (pass account: '<address>' to target a specific one; defaults to the primary). Reads work out of the box.",
+            sheets: 'Spreadsheet access is granted per sheet: call sheets_get_spreadsheet with a spreadsheetId, or request_access — a denial returns a one-click approval link for the user.',
+            sending: 'Email sending is off by default; the first gmail_send returns a one-click approval link the user can use to whitelist the recipient.',
+          },
+          add_more_accounts: {
+            own_account: `To add another Gmail account the user owns: ${DASHBOARD_URL}/dashboard/accounts → "Accessible Gmail Accounts" → add the account and complete Google sign-in for it.`,
+            someone_elses: `To access someone else's mailbox: that person signs up at ${DASHBOARD_URL} and uses "Delegations You've Granted" on their own Accounts page to delegate their mailbox to this user. It then appears here automatically.`,
+          },
         });
       }
     );
@@ -1159,15 +1250,16 @@ const handler = createMcpHandler(
             : { action: 'sheets_write', spreadsheetId };
         }
 
-        const url = await mintApprovalUrl(DASHBOARD_URL, conn.user.id, conn.proxyKeyId, action);
-        captureServerEvent(conn.user.clerkUserId, 'approval_link_minted', { action: action.action, via: 'request_access' });
+        const { url, jti } = await mintApprovalLink(DASHBOARD_URL, conn.user.id, conn.proxyKeyId, action);
+        captureServerEvent(conn.user.clerkUserId, 'approval_link_minted', { action: action.action, via: 'request_access', link_id: jti });
+        addToolCallProps({ approval_link_id: jti });
         return jsonResult({
           status: 'approval_required',
           summary: action.action === 'send_whitelist'
             ? `Requesting permission to send email to ${recipient}`
             : `Requesting ${type === 'sheets_read' ? 'read-only' : 'read & write'} access to spreadsheet ${spreadsheetId}`,
           approvalUrl: url,
-          note: 'Nothing has been granted. Share the approval link with the user — it is single-use, expires in 15 minutes, and only they can approve it. Retry the original operation after they approve.',
+          note: `Nothing has been granted. Show the approval link to the user VERBATIM as a clickable URL — it is single-use, expires in ${approvalLinkMinutes(action.action)} minutes, and only they can approve it. Do not retry the original operation until they confirm; if the link expires unused, call request_access again.`,
         });
       }
     );

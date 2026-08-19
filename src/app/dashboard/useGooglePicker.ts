@@ -3,6 +3,8 @@
 import { useState, useCallback, useEffect } from 'react';
 import { useUser, useReverification } from '@clerk/nextjs';
 import { isReverificationCancelledError } from '@clerk/nextjs/errors';
+import { usePostHog } from 'posthog-js/react';
+import { startGoogleReconnect, type ClerkUserLike } from './googleReconnect';
 
 declare global {
   interface Window {
@@ -30,8 +32,23 @@ export interface PickedSheet {
  */
 export function useGooglePicker(onSheetsPicked: (sheets: PickedSheet[], context?: string) => void) {
   const { user } = useUser();
+  const posthog = usePostHog();
   const [isLoading, setIsLoading] = useState(false);
   const [gapiLoaded, setGapiLoaded] = useState(false);
+  // A failed flow must SAY so — a button that silently does nothing sent a
+  // real user away (2026-08-19). Consumers render this next to the trigger.
+  const [pickerError, setPickerError] = useState<string | null>(null);
+
+  const RECONNECT_ADVICE =
+    'Google authorization could not start. Reconnect your Google account from Dashboard → Accounts, then come back to this link and try again.';
+
+  const failFlow = useCallback((stage: string, err: unknown, advice: string) => {
+    const message = err instanceof Error ? err.message : String(err ?? 'unknown error');
+    console.error(`[picker] ${stage}:`, err);
+    posthog?.capture('picker_flow_error', { stage, message });
+    setPickerError(advice);
+    setIsLoading(false);
+  }, [posthog]);
 
   // Dynamically load Google API script (api.js)
   useEffect(() => {
@@ -53,6 +70,7 @@ export function useGooglePicker(onSheetsPicked: (sheets: PickedSheet[], context?
 
   const openPickerFlow = useCallback(async (context?: string, fromOAuthReturn = false) => {
     if (!user) return;
+    setPickerError(null);
     setIsLoading(true);
 
     try {
@@ -66,11 +84,27 @@ export function useGooglePicker(onSheetsPicked: (sheets: PickedSheet[], context?
         return data;
       };
 
-      let tokenData = await fetchToken();
+      // A broken/expired Google grant makes the token bridge FAIL outright —
+      // and the reconnect leg below is exactly the repair for that. Entering
+      // it on failure breaks the circular dependency that used to kill the
+      // flow at step 1 ("No Google account connected or missing token",
+      // observed 2026-08-19: the user's only symptom was a dead button).
+      let tokenData: { hasDriveFileScope?: boolean; accessToken?: string; appId?: string };
+      try {
+        tokenData = await fetchToken();
+      } catch (err) {
+        if (fromOAuthReturn) {
+          failFlow('token_after_oauth', err,
+            'Google did not return a usable authorization. Reconnect your Google account from Dashboard → Accounts, then come back to this link and try again.');
+          return;
+        }
+        console.warn('[picker] token bridge failed — routing into Google reconnect:', err);
+        tokenData = { hasDriveFileScope: false };
+      }
       if (fromOAuthReturn && !tokenData.hasDriveFileScope) {
         for (let attempt = 0; attempt < 4 && !tokenData.hasDriveFileScope; attempt++) {
           await new Promise(r => setTimeout(r, 1500));
-          tokenData = await fetchToken();
+          try { tokenData = await fetchToken(); } catch { /* keep polling; final state handled below */ }
         }
       }
 
@@ -82,8 +116,8 @@ export function useGooglePicker(onSheetsPicked: (sheets: PickedSheet[], context?
       // Never from the OAuth return leg — that would loop.
       if (!tokenData.hasDriveFileScope) {
         if (fromOAuthReturn) {
-          alert('Google did not grant Sheets access. Please try "Add Google Sheet" again.');
-          setIsLoading(false);
+          failFlow('oauth_return_scope_missing', 'drive.file still missing after consent',
+            'Google did not grant Sheets access on that pass — this usually means the consent screen was closed early, or a second authorization round is needed. Click the pick button again to retry; if it keeps happening, reconnect Google from Dashboard → Accounts.');
           return;
         }
 
@@ -94,36 +128,21 @@ export function useGooglePicker(onSheetsPicked: (sheets: PickedSheet[], context?
         params.set('autoOpenPicker', 'true');
         if (context) params.set('pickerContext', context);
         const autoRedirectUrl = `${window.location.origin}${window.location.pathname}?${params.toString()}`;
-        let verificationUrl: string | undefined;
 
-        if (existingGoogleAccount && existingGoogleAccount.verification?.status === 'verified') {
-          const response = await existingGoogleAccount.reauthorize({
-            additionalScopes: ['https://www.googleapis.com/auth/drive.file'],
-            redirectUrl: autoRedirectUrl,
-            oidcPrompt: 'consent'
-          });
-          verificationUrl = response.verification?.externalVerificationRedirectURL?.href;
-        } else {
-          if (existingGoogleAccount) {
-            await existingGoogleAccount.destroy();
-          }
-          const response = await user.createExternalAccount({
-            strategy: 'oauth_google',
-            redirectUrl: autoRedirectUrl,
-          });
-          verificationUrl = response.verification?.externalVerificationRedirectURL?.href;
+        try {
+          window.location.href = await startGoogleReconnect(
+            user as unknown as ClerkUserLike, autoRedirectUrl,
+          );
+        } catch (err) {
+          failFlow('google_reauthorize', err, RECONNECT_ADVICE);
         }
-
-        if (verificationUrl) {
-          window.location.href = verificationUrl;
-          return;
-        }
+        return;
       }
 
       // 3. Launch Google Picker
       if (!window.gapi || !window.google) {
-        alert('Google Picker library loading... Please try again in a moment.');
-        setIsLoading(false);
+        failFlow('gapi_not_loaded', 'window.gapi/google missing',
+          'The Google Picker script has not finished loading — wait a moment and click again. If it persists, check for content blockers on apis.google.com.');
         return;
       }
 
@@ -159,10 +178,10 @@ export function useGooglePicker(onSheetsPicked: (sheets: PickedSheet[], context?
 
       picker.setVisible(true);
     } catch (err) {
-      console.error('Error opening Google Picker:', err);
-      setIsLoading(false);
+      failFlow('open_picker', err,
+        'Something went wrong opening the Google Picker. Retry the pick button; if it keeps failing, reconnect Google from Dashboard → Accounts and then return to this link.');
     }
-  }, [user, onSheetsPicked]);
+  }, [user, onSheetsPicked, failFlow]);
 
   // Automatically launch Google Picker if returning from OAuth reauthorization
   // redirect. The component consuming this hook must live on the page the
@@ -192,15 +211,18 @@ export function useGooglePicker(onSheetsPicked: (sheets: PickedSheet[], context?
       await enhancedOpenPicker(context);
     } catch (err) {
       if (!isReverificationCancelledError(err)) {
-        console.error('Picker error:', err);
+        failFlow('trigger', err,
+          'Something went wrong starting the Google flow. Retry the pick button; if it keeps failing, reconnect Google from Dashboard → Accounts and then return to this link.');
+      } else {
+        setIsLoading(false);
       }
-      setIsLoading(false);
     }
   };
 
   return {
     triggerAddSheets,
     isLoading,
-    gapiLoaded
+    gapiLoaded,
+    pickerError
   };
 }
