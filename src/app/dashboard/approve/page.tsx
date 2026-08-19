@@ -3,7 +3,8 @@ import { redirect } from "next/navigation";
 import { auth } from "@clerk/nextjs/server";
 import { verifyApprovalToken, describeApproval, approvalLinkMinutes, peekApprovalToken } from "@/lib/approvalLinks";
 import { captureServerEvent } from "@/lib/posthogServer";
-import { approveMagicLink } from "../actions";
+import { approveMagicLink, approvalLinkStatus } from "../actions";
+import { ApproveSubmitButton } from "./ApproveSubmitButton";
 import { SheetsApprovalFlow } from "./SheetsApprovalFlow";
 import { ApprovedSettling } from "./ApprovedSettling";
 
@@ -84,6 +85,9 @@ export default async function ApprovePage({
   }
 
   const verified = await verifyApprovalToken(token);
+  // Truth-at-load: a used link renders its real state up front instead of
+  // letting the user click Approve into an "already used" surprise.
+  const linkState = verified.ok ? await approvalLinkStatus(token) : "invalid";
 
   // Link-funnel instrumentation: joins minted → opened → approved by link_id
   // (the token jti). The 2026-08 launch cohort's biggest approval leak was
@@ -93,7 +97,7 @@ export default async function ApprovePage({
     ? { jti: verified.payload.jti, action: verified.payload.action }
     : peekApprovalToken(token);
   captureServerEvent(clerkUserId ?? "anonymous-approve", "approval_link_opened", {
-    status: verified.ok ? "valid" : verified.reason,
+    status: verified.ok ? linkState : verified.reason,
     link_id: peek.jti,
     action: peek.action,
   });
@@ -115,6 +119,32 @@ export default async function ApprovePage({
 
   const p = verified.payload;
   const linkMinutes = approvalLinkMinutes(p.action);
+
+  if (linkState === "already_granted") {
+    return (
+      <Card>
+        <h1 className="mb-2 text-xl font-bold text-success-foreground">✓ Already approved</h1>
+        <p className="text-sm text-muted-foreground">
+          {describeApproval(p)} — this permission is already active, so there is
+          nothing more to do here. The agent can retry its request now. You can
+          review or remove the grant any time from your dashboard rules.
+        </p>
+      </Card>
+    );
+  }
+  if (linkState === "used_inactive") {
+    return (
+      <Card>
+        <h1 className="mb-2 text-xl font-bold text-foreground">Link already used</h1>
+        <p className="text-sm text-muted-foreground">
+          This link was used, and the permission it described is not active
+          anymore — it may have been revoked, or granted under a different
+          sheet picked in Google. Nothing was changed just now. If the agent
+          still needs access, ask it to request access again for a fresh link.
+        </p>
+      </Card>
+    );
+  }
 
   async function approve(formData: FormData) {
     "use server";
@@ -166,12 +196,7 @@ export default async function ApprovePage({
       ) : (
         <form action={approve} className="flex flex-col gap-4">
           <input type="hidden" name="token" value={token} />
-          <button
-            type="submit"
-            className="rounded-sm bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground hover:opacity-90"
-          >
-            Approve this grant
-          </button>
+          <ApproveSubmitButton />
         </form>
       )}
       <p className="mt-4 text-xs text-subtle">

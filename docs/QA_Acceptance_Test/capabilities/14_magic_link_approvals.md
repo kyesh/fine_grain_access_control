@@ -34,10 +34,18 @@
   Picker pick comes first (capability 17 A2/A4). After approving Read-only,
   the retried read succeeds and a write still fails
 
-### A4: Links are single-use and expire
-- Reuse the already-approved A2 link; separately, open a link older than its
-  expiry window
-- **Expected**: Both are rejected with a clear message and change nothing
+### A4: Used links are idempotent while granted, refused once revoked; links expire
+- Reuse the already-approved A2 link; then revoke the granted rule from the
+  dashboard and open the same link again; separately, open a link older than
+  its expiry window
+- **Expected**: While the grant is active, both opening and re-approving the
+  used link render "Already approved" (success tone, no button, nothing
+  written — idempotent re-use, 2026-08-19 change). After the grant is revoked,
+  the used link renders "Link already used" and never re-grants (replaying an
+  old link must not resurrect revoked permissions). The expired link is
+  rejected with a clear message. The approve page shows these states at page
+  LOAD, not after clicking Approve, and `approval_link_opened` records
+  status already_granted / used_inactive / expired accordingly
 
 ### A5: Another user's session cannot approve
 - Open a USER_A denial link in a browser session signed in as USER_B
