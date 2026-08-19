@@ -74,7 +74,16 @@ export function SheetsApprovalFlow({
     }
   };
 
-  const { triggerAddSheets, isLoading: pickerLoading } = useGooglePicker(handleSheetsPicked);
+  const { triggerAddSheets, isLoading: pickerLoading, pickerError } = useGooglePicker(handleSheetsPicked);
+
+  // A failed Google flow must be visible with a way forward — the silent
+  // do-nothing button sent a real user away (2026-08-19).
+  const pickerErrorBox = pickerError ? (
+    <div className="rounded-md border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-foreground [overflow-wrap:anywhere]" data-testid="picker-error">
+      <span className="font-semibold">Google flow failed: </span>{pickerError}{" "}
+      <a href="/dashboard/accounts" className="underline hover:opacity-80">Open the Accounts page</a>
+    </div>
+  ) : null;
 
   const sheetLabel = resourceName || spreadsheetId;
   const levelChoice = action === "sheets_expose";
@@ -96,6 +105,7 @@ export function SheetsApprovalFlow({
           sheet when you choose it in Google&apos;s own file picker — that per-file
           permission is all FGAC runs on (nothing else in your Drive is shared).
         </div>
+        {pickerErrorBox}
         {state.pickFailed && (
           <p className="text-sm text-muted-foreground">
             No sheet was selected. Open the picker and choose the sheet the
@@ -191,6 +201,7 @@ export function SheetsApprovalFlow({
           That&apos;s not right — pick a different sheet
         </button>
       )}
+      {pickerErrorBox}
     </form>
   );
 }

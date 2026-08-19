@@ -125,7 +125,7 @@ export function AgentProfilesView({
       console.error('Failed to save exposed sheets:', e);
     }
   }, []);
-  const { triggerAddSheets, isLoading: pickerLoading } = useGooglePicker(handleSheetsPicked);
+  const { triggerAddSheets, isLoading: pickerLoading, pickerError } = useGooglePicker(handleSheetsPicked);
 
   const { sheetRules, gmailRules } = useMemo(() => {
     if (!active) return { sheetRules: [], gmailRules: [] };
@@ -178,6 +178,7 @@ export function AgentProfilesView({
                 allRules={rules}
                 onExpose={() => triggerAddSheets(active.id)}
                 exposing={pickerLoading}
+                pickerError={pickerError}
               />
 
               <GmailRulesCard
@@ -439,12 +440,14 @@ function SheetsRulesCard({
   rules,
   allRules,
   onExpose,
+  pickerError,
   exposing,
 }: {
   profileId: string;
   rules: Rule[];
   allRules: Rule[];
   onExpose: () => void;
+  pickerError: string | null;
   exposing: boolean;
 }) {
   // "+ Expose a sheet" opens the Google Picker directly — picking a sheet is
@@ -465,6 +468,12 @@ function SheetsRulesCard({
         }
       />
       <div className="px-5 pb-5 space-y-2">
+        {pickerError && (
+          <div className="rounded-md border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-foreground [overflow-wrap:anywhere]" data-testid="picker-error">
+            <span className="font-semibold">Google flow failed: </span>{pickerError}{" "}
+            <a href="/dashboard/accounts" className="underline hover:opacity-80">Open the Accounts page</a>
+          </div>
+        )}
         {rules.length === 0 ? (
           <EmptyState>
             No sheets exposed to this profile. Click &quot;+ Expose a sheet&quot; to pick
