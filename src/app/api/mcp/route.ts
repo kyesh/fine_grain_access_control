@@ -930,8 +930,15 @@ const handler = createMcpHandler(
         if (!attachmentResult.ok) return errorResult(attachmentResult.error);
 
         const attachment = attachmentResult.data as { size?: number; data?: string };
-        if (attachment.data && attachment.data.length > MAX_ATTACHMENT_CHARS) {
-          const approxKb = Math.round((attachment.data.length * 3) / 4 / 1024);
+        // Size observability: MCP clients impose their own tool-result caps
+        // (Claude Code rejects results over ~25k tokens ≈ 75k base64 chars),
+        // so a "success" here can still be discarded client-side. Recording
+        // the payload size on every outcome lets analytics separate real
+        // successes from ones that likely died in the client.
+        const attachmentChars = attachment.data?.length ?? 0;
+        const approxKb = Math.round((attachmentChars * 3) / 4 / 1024);
+        addToolCallProps({ attachment_chars: attachmentChars, attachment_kb: approxKb });
+        if (attachmentChars > MAX_ATTACHMENT_CHARS) {
           return textResult(`⚠️ Attachment is ~${approxKb} KB, which exceeds the ~150 KB limit for MCP responses. Ask the user to retrieve it directly from Gmail.`);
         }
         return jsonResult(attachment);
