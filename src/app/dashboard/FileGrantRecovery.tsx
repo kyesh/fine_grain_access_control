@@ -115,8 +115,7 @@ export function FileGrantRecovery({
           <>
             <h1 className="mb-2 text-xl font-bold text-success-foreground">✓ {shortCap} access verified</h1>
             <p className="text-sm text-muted-foreground">
-              Google now shares {resourceName ? <strong>{fileLabel}</strong> : `the selected ${short}`} with
-              FGAC and your access rule is active. The agent can retry its request now.
+              {"Google now shares "}{resourceName ? <strong>{fileLabel}</strong> : `the selected ${short}`}{" with FGAC and your access rule is active. The agent can retry its request now."}
             </p>
           </>
         ) : (
@@ -126,22 +125,18 @@ export function FileGrantRecovery({
             </h1>
             <p className="mb-1 text-sm text-muted-foreground [overflow-wrap:anywhere]">
               {fromApproval
-                ? <>Your FGAC rule for <strong>{fileLabel}</strong> is saved, but Google hasn&apos;t shared the {short} itself with FGAC yet.</>
-                : <>FGAC has a rule for <strong>{fileLabel}</strong>, but Google hasn&apos;t shared the {short} itself with FGAC yet.</>}
+                ? <>{"Your FGAC rule for "}<strong>{fileLabel}</strong>{` is saved, but Google hasn't shared the ${short} itself with FGAC yet.`}</>
+                : <>{"FGAC has a rule for "}<strong>{fileLabel}</strong>{`, but Google hasn't shared the ${short} itself with FGAC yet.`}</>}
             </p>
             <p className="mb-5 text-sm text-muted-foreground">
-              Google only shares a {short} when you pick it in Google&apos;s own file
-              picker — that&apos;s the per-file permission FGAC runs on (nothing else
-              in your Drive is shared). Pick the {short} below and you&apos;re done.
+              {`Google only shares a ${short} when you pick it in Google's own file picker — that's the per-file permission FGAC runs on (nothing else in your Drive is shared). Pick the ${short} below and you're done.`}
             </p>
 
             {status === "picked_other" && (
               <div className="mb-5 rounded-md border border-warning-foreground/30 bg-warning px-4 py-3 text-sm text-warning-foreground [overflow-wrap:anywhere]">
-                The {short}(s) you picked are now shared with FGAC — but none of them
-                matched the exact {d.noun} the agent asked for
-                {fileId ? <> (ID <code className="font-mono text-xs">{fileId}</code>)</> : null}.
-                If the agent guessed a wrong ID, that&apos;s fine: ask it to retry using
-                the {short} you just picked. Otherwise, pick the exact {short} again.
+                {`The ${short}(s) you picked are now shared with FGAC — but none of them matched the exact ${d.noun} the agent asked for`}
+                {fileId ? <>{" (ID "}<code className="font-mono text-xs">{fileId}</code>{")"}</> : null}
+                {`. If the agent guessed a wrong ID, that's fine: ask it to retry using the ${short} you just picked. Otherwise, pick the exact ${short} again.`}
               </div>
             )}
 

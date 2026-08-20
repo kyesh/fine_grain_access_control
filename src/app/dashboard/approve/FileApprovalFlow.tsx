@@ -108,16 +108,12 @@ export function FileApprovalFlow({
     return (
       <div className="flex flex-col gap-4" data-testid={`${testPrefix}-flow-pick-first`}>
         <div className="rounded-md border border-warning-foreground/30 bg-warning px-4 py-3 text-sm text-warning-foreground [overflow-wrap:anywhere]">
-          Google hasn&apos;t shared <strong>{fileLabel}</strong> with FGAC yet, so
-          there&apos;s nothing to approve until you pick it. Google only shares a
-          {" "}{short} when you choose it in Google&apos;s own file picker — that per-file
-          permission is all FGAC runs on (nothing else in your Drive is shared).
+          {"Google hasn't shared "}<strong>{fileLabel}</strong>{` with FGAC yet, so there's nothing to approve until you pick it. Google only shares a ${short} when you choose it in Google's own file picker — that per-file permission is all FGAC runs on (nothing else in your Drive is shared).`}
         </div>
         {pickerErrorBox}
         {state.pickFailed && (
           <p className="text-sm text-muted-foreground">
-            No {short} was selected. Open the picker and choose the {short} the
-            agent should reach.
+            {`No ${short} was selected. Open the picker and choose the ${short} the agent should reach.`}
           </p>
         )}
         <button
@@ -158,17 +154,12 @@ export function FileApprovalFlow({
 
       {substituting && (
         <div className="rounded-md border border-warning-foreground/30 bg-warning px-4 py-3 text-sm text-warning-foreground [overflow-wrap:anywhere]" data-testid={`${testPrefix}-flow-substitution`}>
-          You picked <strong>{grantTargets}</strong>, but the agent asked for a
-          different {short} ID (<code className="font-mono text-xs">{fileId}</code>)
-          that Google says you don&apos;t have. Most likely the agent had the wrong
-          ID. Approving grants access to <strong>what you picked</strong> — and
-          nothing for the ID the agent sent; the agent will find the right
-          {" "}{short} in its permissions.
+          {"You picked "}<strong>{grantTargets}</strong>{`, but the agent asked for a different ${short} ID (`}<code className="font-mono text-xs">{fileId}</code>{") that Google says you don't have. Most likely the agent had the wrong ID. Approving grants access to "}<strong>what you picked</strong>{` — and nothing for the ID the agent sent; the agent will find the right ${short} in its permissions.`}
         </div>
       )}
       {!substituting && (
         <div className="rounded-md border border-border bg-secondary/30 px-4 py-3 text-sm text-foreground [overflow-wrap:anywhere]">
-          Granting access to <strong>{grantTargets}</strong>
+          {"Granting access to "}<strong>{grantTargets}</strong>
           {state.title && resourceName === null ? " (verified with Google)" : ""}.
         </div>
       )}
