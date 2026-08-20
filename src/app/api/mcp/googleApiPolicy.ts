@@ -12,6 +12,8 @@
 export type RawCallClass =
   | { kind: 'sheets'; spreadsheetId: string; isMutating: boolean }
   | { kind: 'sheets_create' }
+  | { kind: 'docs'; documentId: string; isMutating: boolean }
+  | { kind: 'docs_create' }
   | { kind: 'gmail_read' }
   | { kind: 'gmail_send' }
   | { kind: 'passthrough'; family: string; isMutating: boolean }
@@ -24,6 +26,11 @@ export type DenialCode =
 
 export function extractSheetsSpreadsheetId(path: string): string | null {
   const match = path.match(/(?:v4\/spreadsheets|sheets\/v4\/spreadsheets|spreadsheets)\/([^/?:#]+)/);
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
+export function extractDocsDocumentId(path: string): string | null {
+  const match = path.match(/(?:v1\/documents|docs\/v1\/documents|documents)\/([^/?:#]+)/);
   return match ? decodeURIComponent(match[1]) : null;
 }
 
@@ -57,6 +64,19 @@ export function classifyGoogleApiCall(rawPath: string, method: string): RawCallC
       return { kind: 'passthrough', family: 'spreadsheets', isMutating };
     }
     return { kind: 'sheets', spreadsheetId, isMutating };
+  }
+
+  if (segments.includes('documents')) {
+    const documentId = extractDocsDocumentId(path);
+    if (!documentId) {
+      // POST v1/documents = create. Same posture as sheets_create: the Docs
+      // policy keeps agents out of the user's EXISTING documents, not out of
+      // making new ones — the route handler auto-grants the created id to
+      // the calling key. Anything else id-less is nonsense Google rejects.
+      if (isMutating) return { kind: 'docs_create' };
+      return { kind: 'passthrough', family: 'documents', isMutating };
+    }
+    return { kind: 'docs', documentId, isMutating };
   }
 
   if (segments[0] === 'gmail') {
@@ -134,24 +154,41 @@ export function collectLabelIds(value: unknown, depth = 0): string[] {
   return out;
 }
 
-// ─── Sheets denial → approval action (magic links) ──────────────────────────
+// ─── Per-file denial → approval action (magic links) ────────────────────────
 
-export type SheetsDenialKind = 'not_exposed' | 'blocked' | 'read_only';
+export type FileDenialKind = 'not_exposed' | 'blocked' | 'read_only';
+export type SheetsDenialKind = FileDenialKind;
 
 /**
- * Which grant a denied Sheets operation should request. The action must match
- * the access level the DENIED OPERATION requires — a write denied on an
- * unexposed sheet must request write access; minting a read-only exposure
+ * Which grant a denied per-file operation should request. The action must
+ * match the access level the DENIED OPERATION requires — a write denied on an
+ * unexposed file must request write access; minting a read-only exposure
  * there sends the user through an approval that cannot satisfy the retry
  * (tester finding, 2026-08-15). Explicit blocks never mint an action:
  * weakening a deliberate block stays a dashboard act.
  */
+function fileApprovalLevel(denial: FileDenialKind, isMutating: boolean): 'expose' | 'write' | null {
+  if (denial === 'blocked') return null;
+  if (denial === 'read_only') return 'write';
+  return isMutating ? 'write' : 'expose';
+}
+
 export function sheetsApprovalAction(
   denial: SheetsDenialKind,
   spreadsheetId: string,
   isMutating: boolean,
 ): { action: 'sheets_expose' | 'sheets_write'; spreadsheetId: string } | null {
-  if (denial === 'blocked') return null;
-  if (denial === 'read_only') return { action: 'sheets_write', spreadsheetId };
-  return { action: isMutating ? 'sheets_write' : 'sheets_expose', spreadsheetId };
+  const level = fileApprovalLevel(denial, isMutating);
+  if (!level) return null;
+  return { action: level === 'write' ? 'sheets_write' : 'sheets_expose', spreadsheetId };
+}
+
+export function docsApprovalAction(
+  denial: FileDenialKind,
+  documentId: string,
+  isMutating: boolean,
+): { action: 'docs_expose' | 'docs_write'; documentId: string } | null {
+  const level = fileApprovalLevel(denial, isMutating);
+  if (!level) return null;
+  return { action: level === 'write' ? 'docs_write' : 'docs_expose', documentId };
 }
