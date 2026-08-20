@@ -8,7 +8,7 @@ import { DRIVE_FILE_KINDS, type DriveFileKind } from "@/lib/driveFileKinds";
 
 const SHEETS_DEMO_EMBED = "https://share.descript.com/embed/Fv9pwXugLUa";
 
-type GrantStatus = "checking" | "needs_grant" | "verified" | "picked_other";
+type GrantStatus = "checking" | "needs_grant" | "verified" | "verified_other";
 
 /**
  * Recovery UI for the "FGAC approved, Google grant missing" state — shared
@@ -94,9 +94,12 @@ export function FileGrantRecovery({
       if (ok) {
         setStatus("verified");
       } else {
-        // The pick registered grants, just not for the file the agent asked
-        // for — most likely the agent had the wrong id. Say so.
-        setStatus(picked.length > 0 ? "picked_other" : "needs_grant");
+        // The user's pick is authoritative (product decision 2026-08-20):
+        // whatever they picked is now shared and usable — render SUCCESS,
+        // never a warning. Most likely the agent simply had the wrong id;
+        // verified_other adds one informational line about that, nothing
+        // blocking. Only an empty pick returns to needs_grant.
+        setStatus(picked.length > 0 ? "verified_other" : "needs_grant");
       }
     } finally {
       setBusy(false);
@@ -111,12 +114,21 @@ export function FileGrantRecovery({
   return (
     <div className="mx-auto mt-12 max-w-2xl px-6 pb-16">
       <div className="rounded-lg border border-border bg-card p-8">
-        {status === "verified" ? (
+        {status === "verified" || status === "verified_other" ? (
           <>
-            <h1 className="mb-2 text-xl font-bold text-success-foreground">✓ {shortCap} access verified</h1>
+            <h1 className="mb-2 text-xl font-bold text-success-foreground">
+              {status === "verified" ? `✓ ${shortCap} access verified` : `✓ ${shortCap} access granted`}
+            </h1>
             <p className="text-sm text-muted-foreground">
-              {"Google now shares "}{resourceName ? <strong>{fileLabel}</strong> : `the selected ${short}`}{" with FGAC and your access rule is active. The agent can retry its request now."}
+              {status === "verified"
+                ? <>{"Google now shares "}{resourceName ? <strong>{fileLabel}</strong> : `the selected ${short}`}{" with FGAC and your access rule is active. The agent can retry its request now."}</>
+                : `Google now shares the ${short}(s) you picked with FGAC and their access rules are active. The agent can use them now — it will find them in its permissions.`}
             </p>
+            {status === "verified_other" && fileId && (
+              <p className="mt-3 text-xs text-subtle [overflow-wrap:anywhere]">
+                {`Heads up: the specific ${d.noun} ID the agent originally asked for (`}<code className="font-mono">{fileId}</code>{`) wasn't among your picks — most likely the agent guessed a wrong ID. Nothing to fix on your end; if the agent really needs that exact ${short}, it can request access again.`}
+              </p>
+            )}
           </>
         ) : (
           <>
@@ -132,14 +144,7 @@ export function FileGrantRecovery({
               {`Google only shares a ${short} when you pick it in Google's own file picker — that's the per-file permission FGAC runs on (nothing else in your Drive is shared). Pick the ${short} below and you're done.`}
             </p>
 
-            {status === "picked_other" && (
-              <div className="mb-5 rounded-md border border-warning-foreground/30 bg-warning px-4 py-3 text-sm text-warning-foreground [overflow-wrap:anywhere]">
-                {`The ${short}(s) you picked are now shared with FGAC — but none of them matched the exact ${d.noun} the agent asked for`}
-                {fileId ? <>{" (ID "}<code className="font-mono text-xs">{fileId}</code>{")"}</> : null}
-                {`. If the agent guessed a wrong ID, that's fine: ask it to retry using the ${short} you just picked. Otherwise, pick the exact ${short} again.`}
-              </div>
-            )}
-
+            
             <button
               onClick={() => triggerAddSheets(fileId ?? undefined)}
               disabled={pickerLoading || busy || status === "checking"}
@@ -161,7 +166,7 @@ export function FileGrantRecovery({
         )}
       </div>
 
-      {status !== "verified" && kind === "sheet" && (
+      {status !== "verified" && status !== "verified_other" && kind === "sheet" && (
         <div className="mt-6 rounded-lg border border-border bg-card p-2.5">
           <div className="px-1.5 pb-2 pt-1 text-sm font-semibold text-foreground">
             Watch how it works (2 min)
