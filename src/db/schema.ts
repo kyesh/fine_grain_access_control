@@ -83,10 +83,10 @@ export const accessRules = pgTable('access_rules', {
   userId: uuid('user_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
   targetEmail: text('target_email'), // NULL = applies to all emails, or specific email address
   ruleName: text('rule_name').notNull(), // e.g., "Block Project X" or "Q3 Financials Read Only"
-  service: text('service').notNull(), // 'gmail', 'sheets'
-  actionType: text('action_type').notNull(), // Gmail: 'read_blacklist', 'send_whitelist', etc. | Sheets: 'sheet_read', 'sheet_read_write', 'sheet_block'
+  service: text('service').notNull(), // 'gmail', 'sheets', 'docs'
+  actionType: text('action_type').notNull(), // Gmail: 'read_blacklist', 'send_whitelist', etc. | Sheets: 'sheet_read', 'sheet_read_write', 'sheet_block' | Docs: 'doc_read', 'doc_read_write', 'doc_block'
   regexPattern: text('regex_pattern'), // Optional: Gmail regex pattern or label ID
-  targetResourceId: text('target_resource_id'), // e.g. spreadsheetId for Google Sheets
+  targetResourceId: text('target_resource_id'), // e.g. spreadsheetId (sheets) or documentId (docs)
   resourceName: text('resource_name'), // e.g. human-readable document title "Q3 Financials"
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
