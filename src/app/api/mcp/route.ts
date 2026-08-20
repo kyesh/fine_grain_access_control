@@ -457,10 +457,13 @@ function fileGrantErrorResult(kind: DriveFileKind, result: { error: string; stat
   if (result.status === 403 || result.status === 404) {
     const d = DRIVE_FILE_KINDS[kind];
     const short = kind === 'sheet' ? 'sheet' : d.noun;
+    // Only the sheets setup page embeds a demo video today — the error must
+    // not promise docs users a video that isn't there (QA 19 A12 finding).
+    const setupBlurb = kind === 'sheet' ? ' (includes a short how-to video)' : '';
     return errorResult(
       `❌ FGAC allows this ${d.noun}, but Google hasn't shared the ${short} itself with FGAC yet, so Google rejected the call (${result.status}). ` +
       `This is a one-time setup step only the user can do: they must pick this ${short} in Google's file picker. ` +
-      `👉 Send the user here to finish setup (includes a short how-to video): ${DASHBOARD_URL}${d.setupPath}?${d.setupIdParam}=${encodeURIComponent(fileId)} ` +
+      `👉 Send the user here to finish setup${setupBlurb}: ${DASHBOARD_URL}${d.setupPath}?${d.setupIdParam}=${encodeURIComponent(fileId)} ` +
       `Note: a wrong ${d.noun} ID produces this same error — the setup page verifies real access before reporting success, so it resolves either case. Retry after the user confirms.`,
     );
   }

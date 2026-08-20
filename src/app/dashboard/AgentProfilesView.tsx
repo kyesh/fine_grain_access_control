@@ -113,6 +113,30 @@ export function AgentProfilesView({
     }
   }, []);
 
+  // fileId → Google-side grant state per kind. A rule can exist without
+  // Google ever having shared the file (approved via magic link, never
+  // picked) — those rows get a "Needs Google access" chip (capability 17
+  // A6 names the profile card, not just the Accounts manager). Verification
+  // failing entirely degrades to no chips, never a broken card.
+  const [grantStates, setGrantStates] = useState<{ sheet: Record<string, { state: string }>; doc: Record<string, { state: string }> }>({ sheet: {}, doc: {} });
+  useEffect(() => {
+    let cancelled = false;
+    const load = async (path: string): Promise<Record<string, { state: string }>> => {
+      try {
+        const res = await fetch(path);
+        const data = await res.json();
+        return data.grants ?? {};
+      } catch {
+        return {};
+      }
+    };
+    Promise.all([
+      load('/api/rules/verify-sheets-access'),
+      load('/api/rules/verify-docs-access'),
+    ]).then(([sheet, doc]) => { if (!cancelled) setGrantStates({ sheet, doc }); });
+    return () => { cancelled = true; };
+  }, [rules]);
+
   useEffect(() => { fetchConnections(); }, [fetchConnections]);
 
   const active = activeProfiles.find(p => p.id === activeId) ?? null;
@@ -190,6 +214,7 @@ export function AgentProfilesView({
                 kind="sheet"
                 profileId={active.id}
                 rules={sheetRules}
+                grantStates={grantStates.sheet}
                 onExpose={() => triggerAddSheets(active.id)}
                 exposing={pickerLoading}
                 pickerError={pickerError}
@@ -199,6 +224,7 @@ export function AgentProfilesView({
                 kind="doc"
                 profileId={active.id}
                 rules={docRules}
+                grantStates={grantStates.doc}
                 onExpose={() => triggerAddDocs(active.id)}
                 exposing={docsPickerLoading}
                 pickerError={docsPickerError}
@@ -488,6 +514,7 @@ function FilesRulesCard({
   kind,
   profileId,
   rules,
+  grantStates,
   onExpose,
   pickerError,
   exposing,
@@ -495,10 +522,15 @@ function FilesRulesCard({
   kind: 'sheet' | 'doc';
   profileId: string;
   rules: Rule[];
+  /** fileId → Google-side grant state; missing entries mean "unknown" (no chip). */
+  grantStates: Record<string, { state: string }>;
   onExpose: () => void;
   pickerError: string | null;
   exposing: boolean;
 }) {
+  const setup = kind === 'sheet'
+    ? { path: '/dashboard/sheets-setup', idParam: 'sid', noun: 'sheet' }
+    : { path: '/dashboard/docs-setup', idParam: 'did', noun: 'doc' };
   // "+ Expose a …" opens the Google Picker directly — picking a file is
   // the whole flow, whether or not it was already exposed elsewhere (the
   // server action merges assignments instead of narrowing them). No detour
@@ -539,6 +571,15 @@ function FilesRulesCard({
                     {rule.resourceName || rule.ruleName}
                   </span>
                   {isGlobal(rule) && <Badge tone="neutral">Global</Badge>}
+                  {rule.targetResourceId && grantStates[rule.targetResourceId]?.state === 'missing' && (
+                    <a
+                      href={`${setup.path}?${setup.idParam}=${encodeURIComponent(rule.targetResourceId)}${rule.resourceName ? `&name=${encodeURIComponent(rule.resourceName)}` : ''}`}
+                      className="inline-flex shrink-0 items-center gap-1 rounded-full border border-warning-foreground/30 bg-warning px-2 py-0.5 text-[11px] font-semibold text-warning-foreground hover:opacity-80"
+                      title={`FGAC has this rule, but Google hasn't shared the ${setup.noun} with FGAC yet — agents get errors until you pick it in the Google Picker.`}
+                    >
+                      ⚠ Needs Google access — finish setup
+                    </a>
+                  )}
                 </div>
                 {rule.targetResourceId && (
                   <code className="mt-1 block truncate font-mono text-[11px] text-subtle">
