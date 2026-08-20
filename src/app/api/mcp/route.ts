@@ -265,8 +265,27 @@ async function getGoogleToken(targetEmail: string, keyOwner: { id: string; email
   }
 
   const client = await clerkClient();
-  const tokenResponse = await client.users.getUserOauthAccessToken(tokenOwnerClerkId, 'oauth_google');
-  return tokenResponse.data?.[0]?.token || null;
+  try {
+    const tokenResponse = await client.users.getUserOauthAccessToken(tokenOwnerClerkId, 'oauth_google');
+    const token = tokenResponse.data?.[0]?.token || null;
+    if (!token) addToolCallProps({ google_token_error: 'no_token' });
+    return token;
+  } catch (err) {
+    // Observability for the "Clerk cannot refresh the Google token" failure
+    // mode (Clerk 422: grant stored without a refresh token — seen on the
+    // dev instance 2026-08-20, cause unconfirmed in prod). Without this,
+    // these failures are indistinguishable from generic errors in analytics.
+    const message = err instanceof Error ? err.message : String(err);
+    const reason = /refresh/i.test(message) ? 'refresh_failed' : 'clerk_error';
+    addToolCallProps({ google_token_error: reason });
+    captureServerEvent(keyOwner.clerkUserId, 'google_token_fetch_failed', {
+      reason,
+      via: 'mcp',
+      account_delegated: targetEmail.toLowerCase() !== keyOwner.email.toLowerCase(),
+    });
+    console.error(`[MCP] Google token fetch failed (${reason}) for target mailbox:`, message);
+    return null;
+  }
 }
 
 // loadApplicableRules / checkReadRestrictions moved to src/lib/gmailRules.ts —

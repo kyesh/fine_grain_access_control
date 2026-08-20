@@ -47,6 +47,29 @@ type ProxyTelemetry = {
  * either an FGAC denial or an upstream Google 403 — the status is recorded
  * as-is; the key/user attribution is what matters for usage analytics.
  */
+
+/**
+ * Clerk Google-token fetch with refresh-failure observability (see the MCP
+ * route's getGoogleToken): a Clerk "cannot refresh" 422 otherwise surfaces
+ * as a generic 403, indistinguishable in analytics from real permission
+ * problems. Returns null on any failure.
+ */
+async function fetchClerkGoogleToken(clerkUserIdForToken: string, reporterClerkUserId: string): Promise<string | null> {
+  const client = await clerkClient();
+  try {
+    const tokenResponse = await client.users.getUserOauthAccessToken(clerkUserIdForToken, 'oauth_google');
+    return tokenResponse.data?.[0]?.token || null;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    captureServerEvent(reporterClerkUserId, 'google_token_fetch_failed', {
+      reason: /refresh/i.test(message) ? 'refresh_failed' : 'clerk_error',
+      via: 'proxy',
+    });
+    console.error('[PROXY] Google token fetch failed:', message);
+    return null;
+  }
+}
+
 async function trackedProxyRequest(request: NextRequest, params: { path: string[] }) {
   const telemetry: ProxyTelemetry = {};
   const started = Date.now();
@@ -271,9 +294,7 @@ async function handleProxyRequest(request: NextRequest, params: { path: string[]
       }
 
       // Fetch Real Google Token from Clerk
-      const client = await clerkClient();
-      const tokenResponse = await client.users.getUserOauthAccessToken(dbUser.clerkUserId, 'oauth_google');
-      const realGoogleToken = tokenResponse.data?.[0]?.token;
+      const realGoogleToken = await fetchClerkGoogleToken(dbUser.clerkUserId, dbUser.clerkUserId);
 
       if (!realGoogleToken) {
         return NextResponse.json({
@@ -359,9 +380,7 @@ async function handleProxyRequest(request: NextRequest, params: { path: string[]
         }
       }
 
-      const client = await clerkClient();
-      const tokenResponse = await client.users.getUserOauthAccessToken(dbUser.clerkUserId, 'oauth_google');
-      const realGoogleToken = tokenResponse.data?.[0]?.token;
+      const realGoogleToken = await fetchClerkGoogleToken(dbUser.clerkUserId, dbUser.clerkUserId);
 
       if (!realGoogleToken) {
         return NextResponse.json({
@@ -583,9 +602,7 @@ async function handleProxyRequest(request: NextRequest, params: { path: string[]
     }
 
     // ─── 8. Fetch Real Google Token from Clerk ──────────────────────────────
-    const client = await clerkClient();
-    const tokenResponse = await client.users.getUserOauthAccessToken(tokenOwnerClerkUserId, 'oauth_google');
-    const realGoogleToken = tokenResponse.data?.[0]?.token;
+    const realGoogleToken = await fetchClerkGoogleToken(tokenOwnerClerkUserId, dbUser.clerkUserId);
 
     if (!realGoogleToken) {
       return NextResponse.json({

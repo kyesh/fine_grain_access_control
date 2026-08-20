@@ -70,7 +70,16 @@ export async function getOwnerGoogleToken(clerkUserId: string): Promise<string |
     // googleAccess.ts).
     const tokens = await client.users.getUserOauthAccessToken(clerkUserId, 'google');
     return tokens.data?.[0]?.token || null;
-  } catch {
+  } catch (err) {
+    // Same observability as the MCP path: a Clerk "cannot refresh" here means
+    // grant verification will read as `missing` for a user whose real problem
+    // is a dead token, not a missing pick. Make that measurable.
+    const message = err instanceof Error ? err.message : String(err);
+    const { captureServerEvent } = await import('@/lib/posthogServer');
+    captureServerEvent(clerkUserId, 'google_token_fetch_failed', {
+      reason: /refresh/i.test(message) ? 'refresh_failed' : 'clerk_error',
+      via: 'grant_check',
+    });
     return null;
   }
 }
