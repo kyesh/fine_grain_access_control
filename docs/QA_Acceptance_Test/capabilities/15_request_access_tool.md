@@ -33,9 +33,17 @@
 - **Expected**: The request link names the spreadsheet; after approval the
   append succeeds; before approval it was denied
 
+### A7: Docs access via request_access mirrors the sheets flows
+- `request_access` with `type=docs_read` and a `documentId` (and again with
+  `type=docs_write` on a Read-only doc)
+- **Expected**: Mints a single-use `docs_expose` / `docs_write` link naming
+  the document (30-minute TTL); nothing is granted until the owner approves;
+  after approval the corresponding docs call succeeds. Omitting `documentId`
+  is refused with the requestable-permissions explanation.
+
 ### A5: Unsupported capabilities are refused without a link
 - Call `request_access` for an unsupported grant (e.g. deleting mail, or a
-  non-Gmail/Sheets Google API)
+  non-Gmail/Sheets/Docs Google API)
 - **Expected**: Refused with an explanation of what is requestable; no
   approval link is minted
 

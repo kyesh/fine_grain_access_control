@@ -47,6 +47,7 @@ export function FileApprovalFlow({
   const [state, setState] = useState<FlowState>({ step: "checking" });
   const d = DRIVE_FILE_KINDS[kind];
   const short = kind === "sheet" ? "sheet" : d.noun;
+  const testPrefix = kind === "sheet" ? "sheets" : "docs";
   const verifyPath = kind === "sheet" ? "/api/rules/verify-sheets-access" : "/api/rules/verify-docs-access";
 
   useEffect(() => {
@@ -97,7 +98,7 @@ export function FileApprovalFlow({
 
   if (state.step === "checking") {
     return (
-      <p className="text-sm text-muted-foreground" data-testid="file-flow-checking">
+      <p className="text-sm text-muted-foreground" data-testid={`${testPrefix}-flow-checking`}>
         Checking whether Google already shares this {short} with FGAC…
       </p>
     );
@@ -105,7 +106,7 @@ export function FileApprovalFlow({
 
   if (state.step === "need_pick") {
     return (
-      <div className="flex flex-col gap-4" data-testid="file-flow-pick-first">
+      <div className="flex flex-col gap-4" data-testid={`${testPrefix}-flow-pick-first`}>
         <div className="rounded-md border border-warning-foreground/30 bg-warning px-4 py-3 text-sm text-warning-foreground [overflow-wrap:anywhere]">
           Google hasn&apos;t shared <strong>{fileLabel}</strong> with FGAC yet, so
           there&apos;s nothing to approve until you pick it. Google only shares a
@@ -151,12 +152,12 @@ export function FileApprovalFlow({
     : (state.title || fileLabel);
 
   return (
-    <form action={approveAction} className="flex flex-col gap-4" data-testid="file-flow-confirm">
+    <form action={approveAction} className="flex flex-col gap-4" data-testid={`${testPrefix}-flow-confirm`}>
       <input type="hidden" name="token" value={token} />
       {picked && <input type="hidden" name="picked" value={JSON.stringify(picked)} />}
 
       {substituting && (
-        <div className="rounded-md border border-warning-foreground/30 bg-warning px-4 py-3 text-sm text-warning-foreground [overflow-wrap:anywhere]" data-testid="file-flow-substitution">
+        <div className="rounded-md border border-warning-foreground/30 bg-warning px-4 py-3 text-sm text-warning-foreground [overflow-wrap:anywhere]" data-testid={`${testPrefix}-flow-substitution`}>
           You picked <strong>{grantTargets}</strong>, but the agent asked for a
           different {short} ID (<code className="font-mono text-xs">{fileId}</code>)
           that Google says you don&apos;t have. Most likely the agent had the wrong

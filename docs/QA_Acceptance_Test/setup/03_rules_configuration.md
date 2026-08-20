@@ -119,3 +119,27 @@ All rules are managed from the **"Access Rules"** section at the bottom of the d
 - [ ] Global read blacklist rule visible with "Global (all keys)" scope
 - [ ] Delete whitelist rule visible
 - [ ] Screenshot saved as `qa_proof_setup_rules.png`
+
+---
+
+## Per-File Fixtures (Sheets & Docs)
+
+Capabilities 09/17 (sheets) and 19 (docs) need per-file fixtures owned by
+USER_A. Record the actual ids in the local, gitignored QA state
+(`test/qa-envs/*/state.json` or the run notes) — **never in these public
+docs**:
+
+- **Exposed spreadsheet**: a sheet picked at least once through the FGAC
+  Google Picker (the standing QA fixture sheet qualifies).
+- **Exposed document**: a Google Doc picked at least once through the FGAC
+  Picker (Documents view). Create one at docs.google.com as USER_A if none
+  exists, give it a title and a line of content, then pick it via
+  `/dashboard/accounts` → "Add Google Doc +".
+- **External (never-picked) document**: a Google Doc created directly at
+  docs.google.com and NEVER picked — the negative-control fixture for
+  capability 19 A6/A11/A12. If a run consumes it (by picking it), create a
+  fresh one; note Google's Picker/Drive search can lag minutes behind on
+  brand-new files, so create fixtures ahead of the run.
+- A fresh Neon branch resets FGAC rules but NOT Google-side drive.file
+  grants — "exposed" fixtures stay granted across branches; the external doc
+  must simply never be picked.

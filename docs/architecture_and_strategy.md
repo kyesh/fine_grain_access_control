@@ -94,15 +94,16 @@ Each proxy key can access multiple email accounts (via `key_email_access`):
 | CLI | `npx fgac auth login` (separate npm package) | Power users, headless flows |
 | Direct API | `Bearer sk_proxy_...` to `gmail.fgac.ai` | Custom integrations |
 
-### Google Sheets Per-File Access Control (`drive.file`)
-In addition to Gmail, FGAC natively supports Google Sheets using Google's **Per-File Access Scope (`https://www.googleapis.com/auth/drive.file`)**.
+### Google Sheets & Docs Per-File Access Control (`drive.file`)
+In addition to Gmail, FGAC natively supports Google Sheets and Google Docs using Google's **Per-File Access Scope (`https://www.googleapis.com/auth/drive.file`)**.
 
-#### Key Architecture Principles for Sheets:
-1. **Zero CASA Audit Overhead**: Utilizing `drive.file` scope avoids restricted scope audits, requiring only standard Google verification (3-7 days, $0 cost).
-2. **Google Picker Integration**: Users intentionally select specific spreadsheets via the native Google Picker UI. Google's servers bind file permissions directly to the app's scope grant on Google's authorization servers.
-3. **FGAC Per-File Rules**: For each exposed spreadsheet, users can configure per-file permissions in the dashboard:
-   - **`sheet_read` (Read Only)**: Agents can fetch structure and read range data (`GET`), but mutating operations (`POST`, `PUT`, `PATCH`, `DELETE`) return `403 Forbidden`.
-   - **`sheet_read_write` (Read & Write)**: Agents can read cell ranges, update cell values, and append rows.
-   - **`sheet_block` (Blocked)**: Explicitly denies all agent operations for that file ID.
-4. **MCP Tools**: Exposes `sheets_get_spreadsheet`, `sheets_read_range`, `sheets_update_range`, and `sheets_append_rows` tools for MCP clients.
+#### Key Architecture Principles for Per-File Access:
+1. **Zero CASA Audit Overhead**: Utilizing `drive.file` scope avoids restricted scope audits, requiring only standard Google verification (3-7 days, $0 cost). Adding Docs required **no new OAuth scope** — the same per-file grants serve both file types.
+2. **Google Picker Integration**: Users intentionally select specific spreadsheets/documents via the native Google Picker UI (`SPREADSHEETS` or `DOCUMENTS` view). Google's servers bind file permissions directly to the app's scope grant on Google's authorization servers.
+3. **FGAC Per-File Rules**: For each exposed file, users configure per-file permissions in the dashboard (`sheet_*` action types for spreadsheets, `doc_*` for documents):
+   - **`sheet_read` / `doc_read` (Read Only)**: Agents can read (`GET`), but mutating operations return `403 Forbidden`.
+   - **`sheet_read_write` / `doc_read_write` (Read & Write)**: Agents can read and write. Note: the Docs API's only write endpoint is `batchUpdate`, so Read & Write on a document permits full-document editing — the dashboard copy states this plainly.
+   - **`sheet_block` / `doc_block` (Blocked)**: Explicitly denies all agent operations for that file ID while keeping the underlying Google grant.
+4. **MCP Tools**: Sheets — `sheets_get_spreadsheet`, `sheets_read_range`, `sheets_update_range`, `sheets_append_rows`. Docs — `docs_read_document` (returns the raw Docs API resource; optional `fields` mask for large documents), `docs_append_text` (non-destructive), `docs_replace_text`. Agent-created files (raw `POST v4/spreadsheets` / `POST v1/documents`) are auto-granted read & write to the creating key.
+5. **Kind descriptor**: everything per-file (rules, Picker exposure, grant verification, recovery pages, approval links) keys off `src/lib/driveFileKinds.ts`. Adding the next file type (Slides is stubbed) means a descriptor entry + tool definitions + QA docs — shared code must not grow `if (kind === ...)` branches.
 

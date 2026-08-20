@@ -34,6 +34,10 @@
   the backstop). With the standard grant, drive.file limits results to
   picked/app-created files. The `$mcp_tool_call` event carries
   `raw_api_passthrough: true` and `raw_api_family: 'drive/v3'`.
+- **No longer passthrough**: the `documents` family graduated to enforced
+  per-document rules when Google Docs support landed — a raw
+  `v1/documents/<id>` call must be FGAC-classified (capability 19 A6), never
+  `raw_api_passthrough`. Sheets and Docs are both enforced families now.
 
 ### A4: Non-send Gmail write is denied
 - `google_api_modify` with path `gmail/v1/users/me/messages/<any-id>/modify`

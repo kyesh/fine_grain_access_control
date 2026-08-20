@@ -169,6 +169,17 @@ No tmux sessions to clean up. Results are saved to `test/qa-envs/cc-cli/evals/re
   `skip` here with reason "browser assertions covered by 01_hosted_mcp").
 - A4 retry: re-run the eval post-recovery → success payload in transcript.
 
+## Capability: Docs Management (→ capabilities/19_docs_management.md)
+
+- Headless `claude -p` evals invoking the docs tools through the local MCP
+  config: read exposed fixture (A7), denied external doc with docs_expose
+  link (A6), append/replace level checks (A8), block (A9), create/auto-grant
+  (A10). Proxy assertions (A11) via the scripts' curl helpers.
+- Browser halves (A1–A4, A12) are executed once per run via `/browser-agent`
+  (shared with the other environments).
+
+---
+
 ## Capability: Analytics Events (→ capabilities/16_analytics_events.md)
 
 > Run LAST — it inspects the PostHog events the capabilities above generated.

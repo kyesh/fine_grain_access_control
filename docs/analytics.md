@@ -38,6 +38,8 @@ keep internal/QA traffic out of the numbers.
 | `read_restriction_enforced` | server (`/api/mcp`) | `via` (tool name), `restriction` |
 | `sheets_grant_verification` | server (approve-page load via `/api/rules/verify-sheets-access`, and approval in `actions.ts`) | `result` (`ok`/`missing`/`unknown`), `via` (`link_open`/`magic_link`/`post_approval`), `spreadsheet_id` |
 | `sheets_grant_recovered` | server (`/api/rules/verify-sheets-access`) | `spreadsheet_id` |
+| `docs_grant_verification` / `docs_grant_recovered` | server (`/api/rules/verify-docs-access`, approval in `actions.ts`) | docs twins of the sheets grant-funnel events, with `document_id` |
+| `agent_doc_created` | server (`/api/mcp`, raw `POST v1/documents`) | `document_id`, `auto_granted` (docs twin of `agent_sheet_created`) |
 | `connector_install_started` | server (`.well-known` OAuth discovery routes, `/api/mcp` auth layer) | `touchpoint` (`oauth_discovery`/`mcp_401`), `endpoint`, `reason` (`no_token`/`invalid_token`), `method`, `user_agent` |
 
 The two `sheets_grant_*` events instrument the **picker-first sheets
@@ -74,7 +76,22 @@ Sheets failures whose matching FGAC rule is fresh also carry
 `sheets_grant_age_seconds`, and when the post-approval grace retry engaged,
 `sheets_grace_retries` + `sheets_grace_recovered` — `recovered=true` volume is
 the direct measure of how often the drive.file propagation race would have
-surfaced an error to an agent.
+surfaced an error to an agent. Google Docs calls carry the same trio under
+`docs_grant_age_seconds` / `docs_grace_retries` / `docs_grace_recovered`.
+
+**Response-size monitoring (google-docs-support plan v5, D7 — monitoring
+only, no caps):** every `$mcp_tool_call` event carries `response_chars` and
+`response_kb`, the serialized size of the tool result FGAC returned. MCP
+clients impose their own tool-result budgets (Claude Code rejects results
+over ~25k tokens), so a server-side "success" can be silently discarded
+client-side. The confirmation question these props exist to answer: what
+fraction of successful reads exceed ~25k tokens' worth of chars for
+`client_name`-identified Claude Code connections, and do those calls
+correlate with abandoned tool sequences? If material, per-kind caps with
+recovery guidance get built (Phase 6 of the plan) with thresholds calibrated
+from this distribution. `gmail_get_attachment` keeps its historical
+`attachment_chars`/`attachment_kb` alongside the generic props; its
+pre-existing 200k-char cap is unchanged.
 
 **`connector_install_started` is a rate metric, not an identity metric.** It
 fires anonymously (distinct_id `anonymous-mcp`) from the only FGAC-owned
