@@ -3,15 +3,15 @@ import { grantFileAccessGET, grantFileAccessPOST, grantFileAccessDELETE } from '
 
 export const dynamic = 'force-dynamic';
 
-/** /api/rules/grant-sheets-access — see fileAccessHandlers.ts. */
+/** /api/rules/grant-docs-access — see fileAccessHandlers.ts. */
 export async function GET() {
-  return grantFileAccessGET('sheet');
+  return grantFileAccessGET('doc');
 }
 
 export async function POST(request: NextRequest) {
-  return grantFileAccessPOST('sheet', request);
+  return grantFileAccessPOST('doc', request);
 }
 
 export async function DELETE(request: NextRequest) {
-  return grantFileAccessDELETE('sheet', request);
+  return grantFileAccessDELETE('doc', request);
 }

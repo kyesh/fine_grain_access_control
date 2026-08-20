@@ -5,7 +5,7 @@ import { verifyApprovalToken, describeApproval, approvalLinkMinutes, peekApprova
 import { captureServerEvent } from "@/lib/posthogServer";
 import { approveMagicLink, approvalLinkStatus } from "../actions";
 import { ApproveSubmitButton } from "./ApproveSubmitButton";
-import { SheetsApprovalFlow } from "./SheetsApprovalFlow";
+import { FileApprovalFlow } from "./FileApprovalFlow";
 import { ApprovedSettling } from "./ApprovedSettling";
 
 /* ─── Magic-link approval page (connector-growth Phase C) ────────────────
@@ -37,18 +37,20 @@ function Card({ children }: { children: React.ReactNode }) {
 export default async function ApprovePage({
   searchParams,
 }: {
-  searchParams: Promise<{ token?: string; result?: string; message?: string; sid?: string; notice?: string }>;
+  searchParams: Promise<{ token?: string; result?: string; message?: string; sid?: string; did?: string; notice?: string }>;
 }) {
   const params = await searchParams;
 
   if (params.result === "ok") {
-    // Sheets approvals settle asynchronously on Google's side — verify the
-    // grant is live before claiming the agent can retry (grant-race fix).
-    if (params.sid) {
+    // Per-file (sheets/docs) approvals settle asynchronously on Google's
+    // side — verify the grant is live before claiming the agent can retry
+    // (grant-race fix).
+    if (params.sid || params.did) {
       return (
         <Card>
           <ApprovedSettling
-            spreadsheetId={params.sid}
+            kind={params.sid ? "sheet" : "doc"}
+            fileId={(params.sid || params.did)!}
             message={params.message || "The permission has been granted."}
           />
         </Card>
@@ -174,9 +176,16 @@ export default async function ApprovePage({
         if (result.needsSheetsGrant.resourceName) q.set("name", result.needsSheetsGrant.resourceName);
         redirect(`/dashboard/sheets-setup?${q.toString()}`);
       }
+      if (result.needsDocsGrant) {
+        const q = new URLSearchParams({ did: result.needsDocsGrant.documentId, from: "approval" });
+        if (result.needsDocsGrant.resourceName) q.set("name", result.needsDocsGrant.resourceName);
+        redirect(`/dashboard/docs-setup?${q.toString()}`);
+      }
       const settle = result.grantedSpreadsheetId
         ? `&sid=${encodeURIComponent(result.grantedSpreadsheetId)}`
-        : "";
+        : result.grantedDocumentId
+          ? `&did=${encodeURIComponent(result.grantedDocumentId)}`
+          : "";
       redirect(`/dashboard/approve?result=ok&message=${encodeURIComponent(result.description)}${settle}`);
     }
     if (result.retryable) {
@@ -191,6 +200,7 @@ export default async function ApprovePage({
   }
 
   const isSheets = (p.action === "sheets_expose" || p.action === "sheets_write") && p.spreadsheetId;
+  const isDocs = (p.action === "docs_expose" || p.action === "docs_write") && p.documentId;
 
   return (
     <Card>
@@ -206,12 +216,13 @@ export default async function ApprovePage({
           {params.notice}
         </div>
       )}
-      {isSheets ? (
-        <SheetsApprovalFlow
+      {isSheets || isDocs ? (
+        <FileApprovalFlow
           token={token}
-          spreadsheetId={p.spreadsheetId!}
+          kind={isSheets ? "sheet" : "doc"}
+          fileId={(isSheets ? p.spreadsheetId : p.documentId)!}
           resourceName={p.resourceName || null}
-          action={p.action as "sheets_expose" | "sheets_write"}
+          level={p.action.endsWith("_write") ? "write" : "expose"}
           approveAction={approve}
         />
       ) : (

@@ -1,4 +1,4 @@
-import { SheetsGrantRecovery } from "./SheetsGrantRecovery";
+import { FileGrantRecovery } from "../FileGrantRecovery";
 
 /* ─── Sheets setup / grant recovery ──────────────────────────────────────
    The landing spot whenever a sheets FGAC rule exists (or was just approved
@@ -11,8 +11,8 @@ import { SheetsGrantRecovery } from "./SheetsGrantRecovery";
    dashboard's "needs Google access" chip, and the MCP stranded-sheet error.
 
    The first-time drive.file consent redirect returns to this pathname with
-   `autoOpenPicker=true&pickerContext=<sid>` (and nothing else), so the sid
-   is restored from pickerContext on that leg. */
+   `autoOpenPicker=true&pickerKind=sheet&pickerContext=<sid>` (and nothing
+   else), so the sid is restored from pickerContext on that leg. */
 
 export default async function SheetsSetupPage({
   searchParams,
@@ -22,8 +22,9 @@ export default async function SheetsSetupPage({
   const params = await searchParams;
   const sid = params.sid || params.pickerContext || null;
   return (
-    <SheetsGrantRecovery
-      spreadsheetId={sid}
+    <FileGrantRecovery
+      kind="sheet"
+      fileId={sid}
       resourceName={params.name || null}
       fromApproval={params.from === "approval"}
     />
