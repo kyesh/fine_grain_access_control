@@ -35,6 +35,11 @@ export function FileGrantRecovery({
 }) {
   const [status, setStatus] = useState<GrantStatus>(fileId ? "checking" : "needs_grant");
   const [busy, setBusy] = useState(false);
+  // Access level applied to the pick. Read-only default; the user chooses
+  // before picking (they had no way to choose at all before 2026-08-20 —
+  // the page silently granted read-only).
+  const [level, setLevel] = useState<"read" | "read_write">("read");
+  const [grantedLevel, setGrantedLevel] = useState<"read" | "read_write">("read");
   const d = DRIVE_FILE_KINDS[kind];
   const short = kind === "sheet" ? "sheet" : d.noun;
   const verifyPath = kind === "sheet" ? "/api/rules/verify-sheets-access" : "/api/rules/verify-docs-access";
@@ -66,24 +71,29 @@ export function FileGrantRecovery({
   const handleFilesPicked = async (picked: PickedFile[]) => {
     setBusy(true);
     try {
-      // Upsert rules only for picked files that have none yet — re-POSTing
-      // an existing rule would silently reset its Read/Write choice.
+      // Read-only picks upsert only files that have no rule yet — re-POSTing
+      // an existing rule would silently downgrade a Read & Write choice. An
+      // explicit Read & Write selection applies to every picked file
+      // (upgrading an existing read-only rule is exactly what the user asked
+      // for by selecting it).
+      const chosenActionType = level === "read_write" ? d.actionTypes.readWrite : d.actionTypes.read;
       const existing = await fetch(grantPath)
         .then(r => r.json())
         .then(dta => new Set((dta[rulesKey] ?? []).map((r: { targetResourceId: string }) => r.targetResourceId)))
         .catch(() => new Set());
       for (const file of picked) {
-        if (existing.has(file.id)) continue;
+        if (level === "read" && existing.has(file.id)) continue;
         await fetch(grantPath, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             targetResourceId: file.id,
             resourceName: file.name,
-            actionType: d.actionTypes.read,
+            actionType: chosenActionType,
           }),
         });
       }
+      setGrantedLevel(level);
 
       if (!fileId) {
         // No specific file to verify — a pick is all setup requires.
@@ -122,7 +132,7 @@ export function FileGrantRecovery({
             <p className="text-sm text-muted-foreground">
               {status === "verified"
                 ? <>{"Google now shares "}{resourceName ? <strong>{fileLabel}</strong> : `the selected ${short}`}{" with FGAC and your access rule is active. The agent can retry its request now."}</>
-                : `Google now shares the ${short}(s) you picked with FGAC and their access rules are active. The agent can use them now — it will find them in its permissions.`}
+                : `Google now shares the ${short}(s) you picked with FGAC and their ${grantedLevel === "read_write" ? "Read & Write" : "Read Only"} access rules are active. The agent can use them now — it will find them in its permissions. You can change the access level any time from the dashboard.`}
             </p>
             {status === "verified_other" && fileId && (
               <p className="mt-3 text-xs text-subtle [overflow-wrap:anywhere]">
@@ -145,6 +155,17 @@ export function FileGrantRecovery({
             </p>
 
             
+            <fieldset className="mb-4 flex flex-col gap-2 text-sm text-foreground">
+              <label className="flex items-center gap-2">
+                <input type="radio" name="recovery-permission" value="read" checked={level === "read"} onChange={() => setLevel("read")} />
+                Read only
+              </label>
+              <label className="flex items-center gap-2">
+                <input type="radio" name="recovery-permission" value="read_write" checked={level === "read_write"} onChange={() => setLevel("read_write")} />
+                Read &amp; write
+              </label>
+            </fieldset>
+
             <button
               onClick={() => triggerAddSheets(fileId ?? undefined)}
               disabled={pickerLoading || busy || status === "checking"}
