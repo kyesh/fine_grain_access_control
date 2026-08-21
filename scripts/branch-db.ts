@@ -16,6 +16,17 @@ function runNeonCmd(cmd: string) {
   }
 }
 
+/** Like runNeonCmd, but returns the failure instead of exiting — for callers
+ * that can recover (e.g. branch-limit → cleanup → retry). */
+function tryNeonCmd(cmd: string): { result?: any; error?: string } {
+  try {
+    return { result: JSON.parse(execSync(`npx --yes neonctl ${cmd} -o json`, { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] })) };
+  } catch (error: any) {
+    const stderr = error?.stderr?.toString?.() ?? '';
+    return { error: (stderr || error?.message || 'unknown neonctl error').trim() };
+  }
+}
+
 async function getGitBranch() {
   if (process.env.VERCEL_GIT_COMMIT_REF) {
     return process.env.VERCEL_GIT_COMMIT_REF;
@@ -99,9 +110,28 @@ async function main() {
 
   if (!branch) {
     console.log(`🌿 Branch '${branchName}' not found. Creating from 'main'...`);
-    const created = runNeonCmd(`branches create --project-id ${projectId} --name ${branchName} --compute`);
-    if (created && created.connection_uris && created.connection_uris.length > 0) {
-      const uri = created.connection_uris[0].connection_uri;
+    // Neon caps the project at 10 branches; stale branches of merged work
+    // accumulate until creation fails. Self-heal: on a limit error, prune
+    // stale branches (scripts/cleanup-neon-branches.ts — safe rules: never
+    // the current branch, never an open PR's preview) and retry once.
+    let created = tryNeonCmd(`branches create --project-id ${projectId} --name ${branchName} --compute`);
+    if (created.error) {
+      if (!/limit/i.test(created.error)) {
+        console.error(`❌ Neon CLI error: ${created.error}`);
+        process.exit(1);
+      }
+      console.log('⚠️ Neon branch limit reached — running stale-branch cleanup and retrying...');
+      execSync('npx tsx scripts/cleanup-neon-branches.ts', { stdio: 'inherit' });
+      created = tryNeonCmd(`branches create --project-id ${projectId} --name ${branchName} --compute`);
+      if (created.error) {
+        console.error(`❌ Branch creation still failing after cleanup: ${created.error}`);
+        console.error('   Every remaining Neon branch maps to active work — free one manually.');
+        process.exit(1);
+      }
+    }
+    const createdBranch = created.result;
+    if (createdBranch && createdBranch.connection_uris && createdBranch.connection_uris.length > 0) {
+      const uri = createdBranch.connection_uris[0].connection_uri;
       console.log(`✅ Created branch '${branchName}'!`);
       await updateEnvLocal(uri);
       console.log(`🎉 Ready! Local environment connected to branch: ${branchName}`);
