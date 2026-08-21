@@ -34,6 +34,10 @@
   the backstop). With the standard grant, drive.file limits results to
   picked/app-created files. The `$mcp_tool_call` event carries
   `raw_api_passthrough: true` and `raw_api_family: 'drive/v3'`.
+- **Analytics note**: since the raw-api-classification change, EVERY raw call
+  (not just passthroughs) stamps `raw_api_kind` / `raw_api_family` /
+  `raw_api_endpoint` / `raw_api_mutating` — the event-side assertions live in
+  capability 16 A9.
 - **No longer passthrough**: the `documents` family graduated to enforced
   per-document rules when Google Docs support landed — a raw
   `v1/documents/<id>` call must be FGAC-classified (capability 19 A6), never

@@ -5,6 +5,7 @@
 import {
   classifyGoogleApiCall, extractSendRecipients, collectLabelIds,
   sheetsApprovalAction, docsApprovalAction, extractDocsDocumentId,
+  templateGoogleApiPath, rawApiFamily,
 } from '../src/app/api/mcp/googleApiPolicy';
 
 let failures = 0;
@@ -154,6 +155,64 @@ expect('blocked mints nothing (write)',
 expect('documentId carried through',
   docsApprovalAction('not_exposed', 'doc-42', true),
   (a: { documentId?: string } | null) => a?.documentId === 'doc-42');
+
+console.log('templateGoogleApiPath:');
+expect('gmail message id → {id}',
+  templateGoogleApiPath('gmail/v1/users/me/messages/18c8f2ab91d004a7'),
+  (t: string) => t === 'gmail/v1/users/me/messages/{id}');
+expect('gmail list (no id) unchanged, query stripped',
+  templateGoogleApiPath('gmail/v1/users/me/messages?maxResults=5&q=foo'),
+  (t: string) => t === 'gmail/v1/users/me/messages');
+expect('gmail attachment id → {id} (both parents)',
+  templateGoogleApiPath('/gmail/v1/users/me/messages/18c8f2ab91/attachments/ANGjdJ8w9TfWQzvvMbwFxyz'),
+  (t: string) => t === 'gmail/v1/users/me/messages/{id}/attachments/{id}');
+expect('gmail user email → {id} (email heuristic)',
+  templateGoogleApiPath('gmail/v1/users/someone@example.com/labels'),
+  (t: string) => t === 'gmail/v1/users/{id}/labels');
+expect('sheets values range with verb → {range}:append',
+  templateGoogleApiPath('v4/spreadsheets/1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms/values/Sheet1!A1:B2:append'),
+  (t: string) => t === 'v4/spreadsheets/{id}/values/{range}:append');
+expect('sheets column-only range (A:B) fully replaced',
+  templateGoogleApiPath('v4/spreadsheets/1BxiM/values/A:B'),
+  (t: string) => t === 'v4/spreadsheets/{id}/values/{range}');
+expect('sheets %-encoded range → {range}',
+  templateGoogleApiPath('v4/spreadsheets/1BxiM/values/Sheet1%21A1%3AB5'),
+  (t: string) => t === 'v4/spreadsheets/{id}/values/{range}');
+expect('docs batchUpdate keeps verb',
+  templateGoogleApiPath('v1/documents/1a2B3c4D5e6F:batchUpdate'),
+  (t: string) => t === 'v1/documents/{id}:batchUpdate');
+expect('drive file id → {id}',
+  templateGoogleApiPath('drive/v3/files/1a2B3c4D5e6F7g8H'),
+  (t: string) => t === 'drive/v3/files/{id}');
+expect('calendar event under named calendar → {id}s',
+  templateGoogleApiPath('calendar/v3/calendars/primary/events/abc123def456'),
+  (t: string) => t === 'calendar/v3/calendars/{id}/events/{id}');
+expect('short literal segments survive (me, v4, about)',
+  templateGoogleApiPath('drive/v3/about'),
+  (t: string) => t === 'drive/v3/about');
+
+console.log('rawApiFamily:');
+expect('sheets kind → spreadsheets',
+  rawApiFamily(classifyGoogleApiCall('v4/spreadsheets/1BxiM/values/A1', 'GET')),
+  (f: string | null) => f === 'spreadsheets');
+expect('sheets_create → spreadsheets',
+  rawApiFamily(classifyGoogleApiCall('v4/spreadsheets', 'POST')),
+  (f: string | null) => f === 'spreadsheets');
+expect('docs kind → documents',
+  rawApiFamily(classifyGoogleApiCall('v1/documents/d1', 'GET')),
+  (f: string | null) => f === 'documents');
+expect('gmail read → gmail',
+  rawApiFamily(classifyGoogleApiCall('gmail/v1/users/me/messages', 'GET')),
+  (f: string | null) => f === 'gmail');
+expect('gmail send → gmail',
+  rawApiFamily(classifyGoogleApiCall('gmail/v1/users/me/messages/send', 'POST')),
+  (f: string | null) => f === 'gmail');
+expect('passthrough carries classifier family',
+  rawApiFamily(classifyGoogleApiCall('calendar/v3/calendars/primary/events', 'GET')),
+  (f: string | null) => f === 'calendar/v3');
+expect('denied → null',
+  rawApiFamily(classifyGoogleApiCall('batch/gmail/v1', 'POST')),
+  (f: string | null) => f === null);
 
 if (failures > 0) {
   console.error(`\n${failures} test(s) FAILED`);
