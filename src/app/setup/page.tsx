@@ -234,11 +234,11 @@ export default function SetupPage() {
           <div className="overflow-hidden rounded-lg border border-border bg-card">
             <div className="flex items-start gap-3.5 border-b border-border px-6 py-5">
               <span className="mt-px shrink-0 rounded-full border border-sheets-border bg-sheets-bg px-2.5 py-0.5 text-xs font-bold text-sheets">
-                Sheets
+                Sheets &amp; Docs
               </span>
               <div>
                 <strong className="text-sm text-foreground">
-                  Expose spreadsheets with the Google Picker
+                  Expose spreadsheets and documents with the Google Picker
                 </strong>
                 <p className="mt-0.5 text-[13px] leading-relaxed text-muted-foreground">
                   Click <strong>+ Expose a sheet</strong> on a profile and pick
