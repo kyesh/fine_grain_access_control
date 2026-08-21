@@ -34,6 +34,7 @@ import { mintApprovalLink, approvalLinkMinutes, type ApprovalAction } from '@/li
 import { TOOL_DEFS, toolAnnotations, type FgacToolDef } from './toolDefs';
 import {
   classifyGoogleApiCall, extractSendRecipients, sheetsApprovalAction, docsApprovalAction,
+  templateGoogleApiPath, rawApiFamily,
 } from './googleApiPolicy';
 import { DRIVE_FILE_KINDS, type DriveFileKind } from '@/lib/driveFileKinds';
 
@@ -58,6 +59,7 @@ interface ConnectionApproved {
   connectionId: string;
   proxyKeyId: string | null;
   nickname: string | null;
+  clientName: string | null;
   user: { id: string; email: string; clerkUserId: string };
 }
 
@@ -188,6 +190,7 @@ async function resolveConnection(userId: string, clientId: string | undefined): 
     connectionId: connection.id,
     proxyKeyId: connection.proxyKeyId,
     nickname: connection.nickname,
+    clientName: connection.clientName,
     user: { id: user.id, email: user.email, clerkUserId: user.clerkUserId },
   };
 }
@@ -724,6 +727,10 @@ async function requireApproval(authInfo: AuthInfo | undefined): Promise<Connecti
   if (!result.authorized) {
     return textResult(pendingMessage(result));
   }
+  // Client-product attribution: today clientName is usually the opaque DCR
+  // client_id (only cli-token registrations send a real name), but stamping
+  // it means events light up as soon as DCR name capture improves.
+  if (result.clientName) addToolCallProps({ client_name: result.clientName });
   return result;
 }
 
@@ -853,6 +860,17 @@ async function executeRawGoogleCall(
   body?: string | Record<string, unknown>,
 ) {
   const cls = classifyGoogleApiCall(path, method);
+  // Product/action observability: raw calls are the highest-volume tool
+  // surface, and the classifier already knows the product — stamp it on
+  // every call (denials included) so analytics can break raw usage down by
+  // Google product and id-stripped endpoint, not just "google_api_get".
+  const family = rawApiFamily(cls);
+  addToolCallProps({
+    raw_api_kind: cls.kind,
+    raw_api_endpoint: `${method} ${templateGoogleApiPath(path)}`,
+    raw_api_mutating: method !== 'GET',
+    ...(family ? { raw_api_family: family } : {}),
+  });
   if (cls.kind === 'denied') {
     addToolCallProps({ denial_code: cls.code });
     return textResult(cls.reason);
@@ -944,8 +962,9 @@ async function executeRawGoogleCall(
   if (cls.kind === 'passthrough') {
     // Classify-don't-block: unknown Google API families are forwarded with
     // the account's token (Google's scopes are the enforcement backstop) and
-    // tagged so demand is visible in analytics before we build rules for it.
-    addToolCallProps({ raw_api_family: cls.family, raw_api_passthrough: true });
+    // flagged so demand is visible in analytics before we build rules for it
+    // (family/kind/endpoint were already stamped at classification above).
+    addToolCallProps({ raw_api_passthrough: true });
     const result = await googleFetch(rawUrl(cleanPath), resolved.token, method, serializeBody(body), resolved.targetEmail);
     if (!result.ok) return errorResult(result.error);
     return jsonResult(result.data);
@@ -1142,8 +1161,14 @@ const handler = createMcpHandler(
         if (!attachmentResult.ok) return errorResult(attachmentResult.error);
 
         const attachment = attachmentResult.data as { size?: number; data?: string };
-        if (attachment.data && attachment.data.length > MAX_ATTACHMENT_CHARS) {
-          const approxKb = Math.round((attachment.data.length * 3) / 4 / 1024);
+        // Size on EVERY outcome (port of 5aa23bd): the generic response_chars
+        // only sees the short ⚠️ message on over-cap failures, so the true
+        // attachment size must be stamped before the cap check or analytics
+        // can't tell a 200 KB refusal from a 2 MB one.
+        const attachmentChars = attachment.data?.length ?? 0;
+        const approxKb = Math.round((attachmentChars * 3) / 4 / 1024);
+        addToolCallProps({ attachment_chars: attachmentChars, attachment_kb: approxKb });
+        if (attachmentChars > MAX_ATTACHMENT_CHARS) {
           return textResult(`⚠️ Attachment is ~${approxKb} KB, which exceeds the ~150 KB limit for MCP responses. Ask the user to retrieve it directly from Gmail.`);
         }
         return jsonResult(attachment);

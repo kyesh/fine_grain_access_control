@@ -95,6 +95,71 @@ export function classifyGoogleApiCall(rawPath: string, method: string): RawCallC
   return { kind: 'passthrough', family: segments.slice(0, 2).join('/') || 'unknown', isMutating };
 }
 
+// Resource collections whose next path segment is a caller-supplied
+// identifier (message id, spreadsheet id, file id, …).
+const ID_PARENT_SEGMENTS = new Set([
+  'spreadsheets', 'documents', 'messages', 'threads', 'drafts', 'labels',
+  'attachments', 'files', 'calendars', 'events', 'tasklists', 'tasks', 'contacts',
+]);
+
+/**
+ * Id-strip a raw Google API path into a low-cardinality endpoint template for
+ * analytics (`raw_api_endpoint`), e.g.
+ * `gmail/v1/users/me/messages/18c8f2ab91` → `gmail/v1/users/me/messages/{id}`,
+ * `v4/spreadsheets/1BxiM…/values/Sheet1!A1:B2:append` →
+ * `v4/spreadsheets/{id}/values/{range}:append`.
+ * Identifiers can be customer data (and explode GROUP BY cardinality), so they
+ * must never land on events; API-surface verbs (`:append`, `:batchUpdate`)
+ * are kept because they carry the action semantics.
+ */
+export function templateGoogleApiPath(rawPath: string): string {
+  const path = rawPath.replace(/^\/+/, '').split(/[?#]/)[0];
+  const segments = path.split('/').filter(Boolean);
+  return segments.map((seg, i) => {
+    // A trailing `:verb` (letters only, ≥4 chars) is API surface, not data —
+    // the length floor keeps range colons like `A:B` from parsing as verbs.
+    const verbMatch = seg.match(/^(.*?):([A-Za-z]{4,})$/);
+    const base = verbMatch ? verbMatch[1] : seg;
+    const verb = verbMatch ? `:${verbMatch[2]}` : '';
+    const prev = i > 0 ? segments[i - 1].toLowerCase().replace(/:.*$/, '') : '';
+    let decoded = base;
+    try { decoded = decodeURIComponent(base); } catch { /* keep raw */ }
+
+    if (prev === 'values') return `{range}${verb}`;
+    if (ID_PARENT_SEGMENTS.has(prev)) return `{id}${verb}`;
+    // Fallback for families without a known parent: long or digit-bearing
+    // segments and anything email-shaped are identifiers.
+    if (decoded.length >= 25 || (decoded.length >= 10 && /\d/.test(decoded)) || decoded.includes('@')) {
+      return `{id}${verb}`;
+    }
+    return seg;
+  }).join('/');
+}
+
+/**
+ * The Google product family a classified raw call belongs to, stamped as
+ * `raw_api_family`. Known kinds map to their product; passthrough keeps the
+ * family the classifier derived from the path; denials return null (their
+ * `denial_code` already identifies them).
+ */
+export function rawApiFamily(cls: RawCallClass): string | null {
+  switch (cls.kind) {
+    case 'sheets':
+    case 'sheets_create':
+      return 'spreadsheets';
+    case 'docs':
+    case 'docs_create':
+      return 'documents';
+    case 'gmail_read':
+    case 'gmail_send':
+      return 'gmail';
+    case 'passthrough':
+      return cls.family;
+    case 'denied':
+      return null;
+  }
+}
+
 /**
  * Extract all recipient addresses (To/Cc/Bcc) from a Gmail messages/send
  * request body ({ raw: <base64url RFC 2822 message> }).
