@@ -37,8 +37,24 @@ attributable to it.
 - **Expected**: Every event carries `response_chars` and `response_kb`
   (monitoring-only — plan google-docs-support v5, D7: no size caps are
   enforced; the props exist so PostHog can measure how often responses exceed
-  MCP clients' tool-result budgets). `gmail_get_attachment` additionally keeps
-  its historical `attachment_chars`/`attachment_kb`.
+  MCP clients' tool-result budgets). `gmail_get_attachment` additionally
+  carries `attachment_chars`/`attachment_kb` on every outcome, including the
+  over-cap ⚠️ failure (first shipped with the raw-api-classification change —
+  earlier docs described these props ahead of the code).
+
+### A9: Raw Google API calls carry product/action classification
+- Inspect `$mcp_tool_call` events where `$mcp_tool_name` is `google_api_get`
+  or `google_api_modify` from this run (capability 10 generates them: a raw
+  Gmail read, a raw Sheets call, and an unknown-family passthrough).
+- **Expected**: every such event carries `raw_api_kind` (one of `sheets`,
+  `sheets_create`, `docs`, `docs_create`, `gmail_read`, `gmail_send`,
+  `passthrough`, `denied`), `raw_api_mutating`, and `raw_api_endpoint` whose
+  value is the HTTP method plus an **id-stripped** path template — it must
+  contain `{id}`/`{range}` placeholders where the call used real identifiers
+  and must NOT contain any actual spreadsheet/message/document id.
+  `raw_api_family` is present on every non-denied event (`gmail`,
+  `spreadsheets`, `documents`, or the passthrough family); denied events
+  carry `denial_code` instead.
 
 ### A1: Canonical tool-call events arrive with tool names
 - Run: `npx tsx scripts/qa-posthog-events.ts --event '$mcp_tool_call' --since <run window> --environment <tier>`

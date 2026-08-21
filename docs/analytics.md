@@ -29,7 +29,7 @@ keep internal/QA traffic out of the numbers.
 | `sign_up_started` | client (`SignUpCta.tsx`, all sign-up CTAs) | `cta_location`: nav / hero / bottom_cta |
 | `sign_up_completed` | server (Clerk webhook, `user.created`) | `$set.email` |
 | `video_played` | client (`TrackedVideoEmbed.tsx`, all Descript demo embeds) | `video_id`, `video_title`, `page` |
-| `$mcp_tool_call` | server (`/api/mcp`, every tool) | `$mcp_tool_name`, `$mcp_duration_ms`, `$mcp_is_error`, `client_id`, `outcome`, `account_email`, `account_delegated` |
+| `$mcp_tool_call` | server (`/api/mcp`, every tool) | `$mcp_tool_name`, `$mcp_duration_ms`, `$mcp_is_error`, `client_id`, `client_name`, `outcome`, `account_email`, `account_delegated`; raw tools add `raw_api_kind`, `raw_api_family`, `raw_api_endpoint`, `raw_api_mutating` |
 | `proxy_request` | server (`/api/proxy/[...path]`) | `service` (gmail/sheets/drive), `method`, `status`, `outcome`, `duration_ms`, `proxy_key_id`, `account_email`, `account_delegated` |
 | `mcp_connection_created` | server (`/api/mcp` auth layer) | `connection_id`, `client_id`, `auto_attached`, `account_age_seconds` |
 | `delegation_created` | server (dashboard action) | `delegate_email`, `reactivated` |
@@ -90,9 +90,35 @@ fraction of successful reads exceed ~25k tokens' worth of chars for
 `client_name`-identified Claude Code connections, and do those calls
 correlate with abandoned tool sequences? If material, per-kind caps with
 recovery guidance get built (Phase 6 of the plan) with thresholds calibrated
-from this distribution. `gmail_get_attachment` keeps its historical
-`attachment_chars`/`attachment_kb` alongside the generic props; its
-pre-existing 200k-char cap is unchanged.
+from this distribution. `gmail_get_attachment` additionally carries
+`attachment_chars`/`attachment_kb` on EVERY outcome — including the over-cap
+⚠️ failure, where the generic props only see the short refusal message, so
+these are the only record of the actual size that triggered the cap. (These
+two props were documented ahead of the code: the original commit `5aa23bd`
+was stranded on an unmerged branch and the props first ship with the
+raw-api-classification change, 2026-08-21.) The pre-existing 200k-char cap
+is unchanged.
+
+**Raw Google API classification (raw-api-classification plan):** every
+`google_api_get` / `google_api_modify` call stamps four props at
+classification time, denials included — `raw_api_kind` (the
+`classifyGoogleApiCall` result: `sheets`, `sheets_create`, `docs`,
+`docs_create`, `gmail_read`, `gmail_send`, `passthrough`, `denied`),
+`raw_api_family` (Google product: `gmail`, `spreadsheets`, `documents`, or
+the classifier's first-two-segments family for passthroughs; omitted on
+denials, which carry `denial_code`), `raw_api_endpoint` (the HTTP method plus
+the **id-stripped** path template from `templateGoogleApiPath`, e.g.
+`GET gmail/v1/users/me/messages/{id}` — identifiers are customer data and
+high-cardinality, so they never land on events), and `raw_api_mutating`.
+Passthrough calls additionally keep `raw_api_passthrough: true`. Raw paths
+were never captured before this change, so there is no backfill — coverage
+starts at the deploy.
+
+**`client_name` caveat:** the MCP auto-attach path stores
+`client_name = client_id` (opaque), so meaningful values currently arrive
+only from `cli-token` registrations. Capturing the DCR `client_name`
+metadata at OAuth registration is the follow-up that makes the
+per-product split (Cowork / Claude Code / Claude.ai) real.
 
 **`connector_install_started` is a rate metric, not an identity metric.** It
 fires anonymously (distinct_id `anonymous-mcp`) from the only FGAC-owned
