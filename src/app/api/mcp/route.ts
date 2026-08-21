@@ -33,8 +33,9 @@ import { ensureDefaultProfile } from '@/db/defaultProfile';
 import { mintApprovalLink, approvalLinkMinutes, type ApprovalAction } from '@/lib/approvalLinks';
 import { TOOL_DEFS, toolAnnotations, type FgacToolDef } from './toolDefs';
 import {
-  classifyGoogleApiCall, extractSendRecipients, sheetsApprovalAction,
+  classifyGoogleApiCall, extractSendRecipients, sheetsApprovalAction, docsApprovalAction,
 } from './googleApiPolicy';
+import { DRIVE_FILE_KINDS, type DriveFileKind } from '@/lib/driveFileKinds';
 
 /** Env URL values have shipped with trailing whitespace/newlines (pasted
  * Vercel vars); a whitespace-only value must also not win the fallback chain.
@@ -264,8 +265,27 @@ async function getGoogleToken(targetEmail: string, keyOwner: { id: string; email
   }
 
   const client = await clerkClient();
-  const tokenResponse = await client.users.getUserOauthAccessToken(tokenOwnerClerkId, 'oauth_google');
-  return tokenResponse.data?.[0]?.token || null;
+  try {
+    const tokenResponse = await client.users.getUserOauthAccessToken(tokenOwnerClerkId, 'oauth_google');
+    const token = tokenResponse.data?.[0]?.token || null;
+    if (!token) addToolCallProps({ google_token_error: 'no_token' });
+    return token;
+  } catch (err) {
+    // Observability for the "Clerk cannot refresh the Google token" failure
+    // mode (Clerk 422: grant stored without a refresh token — seen on the
+    // dev instance 2026-08-20, cause unconfirmed in prod). Without this,
+    // these failures are indistinguishable from generic errors in analytics.
+    const message = err instanceof Error ? err.message : String(err);
+    const reason = /refresh/i.test(message) ? 'refresh_failed' : 'clerk_error';
+    addToolCallProps({ google_token_error: reason });
+    captureServerEvent(keyOwner.clerkUserId, 'google_token_fetch_failed', {
+      reason,
+      via: 'mcp',
+      account_delegated: targetEmail.toLowerCase() !== keyOwner.email.toLowerCase(),
+    });
+    console.error(`[MCP] Google token fetch failed (${reason}) for target mailbox:`, message);
+    return null;
+  }
 }
 
 // loadApplicableRules / checkReadRestrictions moved to src/lib/gmailRules.ts —
@@ -444,25 +464,35 @@ async function googleFetch(
 }
 
 /**
- * Post-policy Google failure on a sheets call. A 403/404 HERE — after FGAC's
- * own permission check passed — almost always means the FGAC rule exists but
- * Google never registered a drive.file grant for the sheet (it was approved
- * via magic link but never picked in the Google Picker; a mistyped id looks
- * identical from outside). The generic "check the ID" text sent the whole
- * 2026-08 connector cohort into a retry loop; say what is actually wrong and
- * where the one-click fix lives.
+ * Post-policy Google failure on a per-file (sheets/docs) call. A 403/404
+ * HERE — after FGAC's own permission check passed — almost always means the
+ * FGAC rule exists but Google never registered a drive.file grant for the
+ * file (it was approved via magic link but never picked in the Google
+ * Picker; a mistyped id looks identical from outside). The generic "check
+ * the ID" text sent the whole 2026-08 connector cohort into a retry loop;
+ * say what is actually wrong and where the one-click fix lives.
  */
-function sheetsErrorResult(result: { error: string; status?: number }, spreadsheetId: string) {
+function fileGrantErrorResult(kind: DriveFileKind, result: { error: string; status?: number }, fileId: string) {
   if (result.status === 403 || result.status === 404) {
+    const d = DRIVE_FILE_KINDS[kind];
+    const short = kind === 'sheet' ? 'sheet' : d.noun;
+    // Only the sheets setup page embeds a demo video today — the error must
+    // not promise docs users a video that isn't there (QA 19 A12 finding).
+    const setupBlurb = kind === 'sheet' ? ' (includes a short how-to video)' : '';
     return errorResult(
-      `❌ FGAC allows this spreadsheet, but Google hasn't shared the sheet itself with FGAC yet, so Google rejected the call (${result.status}). ` +
-      `This is a one-time setup step only the user can do: they must pick this sheet in Google's file picker. ` +
-      `👉 Send the user here to finish setup (includes a short how-to video): ${DASHBOARD_URL}/dashboard/sheets-setup?sid=${encodeURIComponent(spreadsheetId)} ` +
-      `Note: a wrong spreadsheet ID produces this same error — the setup page verifies real access before reporting success, so it resolves either case. Retry after the user confirms.`,
+      `❌ FGAC allows this ${d.noun}, but Google hasn't shared the ${short} itself with FGAC yet, so Google rejected the call (${result.status}). ` +
+      `This is a one-time setup step only the user can do: they must pick this ${short} in Google's file picker. ` +
+      `👉 Send the user here to finish setup${setupBlurb}: ${DASHBOARD_URL}${d.setupPath}?${d.setupIdParam}=${encodeURIComponent(fileId)} ` +
+      `Note: a wrong ${d.noun} ID produces this same error — the setup page verifies real access before reporting success, so it resolves either case. Retry after the user confirms.`,
     );
   }
   return errorResult(result.error);
 }
+
+const sheetsErrorResult = (result: { error: string; status?: number }, spreadsheetId: string) =>
+  fileGrantErrorResult('sheet', result, spreadsheetId);
+const docsErrorResult = (result: { error: string; status?: number }, documentId: string) =>
+  fileGrantErrorResult('doc', result, documentId);
 
 async function gmailFetch(token: string, email: string, path: string, method = 'GET', body?: string): Promise<GoogleFetchResult> {
   const userId = email === 'me' ? 'me' : encodeURIComponent(email);
@@ -473,8 +503,12 @@ async function sheetsFetch(token: string, path: string, method = 'GET', body?: s
   return googleFetch(`https://sheets.googleapis.com/v4/spreadsheets/${path}`, token, method, body, targetEmail);
 }
 
-/** How recently a matching sheets rule must have been created for a 403/404 to
- * be treated as grant propagation rather than a genuinely missing grant. */
+async function docsFetch(token: string, path: string, method = 'GET', body?: string, targetEmail = ''): Promise<GoogleFetchResult> {
+  return googleFetch(`https://docs.googleapis.com/v1/documents/${path}`, token, method, body, targetEmail);
+}
+
+/** How recently a matching per-file rule must have been created for a 403/404
+ * to be treated as grant propagation rather than a genuinely missing grant. */
 const SHEETS_GRACE_WINDOW_MS = 120_000;
 const SHEETS_GRACE_RETRIES = 2;
 const SHEETS_GRACE_DELAY_MS = 3_500;
@@ -482,19 +516,24 @@ const SHEETS_GRACE_DELAY_MS = 3_500;
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
 
 /**
- * sheetsFetch with a propagation grace window. Approval-time verification
- * passes with the owner's token, yet the MCP call path can still see 403/404
- * for tens of seconds while Google's per-file drive.file grant settles
- * (observed on three launch-cohort users: one error immediately after
- * approval, success seconds later). When the matching rule is younger than
- * the grace window, a 403/404 is retried with a short pause instead of being
- * surfaced — the agent sees a slower success, not an error. Rules older than
- * the window fail fast exactly as before.
+ * A per-file fetch with a propagation grace window. Approval-time
+ * verification passes with the owner's token, yet the MCP call path can
+ * still see 403/404 for tens of seconds while Google's per-file drive.file
+ * grant settles (observed on three launch-cohort users: one error
+ * immediately after approval, success seconds later). When the matching rule
+ * is younger than the grace window, a 403/404 is retried with a short pause
+ * instead of being surfaced — the agent sees a slower success, not an error.
+ * Rules older than the window fail fast exactly as before.
+ *
+ * Analytics props are prefixed by the kind's service so sheets dashboards
+ * keep their historical names (sheets_grace_*) and docs get docs_grace_*.
  */
-async function withSheetsGrace(
-  perm: SheetsPermission,
+async function withGrantGrace(
+  kind: DriveFileKind,
+  perm: FilePermission,
   doFetch: () => Promise<GoogleFetchResult>,
 ): Promise<GoogleFetchResult> {
+  const service = DRIVE_FILE_KINDS[kind].service;
   let result = await doFetch();
   const ruleAt = perm.allowed ? perm.newestRuleAt : null;
   if (!ruleAt) return result;
@@ -503,7 +542,7 @@ async function withSheetsGrace(
   const inGrace = () => Date.now() - ruleAt.getTime() < SHEETS_GRACE_WINDOW_MS;
   const retriable = () => !result.ok && (result.status === 403 || result.status === 404);
 
-  if (retriable()) addToolCallProps({ sheets_grant_age_seconds: grantAgeSeconds() });
+  if (retriable()) addToolCallProps({ [`${service}_grant_age_seconds`]: grantAgeSeconds() });
 
   let retries = 0;
   while (retriable() && inGrace() && retries < SHEETS_GRACE_RETRIES) {
@@ -512,65 +551,84 @@ async function withSheetsGrace(
     result = await doFetch();
   }
   if (retries > 0) {
-    addToolCallProps({ sheets_grace_retries: retries, sheets_grace_recovered: result.ok });
+    addToolCallProps({ [`${service}_grace_retries`]: retries, [`${service}_grace_recovered`]: result.ok });
     if (result.ok) {
       // Don't let the first attempt's transient status ride on a success event.
       addToolCallProps({ error_status: undefined });
-      console.log(`[MCP] Sheets grace retry recovered after ${retries} attempt(s) (rule age ${grantAgeSeconds()}s)`);
+      console.log(`[MCP] ${service} grace retry recovered after ${retries} attempt(s) (rule age ${grantAgeSeconds()}s)`);
     }
   }
   return result;
 }
 
-async function checkSheetsPermission(userId: string, proxyKeyId: string, spreadsheetId: string, isMutating: boolean) {
+const withSheetsGrace = (perm: FilePermission, doFetch: () => Promise<GoogleFetchResult>) =>
+  withGrantGrace('sheet', perm, doFetch);
+const withDocsGrace = (perm: FilePermission, doFetch: () => Promise<GoogleFetchResult>) =>
+  withGrantGrace('doc', perm, doFetch);
+
+async function checkFilePermission(kind: DriveFileKind, userId: string, proxyKeyId: string, fileId: string, isMutating: boolean) {
+  const d = DRIVE_FILE_KINDS[kind];
   const allRules = await db.select().from(accessRules).where(eq(accessRules.userId, userId));
   const keyAssignments = await db.select().from(keyRuleAssignments).where(eq(keyRuleAssignments.proxyKeyId, proxyKeyId));
   const assignedRuleIds = new Set(keyAssignments.map(a => a.accessRuleId));
   const allAssignments = await db.select().from(keyRuleAssignments);
   const rulesWithAssignments = new Set(allAssignments.map(a => a.accessRuleId));
 
-  const sheetsRules = allRules.filter(rule => {
-    if (rule.service !== 'sheets') return false;
+  const fileRules = allRules.filter(rule => {
+    if (rule.service !== d.service) return false;
     const isGlobal = !rulesWithAssignments.has(rule.id);
     const isAssigned = assignedRuleIds.has(rule.id);
-    const matchesId = rule.targetResourceId === spreadsheetId || rule.regexPattern === spreadsheetId;
+    const matchesId = rule.targetResourceId === fileId || rule.regexPattern === fileId;
     return (isGlobal || isAssigned) && matchesId;
   });
 
-  if (sheetsRules.length === 0) {
-    addToolCallProps({ denial_code: 'sheets_not_exposed' });
-    return { allowed: false as const, denial: 'not_exposed' as const, reason: `🚫 Access Denied: Spreadsheet '${spreadsheetId}' is not exposed in your FGAC rules.` };
+  const nounCap = d.noun.charAt(0).toUpperCase() + d.noun.slice(1);
+  if (fileRules.length === 0) {
+    addToolCallProps({ denial_code: `${d.service}_not_exposed` });
+    return { allowed: false as const, denial: 'not_exposed' as const, reason: `🚫 Access Denied: ${nounCap} '${fileId}' is not exposed in your FGAC rules.` };
   }
 
-  if (sheetsRules.some(r => r.actionType === 'sheet_block')) {
-    addToolCallProps({ denial_code: 'sheets_blocked' });
-    return { allowed: false as const, denial: 'blocked' as const, reason: `🚫 Access Denied: Access to spreadsheet '${spreadsheetId}' is explicitly blocked.` };
+  if (fileRules.some(r => r.actionType === d.actionTypes.block)) {
+    addToolCallProps({ denial_code: `${d.service}_blocked` });
+    return { allowed: false as const, denial: 'blocked' as const, reason: `🚫 Access Denied: Access to ${d.noun} '${fileId}' is explicitly blocked.` };
   }
 
   if (isMutating) {
-    const hasReadWrite = sheetsRules.some(r => r.actionType === 'sheet_read_write');
+    const hasReadWrite = fileRules.some(r => r.actionType === d.actionTypes.readWrite);
     if (!hasReadWrite) {
-      addToolCallProps({ denial_code: 'sheets_read_only' });
-      return { allowed: false as const, denial: 'read_only' as const, reason: `🚫 Access Denied: Write access to spreadsheet '${spreadsheetId}' is restricted (Read Only).` };
+      addToolCallProps({ denial_code: `${d.service}_read_only` });
+      return { allowed: false as const, denial: 'read_only' as const, reason: `🚫 Access Denied: Write access to ${d.noun} '${fileId}' is restricted (Read Only).` };
     }
   }
 
   // Newest matching rule's age drives the post-approval grace retry: a rule
   // created seconds ago means Google's drive.file grant may still be
   // propagating even though approval-time verification passed.
-  const newestRuleAt = sheetsRules.reduce<Date | null>(
+  const newestRuleAt = fileRules.reduce<Date | null>(
     (acc, r) => (!acc || r.createdAt > acc ? r.createdAt : acc), null,
   );
   return { allowed: true as const, newestRuleAt };
 }
 
-type SheetsPermission = Awaited<ReturnType<typeof checkSheetsPermission>>;
+type FilePermission = Awaited<ReturnType<typeof checkFilePermission>>;
+type SheetsPermission = FilePermission;
+
+const checkSheetsPermission = (userId: string, proxyKeyId: string, spreadsheetId: string, isMutating: boolean) =>
+  checkFilePermission('sheet', userId, proxyKeyId, spreadsheetId, isMutating);
+const checkDocsPermission = (userId: string, proxyKeyId: string, documentId: string, isMutating: boolean) =>
+  checkFilePermission('doc', userId, proxyKeyId, documentId, isMutating);
 
 /** Map a sheets denial onto an approvable action matching the access level
  * the denied operation requires (see sheetsApprovalAction in googleApiPolicy). */
 function sheetsDenialAction(perm: SheetsPermission, spreadsheetId: string, isMutating: boolean): ApprovalAction | null {
   if (perm.allowed) return null;
   return sheetsApprovalAction(perm.denial, spreadsheetId, isMutating);
+}
+
+/** Docs twin of sheetsDenialAction. */
+function docsDenialAction(perm: FilePermission, documentId: string, isMutating: boolean): ApprovalAction | null {
+  if (perm.allowed) return null;
+  return docsApprovalAction(perm.denial, documentId, isMutating);
 }
 
 // ─── Gmail Message Parsing (token-frugal responses) ─────────────────────────
@@ -714,6 +772,20 @@ function withToolAnalytics<R extends ToolAnalyticsResult>(
     );
     try {
       const result = await fn(params, extra);
+      // Response-size observability (plan google-docs-support v5, D7):
+      // MCP clients impose their own tool-result caps (Claude Code rejects
+      // results over ~25k tokens), so a server-side "success" can still be
+      // silently discarded client-side. Stamp the serialized size on EVERY
+      // tool result — monitoring only, no size-based behavior — so PostHog
+      // can chart how often responses land in the client-rejection zone.
+      const responseChars = Array.isArray((result as { content?: unknown }).content)
+        ? ((result as { content: Array<{ text?: unknown }> }).content)
+            .reduce((n, c) => n + (typeof c.text === 'string' ? c.text.length : 0), 0)
+        : 0;
+      addToolCallProps({
+        response_chars: responseChars,
+        response_kb: Math.round(responseChars / 1024),
+      });
       track(classifyToolOutcome(result));
       return result;
     } catch (err) {
@@ -787,6 +859,12 @@ async function executeRawGoogleCall(
   }
 
   const cleanPath = path.replace(/^\/+/, '');
+  // Route a raw path to the host that owns its API family. Sheets and Docs
+  // live on their own subdomains; everything else rides www.googleapis.com.
+  const rawUrl = (p: string) =>
+    p.includes('spreadsheets') ? `https://sheets.googleapis.com/${p.replace(/^sheets\//, '')}`
+    : p.includes('documents') ? `https://docs.googleapis.com/${p.replace(/^docs\//, '')}`
+    : `https://www.googleapis.com/${p}`;
 
   if (cls.kind === 'sheets_create') {
     // Agent-created sheets are allowed and auto-granted to the calling key
@@ -826,15 +904,49 @@ async function executeRawGoogleCall(
     return jsonResult(result.data);
   }
 
+  if (cls.kind === 'docs_create') {
+    // Agent-created docs are allowed and auto-granted to the calling key
+    // (read & write), mirroring sheets_create: the Docs policy protects the
+    // user's EXISTING documents, not the agent's own output. drive.file
+    // already limits the app to picked files + files it created.
+    const result = await googleFetch(rawUrl(cleanPath), resolved.token, method, serializeBody(body), resolved.targetEmail);
+    if (!result.ok) return errorResult(result.error);
+    const created = result.data as { documentId?: unknown; title?: unknown };
+    const newId = typeof created?.documentId === 'string' ? created.documentId : null;
+    if (newId) {
+      const title = typeof created?.title === 'string' ? created.title : null;
+      try {
+        const [rule] = await db.insert(accessRules).values({
+          userId: conn.user.id,
+          ruleName: `Agent-created: ${title || newId}`,
+          service: 'docs',
+          actionType: 'doc_read_write',
+          targetResourceId: newId,
+          resourceName: title,
+        }).returning();
+        await db.insert(keyRuleAssignments).values({ proxyKeyId: resolved.proxyKeyId, accessRuleId: rule.id });
+        captureServerEvent(conn.user.clerkUserId, 'agent_doc_created', {
+          document_id: newId, auto_granted: true,
+        });
+        addToolCallProps({ doc_created: true });
+      } catch (err) {
+        // The doc exists either way; a failed auto-grant just means the next
+        // access denies and mints an approval link — degraded, not broken.
+        console.error('[MCP] Failed to auto-grant agent-created doc:', err);
+        captureServerEvent(conn.user.clerkUserId, 'agent_doc_created', {
+          document_id: newId, auto_granted: false,
+        });
+      }
+    }
+    return jsonResult(result.data);
+  }
+
   if (cls.kind === 'passthrough') {
     // Classify-don't-block: unknown Google API families are forwarded with
     // the account's token (Google's scopes are the enforcement backstop) and
     // tagged so demand is visible in analytics before we build rules for it.
     addToolCallProps({ raw_api_family: cls.family, raw_api_passthrough: true });
-    const url = cleanPath.includes('spreadsheets')
-      ? `https://sheets.googleapis.com/${cleanPath.replace(/^sheets\//, '')}`
-      : `https://www.googleapis.com/${cleanPath}`;
-    const result = await googleFetch(url, resolved.token, method, serializeBody(body), resolved.targetEmail);
+    const result = await googleFetch(rawUrl(cleanPath), resolved.token, method, serializeBody(body), resolved.targetEmail);
     if (!result.ok) return errorResult(result.error);
     return jsonResult(result.data);
   }
@@ -843,9 +955,17 @@ async function executeRawGoogleCall(
     const perm = await checkSheetsPermission(conn.user.id, resolved.proxyKeyId, cls.spreadsheetId, cls.isMutating);
     if (!perm.allowed) return policyDenialWithLink(conn, resolved.proxyKeyId, perm.reason, sheetsDenialAction(perm, cls.spreadsheetId, cls.isMutating));
 
-    const url = `https://sheets.googleapis.com/${cleanPath.replace(/^sheets\//, '')}`;
-    const result = await withSheetsGrace(perm, () => googleFetch(url, resolved.token, method, serializeBody(body), resolved.targetEmail));
+    const result = await withSheetsGrace(perm, () => googleFetch(rawUrl(cleanPath), resolved.token, method, serializeBody(body), resolved.targetEmail));
     if (!result.ok) return sheetsErrorResult(result, cls.spreadsheetId);
+    return jsonResult(result.data);
+  }
+
+  if (cls.kind === 'docs') {
+    const perm = await checkDocsPermission(conn.user.id, resolved.proxyKeyId, cls.documentId, cls.isMutating);
+    if (!perm.allowed) return policyDenialWithLink(conn, resolved.proxyKeyId, perm.reason, docsDenialAction(perm, cls.documentId, cls.isMutating));
+
+    const result = await withDocsGrace(perm, () => googleFetch(rawUrl(cleanPath), resolved.token, method, serializeBody(body), resolved.targetEmail));
+    if (!result.ok) return docsErrorResult(result, cls.documentId);
     return jsonResult(result.data);
   }
 
@@ -916,6 +1036,7 @@ const handler = createMcpHandler(
           next_steps: {
             gmail: "Read a mailbox with gmail_list (pass account: '<address>' to target a specific one; defaults to the primary). Reads work out of the box.",
             sheets: 'Spreadsheet access is granted per sheet: call sheets_get_spreadsheet with a spreadsheetId, or request_access — a denial returns a one-click approval link for the user.',
+            docs: 'Google Docs access is granted per document: call docs_read_document with a documentId, or request_access — a denial returns a one-click approval link for the user.',
             sending: 'Email sending is off by default; the first gmail_send returns a one-click approval link the user can use to whitelist the recipient.',
           },
           add_more_accounts: {
@@ -1182,6 +1303,87 @@ const handler = createMcpHandler(
       }
     );
 
+    // ── docs_read_document ────────────────────────────────────────────
+    server.registerTool(
+      TOOL_DEFS.docs_read_document.name,
+      toolConfig(TOOL_DEFS.docs_read_document, {
+        documentId: z.string().describe('Google Docs document ID (e.g. 1NQiAY...)'),
+        fields: z.string().optional().describe('Optional Docs API field mask to trim the response (e.g. "title,body.content"). Use when a full read is too large.'),
+        account: z.string().optional().describe('Email account to use.'),
+      }),
+      async ({ documentId, fields, account }, { authInfo }) => {
+        const conn = await requireApproval(authInfo);
+        if ('content' in conn) return conn;
+
+        const resolved = await resolveAccountAndToken(conn, account);
+        if ('error' in resolved) return textResult(resolved.error);
+
+        const perm = await checkDocsPermission(conn.user.id, resolved.proxyKeyId, documentId, false);
+        if (!perm.allowed) return policyDenialWithLink(conn, resolved.proxyKeyId, perm.reason, docsDenialAction(perm, documentId, false));
+
+        const query = fields ? `?fields=${encodeURIComponent(fields)}` : '';
+        const result = await withDocsGrace(perm, () => docsFetch(resolved.token, `${encodeURIComponent(documentId)}${query}`, 'GET', undefined, resolved.targetEmail));
+        if (!result.ok) return docsErrorResult(result, documentId);
+        return jsonResult(result.data);
+      }
+    );
+
+    // ── docs_append_text ──────────────────────────────────────────────
+    server.registerTool(
+      TOOL_DEFS.docs_append_text.name,
+      toolConfig(TOOL_DEFS.docs_append_text, {
+        documentId: z.string().describe('Google Docs document ID'),
+        text: z.string().describe('Plain text to append at the end of the document'),
+        account: z.string().optional().describe('Email account to use.'),
+      }),
+      async ({ documentId, text, account }, { authInfo }) => {
+        const conn = await requireApproval(authInfo);
+        if ('content' in conn) return conn;
+
+        const resolved = await resolveAccountAndToken(conn, account);
+        if ('error' in resolved) return textResult(resolved.error);
+
+        const perm = await checkDocsPermission(conn.user.id, resolved.proxyKeyId, documentId, true);
+        if (!perm.allowed) return policyDenialWithLink(conn, resolved.proxyKeyId, perm.reason, docsDenialAction(perm, documentId, true));
+
+        const body = JSON.stringify({
+          requests: [{ insertText: { endOfSegmentLocation: { segmentId: '' }, text } }],
+        });
+        const result = await withDocsGrace(perm, () => docsFetch(resolved.token, `${encodeURIComponent(documentId)}:batchUpdate`, 'POST', body, resolved.targetEmail));
+        if (!result.ok) return docsErrorResult(result, documentId);
+        return jsonResult(result.data);
+      }
+    );
+
+    // ── docs_replace_text ─────────────────────────────────────────────
+    server.registerTool(
+      TOOL_DEFS.docs_replace_text.name,
+      toolConfig(TOOL_DEFS.docs_replace_text, {
+        documentId: z.string().describe('Google Docs document ID'),
+        find: z.string().describe('Text to find (every occurrence is replaced)'),
+        replace: z.string().describe('Replacement text'),
+        matchCase: z.boolean().optional().describe('Case-sensitive match (default: true)'),
+        account: z.string().optional().describe('Email account to use.'),
+      }),
+      async ({ documentId, find, replace, matchCase, account }, { authInfo }) => {
+        const conn = await requireApproval(authInfo);
+        if ('content' in conn) return conn;
+
+        const resolved = await resolveAccountAndToken(conn, account);
+        if ('error' in resolved) return textResult(resolved.error);
+
+        const perm = await checkDocsPermission(conn.user.id, resolved.proxyKeyId, documentId, true);
+        if (!perm.allowed) return policyDenialWithLink(conn, resolved.proxyKeyId, perm.reason, docsDenialAction(perm, documentId, true));
+
+        const body = JSON.stringify({
+          requests: [{ replaceAllText: { containsText: { text: find, matchCase: matchCase ?? true }, replaceText: replace } }],
+        });
+        const result = await withDocsGrace(perm, () => docsFetch(resolved.token, `${encodeURIComponent(documentId)}:batchUpdate`, 'POST', body, resolved.targetEmail));
+        if (!result.ok) return docsErrorResult(result, documentId);
+        return jsonResult(result.data);
+      }
+    );
+
     // ── google_api_get ────────────────────────────────────────────────
     server.registerTool(
       TOOL_DEFS.google_api_get.name,
@@ -1224,26 +1426,35 @@ const handler = createMcpHandler(
     server.registerTool(
       TOOL_DEFS.request_access.name,
       toolConfig(TOOL_DEFS.request_access, {
-        type: z.enum(['send', 'sheets_read', 'sheets_write']).describe('What to request: permission to send email to a recipient, or read / read-write access to a spreadsheet'),
+        type: z.enum(['send', 'sheets_read', 'sheets_write', 'docs_read', 'docs_write']).describe('What to request: permission to send email to a recipient, or read / read-write access to a spreadsheet or document'),
         recipient: z.string().optional().describe('Email address to whitelist (required for type "send")'),
         spreadsheetId: z.string().optional().describe('Google Spreadsheet ID (required for sheets types)'),
+        documentId: z.string().optional().describe('Google Docs document ID (required for docs types)'),
       }),
-      async ({ type, recipient, spreadsheetId }, { authInfo }) => {
+      async ({ type, recipient, spreadsheetId, documentId }, { authInfo }) => {
         const conn = await requireApproval(authInfo);
         if ('content' in conn) return conn;
         if (!conn.proxyKeyId) {
           return textResult('❌ No proxy key assigned to this connection.');
         }
 
+        const REQUESTABLE = 'Requestable permissions: sending to a specific recipient, or read/read-write access to a specific spreadsheet or document.';
         let action: ApprovalAction;
         if (type === 'send') {
           if (!recipient || !/^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/.test(recipient)) {
-            return textResult('🚫 A valid "recipient" email address is required to request send access. Requestable permissions: sending to a specific recipient, or read/read-write access to a specific spreadsheet.');
+            return textResult(`🚫 A valid "recipient" email address is required to request send access. ${REQUESTABLE}`);
           }
           action = { action: 'send_whitelist', recipient };
+        } else if (type === 'docs_read' || type === 'docs_write') {
+          if (!documentId) {
+            return textResult(`🚫 A "documentId" is required to request document access. ${REQUESTABLE}`);
+          }
+          action = type === 'docs_read'
+            ? { action: 'docs_expose', documentId }
+            : { action: 'docs_write', documentId };
         } else {
           if (!spreadsheetId) {
-            return textResult('🚫 A "spreadsheetId" is required to request spreadsheet access. Requestable permissions: sending to a specific recipient, or read/read-write access to a specific spreadsheet.');
+            return textResult(`🚫 A "spreadsheetId" is required to request spreadsheet access. ${REQUESTABLE}`);
           }
           action = type === 'sheets_read'
             ? { action: 'sheets_expose', spreadsheetId }
@@ -1257,7 +1468,9 @@ const handler = createMcpHandler(
           status: 'approval_required',
           summary: action.action === 'send_whitelist'
             ? `Requesting permission to send email to ${recipient}`
-            : `Requesting ${type === 'sheets_read' ? 'read-only' : 'read & write'} access to spreadsheet ${spreadsheetId}`,
+            : action.action.startsWith('docs')
+              ? `Requesting ${type === 'docs_read' ? 'read-only' : 'read & write'} access to document ${documentId}`
+              : `Requesting ${type === 'sheets_read' ? 'read-only' : 'read & write'} access to spreadsheet ${spreadsheetId}`,
           approvalUrl: url,
           note: `Nothing has been granted. Show the approval link to the user VERBATIM as a clickable URL — it is single-use, expires in ${approvalLinkMinutes(action.action)} minutes, and only they can approve it. Do not retry the original operation until they confirm; if the link expires unused, call request_access again.`,
         });
@@ -1304,6 +1517,7 @@ const handler = createMcpHandler(
             gmailRead: 'ALLOWED by default for every accessible email; read-block rules (label/content) below restrict it',
             gmailSend: 'DENIED unless a send_whitelist rule matches the recipient',
             sheets: 'DENIED unless a per-spreadsheet rule below exposes the sheet',
+            docs: 'DENIED unless a per-document rule below exposes the document',
             deletion: 'NEVER available through any tool',
           },
           rules: applicableRules.map(r => ({
@@ -1312,10 +1526,13 @@ const handler = createMcpHandler(
             pattern: r.regexPattern,
             email: r.targetEmail || 'all',
             scope: rulesWithAssignments.has(r.id) ? 'this-key' : 'global',
-            // Sheets rules are per-file: without the spreadsheet id an
-            // agent cannot locate the file it was granted access to.
+            // Per-file rules: without the file id an agent cannot locate
+            // the file it was granted access to.
             ...(r.service === 'sheets'
               ? { spreadsheetId: r.targetResourceId, resourceName: r.resourceName }
+              : {}),
+            ...(r.service === 'docs'
+              ? { documentId: r.targetResourceId, resourceName: r.resourceName }
               : {}),
           })),
         });

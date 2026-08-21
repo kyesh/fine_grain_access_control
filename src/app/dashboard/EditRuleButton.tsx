@@ -118,6 +118,8 @@ export function EditRuleButton({
                     setSelectedService(e.target.value);
                     if (e.target.value === 'sheets') {
                       setSelectedActionType('sheet_read');
+                    } else if (e.target.value === 'docs') {
+                      setSelectedActionType('doc_read');
                     } else {
                       setSelectedActionType('read_blacklist');
                     }
@@ -126,6 +128,7 @@ export function EditRuleButton({
                 >
                   <option value="gmail">Gmail</option>
                   <option value="sheets">Google Sheets</option>
+                  <option value="docs">Google Docs</option>
                 </select>
               </div>
 
@@ -151,6 +154,18 @@ export function EditRuleButton({
                         Blocked (Deny All)
                       </option>
                     </>
+                  ) : selectedService === 'docs' ? (
+                    <>
+                      <option value="doc_read">
+                        Read Only (GET)
+                      </option>
+                      <option value="doc_read_write">
+                        Read & Write (GET + POST/PUT)
+                      </option>
+                      <option value="doc_block">
+                        Blocked (Deny All)
+                      </option>
+                    </>
                   ) : (
                     <>
                       <option value="read_blacklist">
@@ -173,10 +188,10 @@ export function EditRuleButton({
                 </select>
               </div>
 
-              {selectedService === 'sheets' ? (
+              {selectedService === 'sheets' || selectedService === 'docs' ? (
                 <div>
                   <label className="block text-sm font-semibold text-slate-700 mb-1.5">
-                    Spreadsheet ID
+                    {selectedService === 'sheets' ? 'Spreadsheet ID' : 'Document ID'}
                   </label>
                   <input
                     type="text"
@@ -187,7 +202,7 @@ export function EditRuleButton({
                     className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm font-mono text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 shadow-sm"
                   />
                   <p className="text-xs text-slate-500 mt-1">
-                    Document Title: {rule.resourceName || 'Google Sheet'}
+                    Document Title: {rule.resourceName || (selectedService === 'sheets' ? 'Google Sheet' : 'Google Doc')}
                   </p>
                 </div>
               ) : (

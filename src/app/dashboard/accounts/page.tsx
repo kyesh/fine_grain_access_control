@@ -8,7 +8,7 @@ import { db } from '@/db';
 import { Card, CardHeader, Badge, EmptyState, buttonSecondary } from '@/components/ui';
 import { DelegateAccessButton } from '../DelegateAccessButton';
 import { RevokeDelegationButton } from '../RevokeDelegationButton';
-import { ExposedSheetsManager } from '../ExposedSheetsManager';
+import { ExposedFilesManager } from '../ExposedFilesManager';
 import { AddDelegatedAccountButton } from './AddDelegatedAccountButton';
 import { ReconnectGoogleButton } from './ReconnectGoogleButton';
 import { checkGoogleAccess } from '../googleAccess';
@@ -168,7 +168,8 @@ export default async function AccountsPage() {
           {/* Renders its own card chrome and header, and its horizontal
               header layout needs the full-width column — nesting it in the
               narrow side column wrapped the heading one word per line. */}
-          <ExposedSheetsManager activeKeys={activeKeys} />
+          <ExposedFilesManager kind="sheet" activeKeys={activeKeys} />
+          <ExposedFilesManager kind="doc" activeKeys={activeKeys} />
         </div>
 
         {/* ─── Side column ────────────────────────────────────────────── */}

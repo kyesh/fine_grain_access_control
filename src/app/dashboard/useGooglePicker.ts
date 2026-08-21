@@ -5,6 +5,7 @@ import { useUser, useReverification } from '@clerk/nextjs';
 import { isReverificationCancelledError } from '@clerk/nextjs/errors';
 import { usePostHog } from 'posthog-js/react';
 import { startGoogleReconnect, type ClerkUserLike } from './googleReconnect';
+import { DRIVE_FILE_KINDS, type DriveFileKind } from '@/lib/driveFileKinds';
 
 declare global {
   interface Window {
@@ -18,8 +19,12 @@ export interface PickedSheet {
   name: string;
 }
 
+/** Kind-neutral alias — a picked file of any DriveFileKind. */
+export type PickedFile = PickedSheet;
+
 /**
- * Google Picker flow for exposing sheets.
+ * Google Picker flow for exposing per-file grants (sheets by default; pass a
+ * `kind` for docs — the view, dialog title, and copy follow the kind).
  *
  * `context` is an opaque string (e.g. a profile id) carried through the whole
  * flow — including the OAuth consent redirect — and handed back to
@@ -28,9 +33,15 @@ export interface PickedSheet {
  * First-time-grant round trip: the consent redirect returns to the SAME page
  * (`location.pathname`), and the auto-open effect re-launches the picker there.
  * On that return leg we retry the token fetch while Clerk propagates the new
- * scope, and never redirect to consent a second time (no loops).
+ * scope, and never redirect to consent a second time (no loops). The kind
+ * rides the round trip in `pickerKind`, so the auto-reopened picker shows the
+ * same view the user started from.
  */
-export function useGooglePicker(onSheetsPicked: (sheets: PickedSheet[], context?: string) => void) {
+export function useGooglePicker(
+  onSheetsPicked: (sheets: PickedFile[], context?: string) => void,
+  kind: DriveFileKind = 'sheet',
+) {
+  const kindDesc = DRIVE_FILE_KINDS[kind];
   const { user } = useUser();
   const posthog = usePostHog();
   const [isLoading, setIsLoading] = useState(false);
@@ -117,7 +128,7 @@ export function useGooglePicker(onSheetsPicked: (sheets: PickedSheet[], context?
       if (!tokenData.hasDriveFileScope) {
         if (fromOAuthReturn) {
           failFlow('oauth_return_scope_missing', 'drive.file still missing after consent',
-            'Google did not grant Sheets access on that pass — this usually means the consent screen was closed early, or a second authorization round is needed. Click the pick button again to retry; if it keeps happening, reconnect Google from Dashboard → Accounts.');
+            `Google did not grant ${kind === 'sheet' ? 'Sheets' : 'Docs'} access on that pass — this usually means the consent screen was closed early, or a second authorization round is needed. Click the pick button again to retry; if it keeps happening, reconnect Google from Dashboard → Accounts.`);
           return;
         }
 
@@ -126,6 +137,7 @@ export function useGooglePicker(onSheetsPicked: (sheets: PickedSheet[], context?
         // must survive the consent round-trip or the flow dead-ends.
         const params = new URLSearchParams(window.location.search);
         params.set('autoOpenPicker', 'true');
+        params.set('pickerKind', kind);
         if (context) params.set('pickerContext', context);
         const autoRedirectUrl = `${window.location.origin}${window.location.pathname}?${params.toString()}`;
 
@@ -146,23 +158,24 @@ export function useGooglePicker(onSheetsPicked: (sheets: PickedSheet[], context?
         return;
       }
 
+      const fallbackNoun = kindDesc.noun.charAt(0).toUpperCase() + kindDesc.noun.slice(1);
       const pickerCallback = (data: any) => {
         if (data.action === window.google.picker.Action.PICKED) {
           const docs = data.docs.map((doc: any) => ({
             id: doc.id,
-            name: doc.name || `Spreadsheet (${doc.id.slice(0, 6)})`
+            name: doc.name || `${fallbackNoun} (${doc.id.slice(0, 6)})`
           }));
           onSheetsPicked(docs, context);
         }
         setIsLoading(false);
       };
 
-      const view = new window.google.picker.View(window.google.picker.ViewId.SPREADSHEETS);
+      const view = new window.google.picker.View(window.google.picker.ViewId[kindDesc.pickerViewId]);
       const builder = new window.google.picker.PickerBuilder()
         .addView(view)
         .setOAuthToken(tokenData.accessToken)
         .setCallback(pickerCallback)
-        .setTitle('Select Google Sheets to Expose in FGAC')
+        .setTitle(kindDesc.pickerTitle)
         .enableFeature(window.google.picker.Feature.MULTISELECT_ENABLED);
 
       // Without the Cloud project number, a drive.file pick is cosmetic:
@@ -181,7 +194,7 @@ export function useGooglePicker(onSheetsPicked: (sheets: PickedSheet[], context?
       failFlow('open_picker', err,
         'Something went wrong opening the Google Picker. Retry the pick button; if it keeps failing, reconnect Google from Dashboard → Accounts and then return to this link.');
     }
-  }, [user, onSheetsPicked, failFlow]);
+  }, [user, onSheetsPicked, failFlow, kind, kindDesc]);
 
   // Automatically launch Google Picker if returning from OAuth reauthorization
   // redirect. The component consuming this hook must live on the page the
@@ -191,18 +204,24 @@ export function useGooglePicker(onSheetsPicked: (sheets: PickedSheet[], context?
     if (typeof window === 'undefined' || !user || !gapiLoaded) return;
     const urlParams = new URLSearchParams(window.location.search);
     if (urlParams.get('autoOpenPicker') === 'true') {
+      // Kind-scoped: a page can host pickers for several kinds; only the
+      // instance the consent round-trip started from re-opens. Absent param
+      // = pre-docs link → sheet (the only kind that existed).
+      const returnKind = (urlParams.get('pickerKind') ?? 'sheet') as DriveFileKind;
+      if (returnKind !== kind) return;
       const context = urlParams.get('pickerContext') ?? undefined;
       // Consume only our params; anything else (e.g. the approve page's
       // token) must survive the cleanup.
       urlParams.delete('autoOpenPicker');
       urlParams.delete('pickerContext');
+      urlParams.delete('pickerKind');
       const rest = urlParams.toString();
       const newUrl = `${window.location.pathname}${rest ? `?${rest}` : ''}`;
       window.history.replaceState({}, document.title, newUrl);
       // Auto-launch picker; fromOAuthReturn tolerates scope-propagation lag
       openPickerFlow(context, true);
     }
-  }, [user, gapiLoaded, openPickerFlow]);
+  }, [user, gapiLoaded, openPickerFlow, kind]);
 
   const enhancedOpenPicker = useReverification(openPickerFlow);
 

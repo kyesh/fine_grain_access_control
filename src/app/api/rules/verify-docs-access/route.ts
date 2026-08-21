@@ -3,7 +3,7 @@ import { verifyFileAccessGET } from '../fileAccessHandlers';
 
 export const dynamic = 'force-dynamic';
 
-/** GET /api/rules/verify-sheets-access — see fileAccessHandlers.ts. */
+/** GET /api/rules/verify-docs-access?did=… — see fileAccessHandlers.ts. */
 export async function GET(request: NextRequest) {
-  return verifyFileAccessGET('sheet', request);
+  return verifyFileAccessGET('doc', request);
 }

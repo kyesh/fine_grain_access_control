@@ -34,6 +34,16 @@ we get surfaced.
 >
 > More Google Workspace Connections Coming Soon!
 
+> **PENDING UPDATE (Google Docs support, 2026-08-20)**: the connector now
+> also serves Google Docs (per-document read/append/replace behind the same
+> per-file rules — tools `docs_read_document`, `docs_append_text`,
+> `docs_replace_text`). The DECIDED tagline/description above predate this
+> and need the owner's sign-off before resubmission. Proposed tagline
+> (≤55 chars): `Gmail, Google Sheets & Docs — on your terms` (43).
+> Proposed description addition: "…and let it update Google Sheets and
+> Google Docs for you! … precise access to the specific sheets, docs and
+> senders you want."
+
 (Earlier keyword-first draft kept below for reference — its bullet points
 remain useful raw material if the description is ever expanded; the
 use-cases step still carries the remaining search-phrase clusters.)

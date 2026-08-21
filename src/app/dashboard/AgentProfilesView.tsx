@@ -3,8 +3,11 @@
 import Link from 'next/link';
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Card, CardHeader, Badge, EmptyState, buttonPrimary, buttonSecondary, buttonDanger } from '@/components/ui';
-import { assignRulesToKey, unassignRuleFromKey, revokeProxyKey, setSheetRulePermission, exposeSheetsFromPicker, applyRecommendedSecurityRules, enableSendToAnyone } from './actions';
+import { assignRulesToKey, unassignRuleFromKey, revokeProxyKey, setSheetRulePermission, exposeSheetsFromPicker, exposeDocsFromPicker, applyRecommendedSecurityRules, enableSendToAnyone } from './actions';
 import { useGooglePicker, PickedSheet } from './useGooglePicker';
+
+/** access_rules.service values that are per-file grants (not Gmail rules). */
+const FILE_SERVICES = ['sheets', 'docs'];
 import { EditRuleButton } from './EditRuleButton';
 import { DeleteRuleButton } from './DeleteRuleButton';
 import { RuleControls } from './RuleControls';
@@ -110,14 +113,39 @@ export function AgentProfilesView({
     }
   }, []);
 
+  // fileId → Google-side grant state per kind. A rule can exist without
+  // Google ever having shared the file (approved via magic link, never
+  // picked) — those rows get a "Needs Google access" chip (capability 17
+  // A6 names the profile card, not just the Accounts manager). Verification
+  // failing entirely degrades to no chips, never a broken card.
+  const [grantStates, setGrantStates] = useState<{ sheet: Record<string, { state: string }>; doc: Record<string, { state: string }> }>({ sheet: {}, doc: {} });
+  useEffect(() => {
+    let cancelled = false;
+    const load = async (path: string): Promise<Record<string, { state: string }>> => {
+      try {
+        const res = await fetch(path);
+        const data = await res.json();
+        return data.grants ?? {};
+      } catch {
+        return {};
+      }
+    };
+    Promise.all([
+      load('/api/rules/verify-sheets-access'),
+      load('/api/rules/verify-docs-access'),
+    ]).then(([sheet, doc]) => { if (!cancelled) setGrantStates({ sheet, doc }); });
+    return () => { cancelled = true; };
+  }, [rules]);
+
   useEffect(() => { fetchConnections(); }, [fetchConnections]);
 
   const active = activeProfiles.find(p => p.id === activeId) ?? null;
   const pending = connections.filter(c => c.status === 'pending');
 
-  // Google Picker for "+ Expose a sheet". One hook instance for the whole
-  // view: it also consumes the ?autoOpenPicker= return leg of the first-time
-  // consent redirect, with the profile id carried through as picker context.
+  // Google Pickers for "+ Expose a sheet" / "+ Expose a doc". One hook
+  // instance per kind for the whole view: each also consumes the
+  // ?autoOpenPicker= return leg of the first-time consent redirect for its
+  // own kind (pickerKind), with the profile id carried through as context.
   const handleSheetsPicked = useCallback(async (sheets: PickedSheet[], context?: string) => {
     try {
       await exposeSheetsFromPicker(sheets, context || undefined);
@@ -127,12 +155,22 @@ export function AgentProfilesView({
   }, []);
   const { triggerAddSheets, isLoading: pickerLoading, pickerError } = useGooglePicker(handleSheetsPicked);
 
-  const { sheetRules, gmailRules } = useMemo(() => {
-    if (!active) return { sheetRules: [], gmailRules: [] };
+  const handleDocsPicked = useCallback(async (docs: PickedSheet[], context?: string) => {
+    try {
+      await exposeDocsFromPicker(docs, context || undefined);
+    } catch (e) {
+      console.error('Failed to save exposed docs:', e);
+    }
+  }, []);
+  const { triggerAddSheets: triggerAddDocs, isLoading: docsPickerLoading, pickerError: docsPickerError } = useGooglePicker(handleDocsPicked, 'doc');
+
+  const { sheetRules, docRules, gmailRules } = useMemo(() => {
+    if (!active) return { sheetRules: [], docRules: [], gmailRules: [] };
     const forProfile = rules.filter(r => isGlobal(r) || r.assignedKeyIds.includes(active.id));
     return {
       sheetRules: forProfile.filter(r => r.service === 'sheets'),
-      gmailRules: forProfile.filter(r => r.service !== 'sheets'),
+      docRules: forProfile.filter(r => r.service === 'docs'),
+      gmailRules: forProfile.filter(r => !FILE_SERVICES.includes(r.service)),
     };
   }, [rules, active]);
 
@@ -172,13 +210,24 @@ export function AgentProfilesView({
 
           <div className="grid grid-cols-1 lg:grid-cols-[1fr_380px] gap-6 items-start">
             <div className="space-y-6 min-w-0">
-              <SheetsRulesCard
+              <FilesRulesCard
+                kind="sheet"
                 profileId={active.id}
                 rules={sheetRules}
-                allRules={rules}
+                grantStates={grantStates.sheet}
                 onExpose={() => triggerAddSheets(active.id)}
                 exposing={pickerLoading}
                 pickerError={pickerError}
+              />
+
+              <FilesRulesCard
+                kind="doc"
+                profileId={active.id}
+                rules={docRules}
+                grantStates={grantStates.doc}
+                onExpose={() => triggerAddDocs(active.id)}
+                exposing={docsPickerLoading}
+                pickerError={docsPickerError}
               />
 
               <GmailRulesCard
@@ -268,7 +317,7 @@ function RecentConnectionsBanner({ connections, rules }: { connections: Connecti
   const recent = connections.filter(
     c => c.status === 'approved' && new Date(c.createdAt).getTime() > sevenDaysAgo,
   );
-  const hasShield = rules.some(r => r.service !== 'sheets' && r.actionType === 'read_blacklist');
+  const hasShield = rules.some(r => !FILE_SERVICES.includes(r.service) && r.actionType === 'read_blacklist');
 
   if (dismissed || recent.length === 0) return null;
 
@@ -427,43 +476,75 @@ function ProfileHeader({ profile }: { profile: Profile }) {
   );
 }
 
-// ─── Google Sheets rules ────────────────────────────────────────────────────
+// ─── Per-file (Sheets / Docs) rules ─────────────────────────────────────────
 
-const SHEET_PERMISSIONS = [
-  { value: 'sheet_read', label: 'Read Only', tone: 'info' as const },
-  { value: 'sheet_read_write', label: 'Read & Write', tone: 'success' as const },
-  { value: 'sheet_block', label: 'Blocked', tone: 'error' as const },
-];
+const FILE_PERMISSIONS = {
+  sheet: [
+    { value: 'sheet_read', label: 'Read Only', tone: 'info' as const },
+    { value: 'sheet_read_write', label: 'Read & Write', tone: 'success' as const },
+    { value: 'sheet_block', label: 'Blocked', tone: 'error' as const },
+  ],
+  doc: [
+    { value: 'doc_read', label: 'Read Only', tone: 'info' as const },
+    { value: 'doc_read_write', label: 'Read & Write', tone: 'success' as const },
+    { value: 'doc_block', label: 'Blocked', tone: 'error' as const },
+  ],
+};
 
-function SheetsRulesCard({
+const FILE_CARD_COPY = {
+  sheet: {
+    tone: 'sheets' as const,
+    title: 'Google Sheets Rules',
+    subtitle: 'Spreadsheets this profile can reach',
+    expose: '+ Expose a sheet',
+    empty: <>No sheets exposed to this profile. Click &quot;+ Expose a sheet&quot; to pick
+      spreadsheets from Google Drive.</>,
+  },
+  doc: {
+    tone: 'docs' as const,
+    title: 'Google Docs Rules',
+    subtitle: 'Documents this profile can reach',
+    expose: '+ Expose a doc',
+    empty: <>No docs exposed to this profile. Click &quot;+ Expose a doc&quot; to pick
+      documents from Google Drive.</>,
+  },
+};
+
+function FilesRulesCard({
+  kind,
   profileId,
   rules,
-  allRules,
+  grantStates,
   onExpose,
   pickerError,
   exposing,
 }: {
+  kind: 'sheet' | 'doc';
   profileId: string;
   rules: Rule[];
-  allRules: Rule[];
+  /** fileId → Google-side grant state; missing entries mean "unknown" (no chip). */
+  grantStates: Record<string, { state: string }>;
   onExpose: () => void;
   pickerError: string | null;
   exposing: boolean;
 }) {
-  // "+ Expose a sheet" opens the Google Picker directly — picking a sheet is
+  const setup = kind === 'sheet'
+    ? { path: '/dashboard/sheets-setup', idParam: 'sid', noun: 'sheet' }
+    : { path: '/dashboard/docs-setup', idParam: 'did', noun: 'doc' };
+  // "+ Expose a …" opens the Google Picker directly — picking a file is
   // the whole flow, whether or not it was already exposed elsewhere (the
   // server action merges assignments instead of narrowing them). No detour
   // through the Accounts page.
-  void profileId; void allRules;
+  const copy = FILE_CARD_COPY[kind];
 
   return (
-    <Card tone="sheets">
+    <Card tone={copy.tone}>
       <CardHeader
-        title="Google Sheets Rules"
-        subtitle="Spreadsheets this profile can reach"
+        title={copy.title}
+        subtitle={copy.subtitle}
         action={
           <button className={buttonSecondary} onClick={onExpose} disabled={exposing}>
-            {exposing ? 'Opening Google Picker…' : '+ Expose a sheet'}
+            {exposing ? 'Opening Google Picker…' : copy.expose}
           </button>
         }
       />
@@ -476,8 +557,7 @@ function SheetsRulesCard({
         )}
         {rules.length === 0 ? (
           <EmptyState>
-            No sheets exposed to this profile. Click &quot;+ Expose a sheet&quot; to pick
-            spreadsheets from Google Drive.
+            {copy.empty}
           </EmptyState>
         ) : (
           rules.map(rule => (
@@ -491,6 +571,15 @@ function SheetsRulesCard({
                     {rule.resourceName || rule.ruleName}
                   </span>
                   {isGlobal(rule) && <Badge tone="neutral">Global</Badge>}
+                  {rule.targetResourceId && grantStates[rule.targetResourceId]?.state === 'missing' && (
+                    <a
+                      href={`${setup.path}?${setup.idParam}=${encodeURIComponent(rule.targetResourceId)}${rule.resourceName ? `&name=${encodeURIComponent(rule.resourceName)}` : ''}`}
+                      className="inline-flex shrink-0 items-center gap-1 rounded-full border border-warning-foreground/30 bg-warning px-2 py-0.5 text-[11px] font-semibold text-warning-foreground hover:opacity-80"
+                      title={`FGAC has this rule, but Google hasn't shared the ${setup.noun} with FGAC yet — agents get errors until you pick it in the Google Picker.`}
+                    >
+                      ⚠ Needs Google access — finish setup
+                    </a>
+                  )}
                 </div>
                 {rule.targetResourceId && (
                   <code className="mt-1 block truncate font-mono text-[11px] text-subtle">
@@ -500,7 +589,7 @@ function SheetsRulesCard({
               </div>
 
               <div className="flex shrink-0 items-center gap-3">
-                <SheetPermissionSelect rule={rule} />
+                <FilePermissionSelect kind={kind} rule={rule} />
                 {!isGlobal(rule) && <DetachRuleButton profileId={profileId} rule={rule} />}
               </div>
             </div>
@@ -513,14 +602,15 @@ function SheetsRulesCard({
 
 /**
  * Saves on change. The select is recolored to match the permission so the
- * access level of every sheet is legible at a glance without reading labels.
+ * access level of every file is legible at a glance without reading labels.
  */
-function SheetPermissionSelect({ rule }: { rule: Rule }) {
+function FilePermissionSelect({ kind, rule }: { kind: 'sheet' | 'doc'; rule: Rule }) {
   const [value, setValue] = useState(rule.actionType);
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
 
-  const tone = SHEET_PERMISSIONS.find(p => p.value === value)?.tone ?? 'neutral';
+  const permissions = FILE_PERMISSIONS[kind];
+  const tone = permissions.find(p => p.value === value)?.tone ?? 'neutral';
   const toneClass = {
     info: 'border-info-foreground/30 bg-info text-info-foreground',
     success: 'border-success-foreground/30 bg-success text-success-foreground',
@@ -552,7 +642,7 @@ function SheetPermissionSelect({ rule }: { rule: Rule }) {
         }}
         className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold disabled:opacity-60 ${toneClass}`}
       >
-        {SHEET_PERMISSIONS.map(p => (
+        {permissions.map(p => (
           <option key={p.value} value={p.value}>{p.label}</option>
         ))}
       </select>
@@ -591,7 +681,7 @@ function GmailRulesCard({
   // Only rules that exist but are not yet on this profile can be applied.
   // Global rules are excluded — they already apply everywhere.
   const applicable = allRules.filter(
-    r => r.service !== 'sheets' && !isGlobal(r) && !r.assignedKeyIds.includes(profileId),
+    r => !FILE_SERVICES.includes(r.service) && !isGlobal(r) && !r.assignedKeyIds.includes(profileId),
   );
 
   return (
@@ -609,7 +699,7 @@ function GmailRulesCard({
                 profileId={profileId}
                 candidates={applicable}
                 emptyMessage={
-                  allRules.some(r => r.service !== 'sheets')
+                  allRules.some(r => !FILE_SERVICES.includes(r.service))
                     ? 'Every existing Gmail rule already applies to this profile.'
                     : "You haven't created any Gmail rules yet."
                 }

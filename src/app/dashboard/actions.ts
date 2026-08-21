@@ -273,7 +273,7 @@ export async function createRule(formData: FormData) {
   let finalRegexPattern: string | null = null;
   let targetResourceId: string | null = null;
 
-  if (service === 'sheets') {
+  if (service === 'sheets' || service === 'docs') {
     targetResourceId = rawPattern;
   } else {
     finalRegexPattern = rawPattern;
@@ -321,7 +321,7 @@ export async function updateRule(formData: FormData) {
   let finalRegexPattern: string | null = null;
   let targetResourceId: string | null = null;
 
-  if (service === 'sheets') {
+  if (service === 'sheets' || service === 'docs') {
     targetResourceId = rawPattern;
   } else {
     finalRegexPattern = rawPattern;
@@ -342,7 +342,7 @@ export async function updateRule(formData: FormData) {
     service,
     actionType,
     regexPattern: finalRegexPattern,
-    targetResourceId: service === 'sheets' ? targetResourceId : rule.targetResourceId,
+    targetResourceId: (service === 'sheets' || service === 'docs') ? targetResourceId : rule.targetResourceId,
     targetEmail: targetEmail || null,
   }).where(eq(accessRules.id, ruleId));
 
@@ -380,16 +380,20 @@ const SHEET_ACTION_TYPES = ['sheet_read', 'sheet_read_write', 'sheet_block'] as 
  * Google Picker flow.
  */
 /**
- * Persist sheets picked in the Google Picker as access rules.
+ * Persist files picked in the Google Picker as access rules (shared by the
+ * sheets and docs exposure flows).
  *
  * With a profileId the exposure is scoped to that profile; without one it is
  * global. Existing rules are never narrowed: a global rule stays global, and a
  * profile-scoped rule gains the new assignment instead of replacing the set.
  */
-export async function exposeSheetsFromPicker(
+async function exposeFilesFromPicker(
+  kind: 'sheet' | 'doc',
   picked: { id: string; name: string }[],
   profileId?: string,
 ) {
+  const { DRIVE_FILE_KINDS } = await import("@/lib/driveFileKinds");
+  const d = DRIVE_FILE_KINDS[kind];
   const dbUser = await getDbUser();
 
   if (profileId) {
@@ -399,15 +403,16 @@ export async function exposeSheetsFromPicker(
     if (!key) throw new Error("Unauthorized or profile not found");
   }
 
-  for (const sheet of picked) {
-    if (!sheet?.id) continue;
-    const name = sheet.name || `Spreadsheet (${sheet.id.slice(0, 8)})`;
+  const fallbackNoun = d.noun.charAt(0).toUpperCase() + d.noun.slice(1);
+  for (const file of picked) {
+    if (!file?.id) continue;
+    const name = file.name || `${fallbackNoun} (${file.id.slice(0, 8)})`;
 
     const existing = await db.select().from(accessRules)
       .where(and(
         eq(accessRules.userId, dbUser.id),
-        eq(accessRules.service, 'sheets'),
-        eq(accessRules.targetResourceId, sheet.id),
+        eq(accessRules.service, d.service),
+        eq(accessRules.targetResourceId, file.id),
       ))
       .limit(1).then(res => res[0]);
 
@@ -431,9 +436,9 @@ export async function exposeSheetsFromPicker(
         .values({
           userId: dbUser.id,
           ruleName: name,
-          service: 'sheets',
-          actionType: 'sheet_read',
-          targetResourceId: sheet.id,
+          service: d.service,
+          actionType: d.actionTypes.read,
+          targetResourceId: file.id,
           resourceName: name,
         })
         .returning();
@@ -449,19 +454,39 @@ export async function exposeSheetsFromPicker(
   revalidatePath("/dashboard/accounts");
 }
 
+export async function exposeSheetsFromPicker(
+  picked: { id: string; name: string }[],
+  profileId?: string,
+) {
+  return exposeFilesFromPicker('sheet', picked, profileId);
+}
+
+export async function exposeDocsFromPicker(
+  picked: { id: string; name: string }[],
+  profileId?: string,
+) {
+  return exposeFilesFromPicker('doc', picked, profileId);
+}
+
+const DOC_ACTION_TYPES = ['doc_read', 'doc_read_write', 'doc_block'] as const;
+
 export async function setSheetRulePermission(ruleId: string, actionType: string) {
   const dbUser = await getDbUser();
 
-  if (!SHEET_ACTION_TYPES.includes(actionType as typeof SHEET_ACTION_TYPES[number])) {
-    throw new Error(`Invalid sheet permission: ${actionType}`);
+  const isSheetType = SHEET_ACTION_TYPES.includes(actionType as typeof SHEET_ACTION_TYPES[number]);
+  const isDocType = DOC_ACTION_TYPES.includes(actionType as typeof DOC_ACTION_TYPES[number]);
+  if (!isSheetType && !isDocType) {
+    throw new Error(`Invalid file permission: ${actionType}`);
   }
 
   const rule = await db.select().from(accessRules).where(eq(accessRules.id, ruleId)).limit(1).then(res => res[0]);
   if (!rule || rule.userId !== dbUser.id) {
     throw new Error("Unauthorized or Rule not found");
   }
-  if (rule.service !== 'sheets') {
-    throw new Error("Not a Google Sheets rule");
+  // The action-type family must match the rule's service — a sheets rule can
+  // never end up with doc_* permissions or vice versa.
+  if (!(rule.service === 'sheets' && isSheetType) && !(rule.service === 'docs' && isDocType)) {
+    throw new Error("Permission type does not match the rule's service");
   }
 
   await db.update(accessRules)
@@ -648,11 +673,15 @@ export type MagicApprovalResult =
        * grant for the sheet yet — the approve page must route the user into
        * the Picker recovery flow instead of claiming the agent can retry. */
       needsSheetsGrant?: { spreadsheetId: string; resourceName?: string };
+      /** Docs twin of needsSheetsGrant (routes to /dashboard/docs-setup). */
+      needsDocsGrant?: { documentId: string; resourceName?: string };
       /** Set on successful sheets approvals: the primary spreadsheet a rule
        * was created for. The approve page's success card polls the Google
        * grant for this id before telling the user "the agent can retry now"
        * (drive.file grants are eventually consistent — see sheetsGrantCheck). */
       grantedSpreadsheetId?: string;
+      /** Docs twin of grantedSpreadsheetId. */
+      grantedDocumentId?: string;
     }
   | {
       ok: false;
@@ -675,7 +704,7 @@ export type MagicApprovalResult =
  * revoked permissions is the replay attack single-use exists to prevent.
  */
 async function grantActiveForApproval(
-  p: { action: string; userId: string; recipient?: string; spreadsheetId?: string },
+  p: { action: string; userId: string; recipient?: string; spreadsheetId?: string; documentId?: string },
   keyId: string,
 ): Promise<boolean> {
   const assignedOrGlobal = async (ruleId: string): Promise<boolean> => {
@@ -714,6 +743,21 @@ async function grantActiveForApproval(
     return false;
   }
 
+  if ((p.action === "docs_expose" || p.action === "docs_write") && p.documentId) {
+    const needed = p.action === "docs_write"
+      ? ["doc_read_write"]
+      : ["doc_read", "doc_read_write"];
+    const rules = await db.select().from(accessRules).where(and(
+      eq(accessRules.userId, p.userId),
+      eq(accessRules.service, "docs"),
+    ));
+    for (const r of rules) {
+      if (r.targetResourceId !== p.documentId || !needed.includes(r.actionType)) continue;
+      if (await assignedOrGlobal(r.id)) return true;
+    }
+    return false;
+  }
+
   return false;
 }
 
@@ -735,6 +779,142 @@ export async function approvalLinkStatus(token: string): Promise<
     .where(eq(approvalConsumptions.jti, p.jti)).limit(1);
   if (used.length === 0) return "fresh";
   return (await grantActiveForApproval(p, p.proxyKeyId)) ? "already_granted" : "used_inactive";
+}
+
+/**
+ * Shared picker-first approval for per-file (sheets/docs) magic links.
+ * Extracted from the sheets branch of approveMagicLink when Docs support
+ * landed — behavior for sheets is unchanged (same events, same copy).
+ *
+ * The pick is the real authorization moment — it registers the Google-side
+ * drive.file grant AND confirms the file's identity. Rules are created only
+ * for picked ids Google confirms the owner's token can reach; the token's id
+ * gets NO rule unless it is among them (no phantom rules for ids the agent
+ * guessed wrong). drive.file grants are eventually consistent: verifying a
+ * pick in the seconds right after a first-time consent (the hottest path for
+ * new users) can see "missing" for a file Google IS sharing — same race as
+ * the MCP-side grace retries, so the pick gets the same grace instead of
+ * failing the user's first approval (observed live 2026-08-19).
+ */
+async function applyFileGrantApproval(opts: {
+  kind: "sheet" | "doc";
+  dbUser: { id: string; clerkUserId: string };
+  key: { id: string };
+  p: { jti: string; action: string; resourceName?: string };
+  fileId: string;
+  readWrite: boolean;
+  picked?: { id: string; name?: string }[];
+  consume: () => Promise<boolean>;
+  alreadyUsed: () => Promise<MagicApprovalResult>;
+  describe: () => string;
+}): Promise<MagicApprovalResult> {
+  const { kind, dbUser, key, p, fileId, readWrite, picked, consume, alreadyUsed, describe } = opts;
+  const { DRIVE_FILE_KINDS } = await import("@/lib/driveFileKinds");
+  const { verifyFileGrant, getOwnerGoogleToken } = await import("@/lib/driveFileGrantCheck");
+  const { captureServerEvent } = await import("@/lib/posthogServer");
+  const d = DRIVE_FILE_KINDS[kind];
+  // Kind-specific analytics/copy: sheets keeps its historical event and prop
+  // names; the short noun matches the pre-docs sheets copy ("sheet(s)").
+  const verificationEvent = kind === "sheet" ? "sheets_grant_verification" : "docs_grant_verification";
+  const idProp = kind === "sheet" ? "spreadsheet_id" : "document_id";
+  const short = kind === "sheet" ? "sheet" : "document";
+  const googleToken = await getOwnerGoogleToken(dbUser.clerkUserId);
+
+  const grantedResult = (grantedId: string, description: string): MagicApprovalResult =>
+    kind === "sheet"
+      ? { ok: true, description, grantedSpreadsheetId: grantedId }
+      : { ok: true, description, grantedDocumentId: grantedId };
+
+  const insertFileRule = async (id: string, name: string | null) => {
+    const [rule] = await db.insert(accessRules).values({
+      userId: dbUser.id,
+      ruleName: `${readWrite ? "Read & Write" : "Read Only"}: ${name || id}`,
+      service: d.service,
+      actionType: readWrite ? d.actionTypes.readWrite : d.actionTypes.read,
+      targetResourceId: id,
+      resourceName: name,
+    }).returning();
+    await db.insert(keyRuleAssignments).values({ proxyKeyId: key.id, accessRuleId: rule.id });
+  };
+
+  if (picked && picked.length > 0) {
+    const verifyPicks = async () => {
+      const out: { id: string; name: string | null }[] = [];
+      for (const s of picked.slice(0, 10)) {
+        if (typeof s?.id !== "string" || !s.id) continue;
+        const check = googleToken
+          ? await verifyFileGrant(kind, googleToken, s.id)
+          : { state: "missing" as const };
+        if (check.state === "ok") {
+          out.push({ id: s.id, name: (typeof s.name === "string" && s.name) || ("title" in check ? check.title : null) });
+        }
+      }
+      return out;
+    };
+    let verified = await verifyPicks();
+    for (let attempt = 0; verified.length === 0 && attempt < 2; attempt++) {
+      await new Promise(r => setTimeout(r, 3500));
+      verified = await verifyPicks();
+    }
+    if (verified.length === 0) {
+      // Read-only failure — the link was NOT consumed; the user can retry.
+      return {
+        ok: false,
+        retryable: true,
+        reason: `Google hasn't finished sharing the picked ${short}(s) with FGAC yet. Wait a few seconds and pick again — this link is still valid.`,
+      };
+    }
+    if (!(await consume())) return await alreadyUsed();
+    for (const v of verified) await insertFileRule(v.id, v.name);
+
+    const substituted = !verified.some(v => v.id === fileId);
+    captureServerEvent(dbUser.clerkUserId, verificationEvent, {
+      result: "ok", via: "magic_link", [idProp]: verified[0].id, link_id: p.jti,
+    });
+    captureServerEvent(dbUser.clerkUserId, "approval_link_approved", {
+      action: p.action, substituted, granted_count: verified.length, link_id: p.jti,
+    });
+    revalidatePath("/dashboard");
+    const names = verified.map(v => v.name || v.id).join(", ");
+    const level = readWrite ? "read & write" : "read-only";
+    return grantedResult(
+      verified[0].id,
+      substituted
+        ? `Granted ${level} access to ${names}. That's the ${short} you picked — not the ID the agent originally sent, which you don't appear to have. The agent will find the right ${short} in its permissions.`
+        : `Granted ${level} access to ${names}.`,
+    );
+  }
+
+  // Fallback path (no pick info — verification was inconclusive at page
+  // load, or a client without the picker flow). Create the rule, verify
+  // the Google half, and route to the recovery page when it's missing —
+  // never claim "retry now" for a file Google can't reach (the
+  // approve→retry→404 dead end the 2026-08 launch cohort churned on).
+  if (!(await consume())) return await alreadyUsed();
+  await insertFileRule(fileId, p.resourceName || null);
+  const grant = googleToken
+    ? await verifyFileGrant(kind, googleToken, fileId)
+    : { state: "missing" as const };
+  captureServerEvent(dbUser.clerkUserId, verificationEvent, {
+    result: grant.state,
+    via: "magic_link",
+    [idProp]: fileId,
+    link_id: p.jti,
+  });
+  if (grant.state === "missing") {
+    captureServerEvent(dbUser.clerkUserId, "approval_link_approved", { action: p.action, link_id: p.jti });
+    revalidatePath("/dashboard");
+    return {
+      ok: true,
+      description: describe(),
+      ...(kind === "sheet"
+        ? { needsSheetsGrant: { spreadsheetId: fileId, resourceName: p.resourceName || undefined } }
+        : { needsDocsGrant: { documentId: fileId, resourceName: p.resourceName || undefined } }),
+    };
+  }
+  captureServerEvent(dbUser.clerkUserId, "approval_link_approved", { action: p.action, link_id: p.jti });
+  revalidatePath("/dashboard");
+  return grantedResult(fileId, describe());
 }
 
 /**
@@ -823,112 +1003,25 @@ export async function approveMagicLink(
     // success — the agent's retry will work either way.
     await grantSendToAnyone(dbUser.id, key.id);
   } else if ((p.action === "sheets_expose" || p.action === "sheets_write") && p.spreadsheetId) {
-    const readWrite = p.action === "sheets_write" || sheetsWriteChoice === true;
-    const { verifySheetsGrant, getOwnerGoogleToken } = await import("@/lib/sheetsGrantCheck");
-    const googleToken = await getOwnerGoogleToken(dbUser.clerkUserId);
-
-    const insertSheetRule = async (id: string, name: string | null) => {
-      const [rule] = await db.insert(accessRules).values({
-        userId: dbUser.id,
-        ruleName: `${readWrite ? "Read & Write" : "Read Only"}: ${name || id}`,
-        service: "sheets",
-        actionType: readWrite ? "sheet_read_write" : "sheet_read",
-        targetResourceId: id,
-        resourceName: name,
-      }).returning();
-      await db.insert(keyRuleAssignments).values({ proxyKeyId: key.id, accessRuleId: rule.id });
-    };
-
-    if (pickedSheets && pickedSheets.length > 0) {
-      // Picker-first path. The pick is the real authorization moment — it
-      // registers the Google-side drive.file grant AND confirms the file's
-      // identity. Rules are created only for picked ids Google confirms the
-      // owner's token can reach; the token's id gets NO rule unless it is
-      // among them (no phantom rules for ids the agent guessed wrong).
-      // drive.file grants are eventually consistent: verifying a pick in the
-      // seconds right after a first-time consent (the hottest path for new
-      // users) can see "missing" for a sheet Google IS sharing. Same race as
-      // the MCP-side withSheetsGrace — give the pick the same grace instead
-      // of failing the user's first approval (observed live 2026-08-19).
-      const verifyPicks = async () => {
-        const out: { id: string; name: string | null }[] = [];
-        for (const s of pickedSheets.slice(0, 10)) {
-          if (typeof s?.id !== "string" || !s.id) continue;
-          const check = googleToken
-            ? await verifySheetsGrant(googleToken, s.id)
-            : { state: "missing" as const };
-          if (check.state === "ok") {
-            out.push({ id: s.id, name: (typeof s.name === "string" && s.name) || ("title" in check ? check.title : null) });
-          }
-        }
-        return out;
-      };
-      let verified = await verifyPicks();
-      for (let attempt = 0; verified.length === 0 && attempt < 2; attempt++) {
-        await new Promise(r => setTimeout(r, 3500));
-        verified = await verifyPicks();
-      }
-      if (verified.length === 0) {
-        // Read-only failure — the link was NOT consumed; the user can retry.
-        return {
-          ok: false,
-          retryable: true,
-          reason: "Google hasn't finished sharing the picked sheet(s) with FGAC yet. Wait a few seconds and pick again — this link is still valid.",
-        };
-      }
-      if (!(await consume())) return await alreadyUsed();
-      for (const v of verified) await insertSheetRule(v.id, v.name);
-
-      const substituted = !verified.some(v => v.id === p.spreadsheetId);
-      captureServerEvent(dbUser.clerkUserId, "sheets_grant_verification", {
-        result: "ok", via: "magic_link", spreadsheet_id: verified[0].id, link_id: p.jti,
-      });
-      captureServerEvent(dbUser.clerkUserId, "approval_link_approved", {
-        action: p.action, substituted, granted_count: verified.length, link_id: p.jti,
-      });
-      revalidatePath("/dashboard");
-      const names = verified.map(v => v.name || v.id).join(", ");
-      const level = readWrite ? "read & write" : "read-only";
-      return {
-        ok: true,
-        grantedSpreadsheetId: verified[0].id,
-        description: substituted
-          ? `Granted ${level} access to ${names}. That's the sheet you picked — not the ID the agent originally sent, which you don't appear to have. The agent will find the right sheet in its permissions.`
-          : `Granted ${level} access to ${names}.`,
-      };
-    }
-
-    // Fallback path (no pick info — verification was inconclusive at page
-    // load, or a client without the picker flow). Create the rule, verify
-    // the Google half, and route to the recovery page when it's missing —
-    // never claim "retry now" for a sheet Google can't reach (the
-    // approve→retry→404 dead end the 2026-08 launch cohort churned on).
-    if (!(await consume())) return await alreadyUsed();
-    await insertSheetRule(p.spreadsheetId, p.resourceName || null);
-    const grant = googleToken
-      ? await verifySheetsGrant(googleToken, p.spreadsheetId)
-      : { state: "missing" as const };
-    captureServerEvent(dbUser.clerkUserId, "sheets_grant_verification", {
-      result: grant.state,
-      via: "magic_link",
-      spreadsheet_id: p.spreadsheetId,
-      link_id: p.jti,
+    return applyFileGrantApproval({
+      kind: "sheet",
+      dbUser, key, p,
+      fileId: p.spreadsheetId,
+      readWrite: p.action === "sheets_write" || sheetsWriteChoice === true,
+      picked: pickedSheets,
+      consume, alreadyUsed,
+      describe: () => describeApproval(p),
     });
-    if (grant.state === "missing") {
-      captureServerEvent(dbUser.clerkUserId, "approval_link_approved", { action: p.action, link_id: p.jti });
-      revalidatePath("/dashboard");
-      return {
-        ok: true,
-        description: describeApproval(p),
-        needsSheetsGrant: {
-          spreadsheetId: p.spreadsheetId,
-          resourceName: p.resourceName || undefined,
-        },
-      };
-    }
-    captureServerEvent(dbUser.clerkUserId, "approval_link_approved", { action: p.action, link_id: p.jti });
-    revalidatePath("/dashboard");
-    return { ok: true, description: describeApproval(p), grantedSpreadsheetId: p.spreadsheetId };
+  } else if ((p.action === "docs_expose" || p.action === "docs_write") && p.documentId) {
+    return applyFileGrantApproval({
+      kind: "doc",
+      dbUser, key, p,
+      fileId: p.documentId,
+      readWrite: p.action === "docs_write" || sheetsWriteChoice === true,
+      picked: pickedSheets,
+      consume, alreadyUsed,
+      describe: () => describeApproval(p),
+    });
   } else {
     return { ok: false, reason: "This approval link is malformed." };
   }

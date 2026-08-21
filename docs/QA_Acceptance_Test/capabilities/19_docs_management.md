@@ -1,0 +1,133 @@
+# Capability: Google Docs Management (Expose, Access, Tools)
+
+## Overview
+Covers the Google Docs per-file access lifecycle end to end: the dashboard UX for
+exposing a document to a profile (Google Picker `DOCUMENTS` view, sharing the
+sheets `drive.file` machinery), the curated MCP tools (`docs_read_document`,
+`docs_append_text`, `docs_replace_text`), raw-API enforcement of the `documents`
+family (which was unenforced passthrough before this feature), the proxy-route
+twin, agent-created-doc auto-grant, and the docs approval/recovery funnel.
+Everything here mirrors capability 09/17 semantics for sheets — where behavior
+intentionally differs, the assertion says so.
+
+## Pre-requisites
+* `/qa-setup` complete; dev server running; USER_A signed in on the dashboard.
+* At least one proxy key (Agent Profile) exists with a known bearer token.
+* Docs fixtures owned by USER_A (see `setup/03_rules_configuration.md`):
+  - one "exposed" Google Doc (picked in the Picker at least once), and
+  - one "external" Google Doc that has NEVER been picked (created directly at
+    docs.google.com) — the negative-control fixture. Both fixture ids are
+    recorded in the setup doc, never inline here.
+* UI assertions: built-in browser (Picker iframe caveats identical to
+  capability 09's harness note — the app-API seam here is
+  `POST /api/rules/grant-docs-access` / the `exposeDocsFromPicker` action).
+  API assertions: MCP tools with the profile's connection, or curl with the
+  profile's `sk_proxy_` bearer against `/api/proxy/v1/documents/...`.
+
+## Assertions
+
+### A1: "+ Expose a doc" on a profile opens the Google Picker with the Documents view
+- On `/dashboard`, select any profile tab and click **+ Expose a doc** in the
+  Google Docs Rules card.
+- **Expected**: The Google Picker modal opens on this page with the Documents
+  tab (not spreadsheets). No navigation, no dead-end. (If the drive.file grant
+  is missing, a redirect to Google consent is acceptable — see A2.)
+
+### A2: Consent round-trip returns kind-scoped — the docs picker reopens, not the sheets one
+- Deterministic proxy for the return leg: navigate to
+  `/dashboard?autoOpenPicker=true&pickerKind=doc&pickerContext=<profileId>`.
+- **Expected**: The URL is cleaned AND the DOCUMENTS-view picker opens. A legacy
+  URL without `pickerKind` must open the SHEETS picker (back-compat default) —
+  the two picker hook instances on the dashboard must not both fire.
+
+### A3: A doc picked from a profile is scoped to that profile, defaulting to Read Only
+- With a doc exposed from profile P's card, check the rules state (dashboard or
+  `GET /api/rules/grant-docs-access`).
+- **Expected**: The new rule has `service='docs'`, `actionType='doc_read'`, the
+  document's `targetResourceId` and `resourceName`, and is assigned to P.
+  Re-picking the same doc must not narrow existing global rules (same merge
+  semantics as sheets, capability 09 A3).
+
+### A4: Accounts-page "Add Google Doc +" creates a global docs rule
+- On `/dashboard/accounts`, click **Add Google Doc +** in the Google Docs
+  Access Rules card.
+- **Expected**: Picker opens directly (Documents view); a picked doc appears in
+  the docs table with its ID shown; the rule is global. The sheets manager
+  above it is unchanged.
+
+### A5: get_my_permissions carries the document id for docs rules
+- As an agent, call `get_my_permissions`.
+- **Expected**: Every docs rule includes `documentId` (the `targetResourceId`)
+  and `resourceName`; `defaults.docs` states documents are DENIED unless
+  exposed. A docs rule reaching an agent without its document id is a failure.
+
+### A6: Unexposed doc is denied with a docs_expose approval link
+- Call `docs_read_document` (and raw `google_api_get` with path
+  `v1/documents/<external doc id>`) for a doc with NO docs rule.
+- **Expected**: 🚫 denial naming the document id, `denial_code=docs_not_exposed`
+  on the tool-call event, and a single-use approval link whose action is
+  `docs_expose` (30-minute TTL). The `documents` family must NOT fall through
+  to raw passthrough (pre-docs behavior) — the denial is FGAC's, not Google's.
+
+### A7: Exposed doc reads succeed through every read surface
+- With the exposed fixture doc under a `doc_read` rule: call
+  `docs_read_document` (no `fields`), `docs_read_document` with
+  `fields=title`, raw `google_api_get` `v1/documents/<id>`, and proxy
+  `GET /api/proxy/v1/documents/<id>`.
+- **Expected**: All four return the raw Docs API document resource (title/body
+  JSON — no FGAC transformation); the `fields` variant returns only the masked
+  fields. Responses carry `response_chars`/`response_kb` on their tool-call
+  events (capability 16 A8).
+
+### A8: Writes require Read & Write — and use batchUpdate semantics
+- With the rule at `doc_read`: call `docs_append_text`, `docs_replace_text`,
+  and raw `google_api_modify` `v1/documents/<id>:batchUpdate`.
+- **Expected**: All denied with `denial_code=docs_read_only` and a
+  `docs_write` approval link (write-level, never a read-only under-grant —
+  same matrix as sheets). After flipping the rule to `doc_read_write`:
+  `docs_append_text` appends text at the end of the document (existing content
+  untouched), `docs_replace_text` replaces occurrences, raw batchUpdate
+  succeeds, and the changes are visible in a follow-up `docs_read_document`.
+
+### A9: doc_block denies everything and never mints a link
+- Set the rule to `doc_block` (Blocked in either dashboard select).
+- **Expected**: Reads AND writes are denied with
+  `denial_code=docs_blocked`; the denial carries NO approval link (weakening a
+  deliberate block stays a dashboard act). The underlying Google grant is kept
+  (flipping back to Read Only restores access without re-picking).
+
+### A10: Agent-created docs are auto-granted to the creating key
+- Call raw `google_api_modify` POST `v1/documents` with body `{"title": "..."}`.
+- **Expected**: 200 with a new `documentId`; a `doc_read_write` rule scoped to
+  the calling key appears (ruleName `Agent-created: <title>`); an immediate
+  `docs_read_document` on the new id succeeds with no approval;
+  `agent_doc_created` fires with `auto_granted=true`.
+
+### A11: Proxy route enforces docs rules like MCP does
+- With the profile's `sk_proxy_` bearer: `GET /api/proxy/v1/documents/<exposed id>`
+  (expect 200), `GET` on the never-picked external doc id (expect 403 naming
+  the document), `POST /api/proxy/v1/documents/<exposed id>:batchUpdate` under
+  `doc_read` (expect 403 read-only), and a Drive-path probe
+  `GET /api/proxy/drive/v3/files/<exposed doc id>` (expect the docs rule to
+  authorize it — the Drive per-file guard honors docs rules, not just sheets).
+
+### A12: Docs grant recovery mirrors the sheets funnel
+- Create a docs rule for a real-but-never-picked doc id via the app-API seam
+  (`POST /api/rules/grant-docs-access`), then:
+  1. dashboard docs manager shows the "⚠ Needs Google access — finish setup"
+     chip linking to `/dashboard/docs-setup?did=<id>`;
+  2. the docs-setup page offers the pick-first recovery (no sheets demo video
+     is embedded for docs — intentional until a docs video exists);
+  3. an MCP docs call in this stranded state returns the honest post-policy
+     error pointing at `/dashboard/docs-setup?did=<id>` (never a bare
+     "check the ID");
+  4. a magic-link approval for this doc lands in the pick-first state
+     (`docs-flow-pick-first` testid), and `verify-docs-access?did=<id>`
+     reports `missing` → after a Picker pick, `ok` with the title
+     (full-fidelity pick via the Playwright CDP path, as in capability 09).
+
+## Analytics hooks
+`docs_grant_verification`, `docs_grant_recovered`, `agent_doc_created`,
+`approval_link_minted` with `action=docs_expose|docs_write`, denial codes
+`docs_not_exposed|docs_read_only|docs_blocked`, grace props `docs_grace_*`,
+and universal `response_chars`/`response_kb` (capability 16).

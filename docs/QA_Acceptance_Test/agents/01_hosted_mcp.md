@@ -237,6 +237,20 @@ curl -s $BASE_URL/api/mcp -X POST \
   `qa-posthog-events.ts --event sheets_grant_verification` and
   `--event sheets_grant_recovered` scoped to the run window.
 
+## Capability: Docs Management (→ capabilities/19_docs_management.md)
+
+- A5–A10: `tools/call` via curl on `docs_read_document` / `docs_append_text` /
+  `docs_replace_text` / `google_api_get` (`v1/documents/<id>`) /
+  `google_api_modify` (`:batchUpdate`, and POST `v1/documents` for the
+  auto-grant), using the setup doc's exposed + external docs fixtures.
+- A11: proxy-route probes with the profile's `sk_proxy_` bearer against
+  `$BASE_URL/api/proxy/v1/documents/...` and `.../drive/v3/files/<doc id>`.
+- A1–A4, A12: browser assertions via `/browser-agent` (picker iframe caveats
+  identical to capability 09; app-API seam is `POST /api/rules/grant-docs-access`;
+  full-fidelity picks via the Playwright CDP path).
+
+---
+
 ## Capability: Analytics Events (→ capabilities/16_analytics_events.md)
 
 > Run LAST — it inspects the PostHog events the capabilities above generated.

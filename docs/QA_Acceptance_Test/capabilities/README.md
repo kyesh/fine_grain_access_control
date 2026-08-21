@@ -31,3 +31,5 @@
 | 15 | `15_request_access_tool.md` | Conversational permission upgrades via `request_access` |
 | 16 | `16_analytics_events.md` | PostHog events arrive with canonical schema (`$mcp_tool_call` + tool names, outcomes, environment tags) |
 | 17 | `17_sheets_grant_recovery.md` | Sheets approval verifies the Google-side grant; picker + video recovery when missing; honest post-policy errors |
+| 18 | `18_google_reconnect.md` | Broken/expired Google grants route into the Reconnect Google flow |
+| 19 | `19_docs_management.md` | Per-document read/write/block rules, docs MCP tools, raw `documents` enforcement, docs grant recovery |

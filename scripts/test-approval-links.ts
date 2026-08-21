@@ -58,6 +58,20 @@ async function main() {
   check('sheets payload carries resourceName', sheetOk.ok && sheetOk.payload.resourceName === 'Budget');
   if (sheetOk.ok) check('sheets description prefers name', describeApproval(sheetOk.payload).includes('Budget'));
 
+  // Docs actions mirror sheets: documentId payload, resourceName, 30-min TTL.
+  const docToken = await mintApprovalToken('u', 'k', { action: 'docs_write', documentId: 'doc-9', resourceName: 'Q3 Notes' });
+  const docOk = await verifyApprovalToken(docToken);
+  check('docs payload carries documentId', docOk.ok && docOk.payload.documentId === 'doc-9');
+  check('docs payload carries resourceName', docOk.ok && docOk.payload.resourceName === 'Q3 Notes');
+  if (docOk.ok) {
+    check('docs description prefers name', describeApproval(docOk.payload).includes('Q3 Notes'));
+    check('docs description says read & write', describeApproval(docOk.payload).includes('read & write'));
+  }
+  const docExpose = await verifyApprovalToken(await mintApprovalToken('u', 'k', { action: 'docs_expose', documentId: 'doc-1' }));
+  check('docs_expose roundtrip verifies', docExpose.ok && docExpose.payload.action === 'docs_expose');
+  const expiredDoc = await verifyApprovalToken(await mintApprovalToken('u', 'k', { action: 'docs_expose', documentId: 'doc-1' }, -10));
+  check('expired docs token rejected', !expiredDoc.ok && expiredDoc.reason === 'expired');
+
   // send_all: the "email anyone" escape hatch offered alongside per-recipient
   // approval in send denials.
   const allToken = await mintApprovalToken('user-1', 'key-1', { action: 'send_all' });

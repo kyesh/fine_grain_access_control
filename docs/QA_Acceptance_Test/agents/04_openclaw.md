@@ -148,6 +148,17 @@ docker compose -f test/qa-envs/openclaw/docker-compose.yml down
 - A2–A6: browser assertions — cover via 01_hosted_mcp or `skip` with reason.
 - A4 retry: repeat the OpenClaw task after recovery → success.
 
+## Capability: Docs Management (→ capabilities/19_docs_management.md)
+
+- From the OpenClaw container, exercise docs_read_document / docs_append_text /
+  docs_replace_text and the raw documents calls against the connected FGAC MCP
+  server; assert denials carry the docs_expose/docs_write links (A6, A8) and
+  reads/writes succeed per rule level (A7, A8).
+- Browser/dashboard halves (A1–A4, A12) via `/browser-agent` outside the
+  container, as with sheets.
+
+---
+
 ## Capability: Analytics Events (→ capabilities/16_analytics_events.md)
 
 > Run LAST — it inspects the PostHog events the capabilities above generated.

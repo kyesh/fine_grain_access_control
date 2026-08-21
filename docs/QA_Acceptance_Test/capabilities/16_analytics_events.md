@@ -31,6 +31,15 @@ Run these AFTER the environment's other capabilities (they generate the tool
 calls under inspection). Use `--since` spanning the run so counts are
 attributable to it.
 
+### A8: Response-size monitoring props on every tool call
+- Inspect `$mcp_tool_call` events across services (gmail, sheets, docs tools)
+  from this run.
+- **Expected**: Every event carries `response_chars` and `response_kb`
+  (monitoring-only — plan google-docs-support v5, D7: no size caps are
+  enforced; the props exist so PostHog can measure how often responses exceed
+  MCP clients' tool-result budgets). `gmail_get_attachment` additionally keeps
+  its historical `attachment_chars`/`attachment_kb`.
+
 ### A1: Canonical tool-call events arrive with tool names
 - Run: `npx tsx scripts/qa-posthog-events.ts --event '$mcp_tool_call' --since <run window> --environment <tier>`
 - **Expected**: `row_count` ≥ the number of MCP tool calls this run made;

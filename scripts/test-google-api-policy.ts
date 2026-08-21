@@ -3,7 +3,8 @@
  * (src/app/api/mcp/googleApiPolicy.ts). Run: npx tsx scripts/test-google-api-policy.ts
  */
 import {
-  classifyGoogleApiCall, extractSendRecipients, collectLabelIds, sheetsApprovalAction,
+  classifyGoogleApiCall, extractSendRecipients, collectLabelIds,
+  sheetsApprovalAction, docsApprovalAction, extractDocsDocumentId,
 } from '../src/app/api/mcp/googleApiPolicy';
 
 let failures = 0;
@@ -57,6 +58,29 @@ expect('sheets no-id GET → passthrough (Google rejects it, not us)',
 expect('batch endpoint → denied',
   classifyGoogleApiCall('batch/gmail/v1', 'POST'),
   (c: { kind: string }) => c.kind === 'denied');
+expect('docs GET document → docs read',
+  classifyGoogleApiCall('v1/documents/1AbCdoc', 'GET'),
+  (c: { kind: string; documentId?: string; isMutating?: boolean }) =>
+    c.kind === 'docs' && c.documentId === '1AbCdoc' && c.isMutating === false);
+expect('docs GET with docs/ prefix → docs read',
+  classifyGoogleApiCall('docs/v1/documents/1AbCdoc?fields=title', 'GET'),
+  (c: { kind: string; documentId?: string }) => c.kind === 'docs' && c.documentId === '1AbCdoc');
+expect('docs batchUpdate POST → docs write (verb suffix not part of id)',
+  classifyGoogleApiCall('v1/documents/1AbCdoc:batchUpdate', 'POST'),
+  (c: { kind: string; documentId?: string; isMutating?: boolean }) =>
+    c.kind === 'docs' && c.documentId === '1AbCdoc' && c.isMutating === true);
+expect('docs create (no id) POST → docs_create (auto-granted, mirrors sheets_create)',
+  classifyGoogleApiCall('v1/documents', 'POST'),
+  (c: { kind: string }) => c.kind === 'docs_create');
+expect('docs no-id GET → passthrough (Google rejects it, not us)',
+  classifyGoogleApiCall('v1/documents', 'GET'),
+  (c: { kind: string; family?: string }) => c.kind === 'passthrough' && c.family === 'documents');
+
+console.log('extractDocsDocumentId:');
+expect('plain path', extractDocsDocumentId('v1/documents/1AbC_x-9'), (id: string | null) => id === '1AbC_x-9');
+expect('batchUpdate verb excluded', extractDocsDocumentId('v1/documents/1AbC:batchUpdate'), (id: string | null) => id === '1AbC');
+expect('no id → null', extractDocsDocumentId('v1/documents'), (id: string | null) => id === null);
+
 expect('unknown API (drive) → passthrough with family (classify, not block)',
   classifyGoogleApiCall('drive/v3/files', 'GET'),
   (c: { kind: string; family?: string }) => c.kind === 'passthrough' && c.family === 'drive/v3');
@@ -112,6 +136,24 @@ expect('blocked mints nothing (write)',
 expect('spreadsheetId carried through',
   sheetsApprovalAction('not_exposed', 'ss-42', true),
   (a: { spreadsheetId?: string } | null) => a?.spreadsheetId === 'ss-42');
+
+console.log('docsApprovalAction (same matrix as sheets):');
+expect('read on unexposed -> docs_expose',
+  docsApprovalAction('not_exposed', 'doc1', false),
+  (a: { action: string } | null) => a?.action === 'docs_expose');
+expect('WRITE on unexposed -> docs_write',
+  docsApprovalAction('not_exposed', 'doc1', true),
+  (a: { action: string } | null) => a?.action === 'docs_write');
+expect('write on read-only -> docs_write',
+  docsApprovalAction('read_only', 'doc1', true),
+  (a: { action: string } | null) => a?.action === 'docs_write');
+expect('blocked mints nothing (read)',
+  docsApprovalAction('blocked', 'doc1', false), (a: unknown) => a === null);
+expect('blocked mints nothing (write)',
+  docsApprovalAction('blocked', 'doc1', true), (a: unknown) => a === null);
+expect('documentId carried through',
+  docsApprovalAction('not_exposed', 'doc-42', true),
+  (a: { documentId?: string } | null) => a?.documentId === 'doc-42');
 
 if (failures > 0) {
   console.error(`\n${failures} test(s) FAILED`);

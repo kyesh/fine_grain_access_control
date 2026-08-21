@@ -17,6 +17,13 @@ with the embedded Sheets demo video when the grant is missing, the dashboard
 flags stranded rules, and the MCP error for a rule-covered-but-ungranted
 sheet tells the truth.
 
+> **Shared machinery note (Google Docs support)**: the components behind this
+> capability are kind-parameterized (`FileApprovalFlow`, `FileGrantRecovery`,
+> `fileAccessHandlers`) and also serve Google Docs. Sheets behavior, copy,
+> endpoints, testids (`sheets-flow-*`), and analytics event names are
+> unchanged — these assertions double as the regression suite for that
+> generalization. The docs twin of this funnel is capability 19 A12.
+
 ## Pre-requisites
 * `/qa-setup` complete; dev server running; USER_A signed in (built-in browser).
 * An MCP connection with an approved proxy key for USER_A (hosted MCP or

@@ -68,6 +68,9 @@
   --sheets: #059669;
   --sheets-bg: #ECFDF5;
   --sheets-border: #A7F3D0;
+  --docs: #4285F4;
+  --docs-bg: #F0F5FF;
+  --docs-border: #C6DAFC;
 }
 
 .dark {
@@ -116,6 +119,9 @@
   --sheets: #34D399;
   --sheets-bg: #0B1F17;
   --sheets-border: #14432F;
+  --docs: #669DF6;
+  --docs-bg: #0D1B33;
+  --docs-border: #1E3A6F;
 }
 
 @theme inline {
@@ -162,6 +168,9 @@
   --color-sheets: var(--sheets);
   --color-sheets-bg: var(--sheets-bg);
   --color-sheets-border: var(--sheets-border);
+  --color-docs: var(--docs);
+  --color-docs-bg: var(--docs-bg);
+  --color-docs-border: var(--docs-border);
 
   /* Logo palette. Fixed values — these belong to the mark, not the UI, and
      are not used for interface surfaces. */

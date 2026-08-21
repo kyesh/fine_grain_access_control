@@ -13,12 +13,13 @@ export function Card({
 }: {
   children: ReactNode;
   className?: string;
-  tone?: 'default' | 'gmail' | 'sheets' | 'primary';
+  tone?: 'default' | 'gmail' | 'sheets' | 'docs' | 'primary';
 }) {
   const tones = {
     default: 'bg-card border-border',
     gmail: 'bg-gmail-bg border-gmail-border',
     sheets: 'bg-sheets-bg border-sheets-border',
+    docs: 'bg-docs-bg border-docs-border',
     primary: 'bg-primary-muted border-border',
   };
 

@@ -7,7 +7,8 @@
  * approved) so a first tool call succeeds with no dashboard visit. The posture
  * is read-only by construction:
  *   - no send_whitelist rule exists → sending is denied by default
- *   - no sheets rules exist → every spreadsheet is denied by default
+ *   - no sheets/docs rules exist → every spreadsheet and document is denied
+ *     by default
  *   - the sensitive-mail shield is OFF by default (decision log 2026-08-06,
  *     connector-growth_v1.md) — the dashboard offers one-click enable
  *

@@ -184,6 +184,18 @@ tmux kill-session -t fgac-qa
 - A4 retry + A8 events: retry via this MCP connection; events via the
   capability-16 script with `--environment development`.
 
+## Capability: Docs Management (→ capabilities/19_docs_management.md)
+
+- Drive the docs tools conversationally through Claude Code MCP: ask for a
+  read of the exposed fixture doc (expect content), the external doc (expect
+  the FGAC denial + docs_expose link relayed verbatim), an append and a
+  replace under each permission level, and a raw `v1/documents` POST for the
+  auto-grant assertion (A10).
+- Dashboard/browser halves (A1–A4, A12) run via `/browser-agent` per
+  capability 09's harness note, docs variant (`grant-docs-access` seam).
+
+---
+
 ## Capability: Analytics Events (→ capabilities/16_analytics_events.md)
 
 > Run LAST — it inspects the PostHog events the capabilities above generated.

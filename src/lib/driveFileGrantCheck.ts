@@ -1,0 +1,85 @@
+import { clerkClient } from '@clerk/nextjs/server';
+import { DRIVE_FILE_KINDS, type DriveFileKind } from '@/lib/driveFileKinds';
+
+/**
+ * Per-file access has two halves: the FGAC rule (our database) and the
+ * Google-side grant. The app never requests a Sheets/Docs OAuth scope — API
+ * access rides on per-file `drive.file` grants, which Google registers ONLY
+ * when the user picks the file in the Google Picker with our appId. An FGAC
+ * rule whose file was never picked passes policy but 403/404s at Google,
+ * which is exactly the trap the 2026-08 connector-launch cohort fell into
+ * (approve → retry → generic error → churn). This module is the single
+ * source of truth for "does Google actually let us reach this file right
+ * now?" — for every drive-file kind (sheets, docs, slides later).
+ */
+export type FileGrantState =
+  | { state: 'ok'; title: string | null }
+  // 403/404 from Google: no drive.file grant for this file (or the id is
+  // wrong — indistinguishable from outside, and the Picker fixes both).
+  | { state: 'missing' }
+  // Network error / 5xx / 429: verification could not run. Callers must
+  // degrade to "no warning", never alarm the user on Google's bad day.
+  | { state: 'unknown'; status?: number };
+
+/** Back-compat alias (pre-docs name). */
+export type SheetsGrantState = FileGrantState;
+
+export async function verifyFileGrant(
+  kind: DriveFileKind,
+  token: string,
+  fileId: string,
+): Promise<FileGrantState> {
+  let res: Response;
+  try {
+    res = await fetch(DRIVE_FILE_KINDS[kind].verifyUrl(fileId), {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+  } catch {
+    return { state: 'unknown' };
+  }
+
+  if (res.ok) {
+    const data = await res.json().catch(() => null) as
+      | { properties?: { title?: string }; title?: string }
+      | null;
+    // Sheets nests the title under properties; Docs/Slides return it top-level.
+    return { state: 'ok', title: data?.properties?.title ?? data?.title ?? null };
+  }
+  if (res.status === 403 || res.status === 404) return { state: 'missing' };
+  return { state: 'unknown', status: res.status };
+}
+
+export async function verifySheetsGrant(token: string, spreadsheetId: string): Promise<FileGrantState> {
+  return verifyFileGrant('sheet', token, spreadsheetId);
+}
+
+export async function verifyDocsGrant(token: string, documentId: string): Promise<FileGrantState> {
+  return verifyFileGrant('doc', token, documentId);
+}
+
+/**
+ * The signed-in owner's Google access token (same token the MCP path uses for
+ * the owner's own mailbox). Null when Google is not connected — for grant
+ * verification purposes that reads as `missing`, since the Picker flow is
+ * also the fix for a not-yet-connected account (it triggers consent first).
+ */
+export async function getOwnerGoogleToken(clerkUserId: string): Promise<string | null> {
+  try {
+    const client = await clerkClient();
+    // Un-prefixed provider id — the `oauth_` form is deprecated (see
+    // googleAccess.ts).
+    const tokens = await client.users.getUserOauthAccessToken(clerkUserId, 'google');
+    return tokens.data?.[0]?.token || null;
+  } catch (err) {
+    // Same observability as the MCP path: a Clerk "cannot refresh" here means
+    // grant verification will read as `missing` for a user whose real problem
+    // is a dead token, not a missing pick. Make that measurable.
+    const message = err instanceof Error ? err.message : String(err);
+    const { captureServerEvent } = await import('@/lib/posthogServer');
+    captureServerEvent(clerkUserId, 'google_token_fetch_failed', {
+      reason: /refresh/i.test(message) ? 'refresh_failed' : 'clerk_error',
+      via: 'grant_check',
+    });
+    return null;
+  }
+}

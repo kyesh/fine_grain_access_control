@@ -89,17 +89,37 @@ export const TOOL_DEFS = {
     readOnly: false,
     destructive: false,
   },
+  docs_read_document: {
+    name: 'docs_read_document',
+    title: 'Read a Google Doc',
+    description: 'Read a Google Docs document exposed by the user\'s FGAC rules. Returns the raw Docs API document resource (title, body content as structured JSON). Large documents can be trimmed with the optional "fields" mask (e.g. "title,body.content") — use it if a full read is too big.',
+    readOnly: true,
+  },
+  docs_append_text: {
+    name: 'docs_append_text',
+    title: 'Append text to a Google Doc',
+    description: 'Append plain text at the end of a Google Docs document without modifying existing content. Requires a Read & Write FGAC rule for the document.',
+    readOnly: false,
+    destructive: false,
+  },
+  docs_replace_text: {
+    name: 'docs_replace_text',
+    title: 'Replace text in a Google Doc',
+    description: 'Replace every occurrence of a text string in a Google Docs document (Docs API replaceAllText). Requires a Read & Write FGAC rule for the document. Note: a Read & Write rule on a document permits full-document editing.',
+    readOnly: false,
+    destructive: true,
+  },
   google_api_get: {
     name: 'google_api_get',
     title: 'Raw Google API read',
-    description: 'Perform a read-only GET request against any endpoint of the Gmail API (https://developers.google.com/gmail/api/reference/rest) or Google Sheets API (https://developers.google.com/sheets/api/reference/rest). Access model: Gmail reads are allowed by default and filtered by the user\'s read-block rules if any; Sheets require an explicit per-spreadsheet rule; other Google APIs and batch endpoints are denied.',
+    description: 'Perform a read-only GET request against any endpoint of the Gmail API (https://developers.google.com/gmail/api/reference/rest), Google Sheets API (https://developers.google.com/sheets/api/reference/rest), or Google Docs API (https://developers.google.com/docs/api/reference/rest). Access model: Gmail reads are allowed by default and filtered by the user\'s read-block rules if any; Sheets and Docs require an explicit per-file rule; other Google APIs and batch endpoints are denied.',
     readOnly: true,
     freeformMethods: ['GET'],
   },
   google_api_modify: {
     name: 'google_api_modify',
     title: 'Raw Google API write',
-    description: 'Perform a POST, PUT, or PATCH request against supported write endpoints of the Gmail API (https://developers.google.com/gmail/api/reference/rest) or Google Sheets API (https://developers.google.com/sheets/api/reference/rest). Allowed writes: Gmail messages/send (recipients are checked against the user\'s FGAC send whitelist) and Sheets value updates/appends on spreadsheets with Read & Write rules. All other write endpoints are denied. DELETE is never available through FGAC.',
+    description: 'Perform a POST, PUT, or PATCH request against supported write endpoints of the Gmail API (https://developers.google.com/gmail/api/reference/rest), Google Sheets API (https://developers.google.com/sheets/api/reference/rest), or Google Docs API (https://developers.google.com/docs/api/reference/rest). Allowed writes: Gmail messages/send (recipients are checked against the user\'s FGAC send whitelist), Sheets value updates/appends on spreadsheets with Read & Write rules, and Docs batchUpdate on documents with Read & Write rules. All other write endpoints are denied. DELETE is never available through FGAC.',
     readOnly: false,
     destructive: true,
     openWorld: true,
@@ -108,7 +128,7 @@ export const TOOL_DEFS = {
   request_access: {
     name: 'request_access',
     title: 'Request a permission upgrade',
-    description: 'Ask the user to grant this agent a specific permission: sending email to a recipient, or read/write access to a Google Spreadsheet. Returns a single-use approval link for the user — calling this tool grants nothing by itself; the user must open the link and approve.',
+    description: 'Ask the user to grant this agent a specific permission: sending email to a recipient, or read/write access to a Google Spreadsheet or Google Docs document. Returns a single-use approval link for the user — calling this tool grants nothing by itself; the user must open the link and approve.',
     readOnly: true,
   },
   get_my_permissions: {
