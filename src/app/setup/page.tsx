@@ -57,6 +57,10 @@ export default function SetupPage() {
               <span className="h-[7px] w-[7px] rounded-full bg-sheets" />
               Google Sheets
             </span>
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-docs-border bg-docs-bg px-3 py-1 text-[13px] font-semibold text-docs">
+              <span className="h-[7px] w-[7px] rounded-full bg-docs" />
+              Google Docs
+            </span>
           </div>
 
           <h1 className="mb-3.5 text-[34px] font-extrabold leading-[1.1] tracking-[-0.03em] text-foreground sm:text-[44px]">
@@ -234,11 +238,11 @@ export default function SetupPage() {
           <div className="overflow-hidden rounded-lg border border-border bg-card">
             <div className="flex items-start gap-3.5 border-b border-border px-6 py-5">
               <span className="mt-px shrink-0 rounded-full border border-sheets-border bg-sheets-bg px-2.5 py-0.5 text-xs font-bold text-sheets">
-                Sheets
+                Sheets &amp; Docs
               </span>
               <div>
                 <strong className="text-sm text-foreground">
-                  Expose spreadsheets with the Google Picker
+                  Expose spreadsheets and documents with the Google Picker
                 </strong>
                 <p className="mt-0.5 text-[13px] leading-relaxed text-muted-foreground">
                   Click <strong>+ Expose a sheet</strong> on a profile and pick

@@ -21,8 +21,9 @@ const READ_TOOLS: Array<[string, string]> = [
   ["gmail_labels", "Lists the account's Gmail labels"],
   ["sheets_get_spreadsheet", "Spreadsheet metadata and sheet tabs"],
   ["sheets_read_range", "Reads cell values from a range"],
+  ["docs_read_document", "Reads a Google Doc (optionally trimmed by a field mask)"],
   ["get_my_permissions", "Shows the rules that govern this connection"],
-  ["google_api_get", "Any Gmail/Sheets read endpoint, rule-checked"],
+  ["google_api_get", "Any Gmail/Sheets/Docs read endpoint, rule-checked"],
   ["request_access", "Asks you to approve a specific permission upgrade"],
 ];
 
@@ -30,7 +31,9 @@ const WRITE_TOOLS: Array<[string, string]> = [
   ["gmail_send", "Sends mail — recipients must be on your send whitelist"],
   ["sheets_update_range", "Overwrites cells — needs Read & Write on the sheet"],
   ["sheets_append_rows", "Appends rows — needs Read & Write on the sheet"],
-  ["google_api_modify", "Supported Gmail/Sheets write endpoints, rule-checked"],
+  ["docs_append_text", "Appends text to a doc — needs Read & Write on the doc"],
+  ["docs_replace_text", "Replaces text in a doc — needs Read & Write on the doc"],
+  ["google_api_modify", "Supported Gmail/Sheets/Docs write endpoints, rule-checked"],
 ];
 
 const EXAMPLES: Array<{
@@ -63,6 +66,11 @@ const EXAMPLES: Array<{
     prompt: "Log today's totals as a new row in the tracking sheet.",
     outcome:
       "With Read & Write enabled on that spreadsheet, Claude appends the row and confirms the updated range. If the sheet is read-only, the write is refused with a clear read-only message and no data changes.",
+  },
+  {
+    prompt: "Append today's meeting notes to my running notes doc.",
+    outcome:
+      "Google Docs work like Sheets: expose a document in the picker, and with Read & Write enabled Claude appends the notes and confirms. Documents you haven't exposed are denied by default, and a denial includes a one-click approval link so granting access takes seconds.",
   },
 ];
 
@@ -118,9 +126,9 @@ export default function DocsPage() {
           </h1>
           <p className="mx-auto max-w-[620px] text-[17px] leading-relaxed text-muted-foreground">
             FGAC.ai is a permission layer between AI agents and your Google
-            account. Agents connect once over MCP; every Gmail and Sheets
-            request they make is checked against rules you control — deny by
-            default, allow on your terms.
+            account. Agents connect once over MCP; every Gmail, Sheets, and
+            Docs request they make is checked against rules you control — deny
+            by default, allow on your terms.
           </p>
           <p className="mt-5 text-sm text-muted-foreground">
             Not connected yet?{" "}
@@ -245,10 +253,10 @@ export default function DocsPage() {
 
           <ul className="m-0 flex list-none flex-col gap-2.5 p-0">
             {[
-              ["Gmail and Google Sheets only.", "Other Google services (Drive, Calendar, Docs) are denied — support arrives service by service, each behind its own rules."],
+              ["Gmail, Google Sheets, and Google Docs only.", "Other Google services (Calendar, Slides, full Drive browsing) are denied — support arrives service by service, each behind its own rules."],
               ["Agents can never delete.", "No tool exposes DELETE. Trash, empty-trash, and destructive Gmail settings are refused regardless of your rules."],
               ["Sending requires a whitelist.", "With no send-whitelist rule configured, all outbound mail is refused. That's the default. When a send is denied, you get a one-click, single-use link to approve exactly that recipient — or the agent can ask via request_access."],
-              ["New connections start read-only.", "Connecting attaches the agent to your Default Profile: it can read this account's mail — plus any inbox its owner has delegated to you — and nothing else: no sending, no Sheets, no undelegated inboxes. You can review, re-scope, or block it from the dashboard at any time."],
+              ["New connections start read-only.", "Connecting attaches the agent to your Default Profile: it can read this account's mail — plus any inbox its owner has delegated to you — and nothing else: no sending, no Sheets or Docs, no undelegated inboxes. You can review, re-scope, or block it from the dashboard at any time."],
               ["Attachments cap at ~150 KB", "through MCP responses. Larger files must be fetched from Gmail directly."],
               ["Delegated inboxes need an explicit delegation", "created by the inbox owner from their own FGAC account, revocable any time. Once granted, the inbox attaches to your Default Profile automatically."],
             ].map(([lead, rest]) => (
