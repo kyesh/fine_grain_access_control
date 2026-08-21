@@ -229,9 +229,10 @@ export default async function LandingPage() {
               How we use Google Data
             </h2>
             <p className="mx-auto max-w-[720px] text-[15px] leading-[1.65] text-muted-foreground">
-              FGAC.ai requests Gmail and Sheets scopes to act as a secure proxy
-              between Google and your AI agents. Every request is checked against
-              your rules before it is forwarded — verbatim — to Google.
+              FGAC.ai requests Gmail and per-file Drive scopes — covering Sheets
+              and Docs — to act as a secure proxy between Google and your AI
+              agents. Every request is checked against your rules before it is
+              forwarded — verbatim — to Google.
             </p>
           </div>
           <div className="grid gap-5 md:grid-cols-3">
