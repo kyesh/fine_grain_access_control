@@ -1,0 +1,28 @@
+# Synthetic auth probe against production (docs/monitoring.md, monitoring #4).
+# No secrets required for the base probes; if the repo secret PROBE_PROXY_KEY
+# is configured (a QA proxy key), an authenticated proxy-path probe runs too.
+# A failing run is the alert: GitHub notifies the repo owner on workflow failure.
+name: auth-probe
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Probe production auth surface
+        env:
+          PROBE_BASE_URL: https://fgac.ai
+          PROBE_PROXY_KEY: ${{ secrets.PROBE_PROXY_KEY }}
+        run: npx tsx scripts/mcp-auth-probe.ts
