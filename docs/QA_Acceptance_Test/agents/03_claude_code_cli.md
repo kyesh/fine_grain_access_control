@@ -185,10 +185,14 @@ No tmux sessions to clean up. Results are saved to `test/qa-envs/cc-cli/evals/re
 > Run LAST — it inspects the PostHog events the capabilities above generated.
 > Environment tier here is `development` (localhost dev server).
 
-- A1–A5: `npx tsx scripts/qa-posthog-events.ts --event '$mcp_tool_call' --since <minutes since run start> --environment development`
-  (A2 repeats with `--event mcp_tool_call` expecting 0 rows). Needs
-  `POSTHOG_PERSONAL_API_KEY` + `POSTHOG_PROJECT_ID`; if unset, `skip` all with
-  that reason. Ingestion lags ~30–60s — re-query before failing.
+- A1–A5: query per capability 16 “How to query” — primary: the session's
+  PostHog MCP connector (load via ToolSearch keyword `posthog exec`, then
+  `execute-sql` HogQL) filtering `properties.environment = 'development'` and the
+  run window; fallback: `npx tsx scripts/qa-posthog-events.ts --event
+  '$mcp_tool_call' --since <minutes since run start> --environment development`
+  (needs the currently-unprovisioned query keys). A2 expects 0 rows for the
+  legacy `mcp_tool_call` name. `skip` only if the session has no PostHog
+  query path at all. Ingestion lags ~30–60s — re-query before failing.
 - A6: via the browser agent, click a sign-up CTA signed-out (never complete
   sign-up), then query `--event sign_up_started`. Headless-only run → `skip`.
 - A7: start playback on a landing-page demo video (play control, or the

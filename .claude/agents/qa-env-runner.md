@@ -1,7 +1,7 @@
 ---
 name: qa-env-runner
 description: Executes one QA environment runbook (docs/QA_Acceptance_Test/agents/NN_*.md or production/NN_*.md) end-to-end and returns a structured coverage matrix. Use for every /qa-hosted-mcp, /qa-claude-code, /qa-claude-code-cli, /qa-openclaw run and for per-agent production runbooks. Can be scoped to a subset of capabilities for targeted re-tests (e.g. "capability 04 only").
-tools: Bash, Read, Glob, Grep, Write, mcp__Claude_Browser__preview_start, mcp__Claude_Browser__navigate, mcp__Claude_Browser__get_page_text, mcp__Claude_Browser__read_page, mcp__Claude_Browser__read_console_messages, mcp__Claude_Browser__read_network_requests, mcp__Claude_Browser__computer, mcp__Claude_Browser__form_input, mcp__Claude_Browser__resize_window, mcp__Claude_Browser__find, mcp__Claude_Browser__preview_logs, mcp__Claude_Browser__tabs_context, mcp__Claude_Browser__javascript_tool
+tools: Bash, Read, Glob, Grep, Write, ToolSearch, mcp__fb195ac8-fd4e-4121-bb70-242eb98f6a87__exec, mcp__Claude_Browser__preview_start, mcp__Claude_Browser__navigate, mcp__Claude_Browser__get_page_text, mcp__Claude_Browser__read_page, mcp__Claude_Browser__read_console_messages, mcp__Claude_Browser__read_network_requests, mcp__Claude_Browser__computer, mcp__Claude_Browser__form_input, mcp__Claude_Browser__resize_window, mcp__Claude_Browser__find, mcp__Claude_Browser__preview_logs, mcp__Claude_Browser__tabs_context, mcp__Claude_Browser__javascript_tool
 model: sonnet
 ---
 
@@ -34,6 +34,26 @@ capability scope (e.g. "capabilities 04 and 06 only" for a re-test).
      that flow, and include a note in your report that the built-in session
      needs re-establishing.
    - Never plain `pkill chrome`; snapshot output always through `grep | head`.
+
+   **PostHog event verification (capability 16 and any event-side evidence)**
+   — primary path is the session's PostHog MCP connector, which you inherit:
+   - Load it with ToolSearch (keyword query `posthog exec` — do NOT rely on a
+     hardcoded tool name; the server prefix is a connector UUID that can
+     change), then query with
+     `call execute-sql {"query": "<HogQL>"}` plus the required `context`
+     parameter. Follow the tool's own schema rules (`info execute-sql` once
+     if its schema is not in context).
+   - Always filter `properties.environment` to the deployment tier under
+     test, bound `timestamp` to the run window, and select specific
+     properties — never the whole `properties` object.
+   - Cite "via PostHog MCP" plus the HogQL filter window in the evidence
+     string for each event-side assertion.
+   - Fallbacks, in order: `npx tsx scripts/qa-posthog-events.ts` (works only
+     if `POSTHOG_PERSONAL_API_KEY`/`POSTHOG_PROJECT_ID` are provisioned —
+     they currently are NOT); if neither path is available (ToolSearch finds
+     no PostHog tool — possible in cloud/CI sessions where the connector is
+     absent), record the event-side assertions as `skip` with reason
+     "no PostHog query path in this session" — never a pass.
 3. Record every assertion outcome as you go.
 4. **Flake rule**: if an assertion fails on a step that is timing- or
    browser/tmux-sensitive, re-run that assertion up to 2 more times in a clean

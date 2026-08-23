@@ -7,16 +7,26 @@
 
 ## How to query
 
-Preferred: `npx tsx scripts/qa-posthog-events.ts` (read-only HogQL probe; see
-its header for flags). If the PostHog MCP server is connected (`.mcp.json`
-`posthog` entry — needs `POSTHOG_PERSONAL_API_KEY` exported), an equivalent
-event/HogQL query through it is acceptable; cite which path was used.
+Preferred: the session's **PostHog MCP connector** (decision 2026-08-23 —
+option 2 of the key-provisioning discussion on PR #78). Runners inherit the
+session's MCP connections: load the tool via ToolSearch (keyword `posthog
+exec`; the server prefix is a connector UUID, so never hardcode the full tool
+name) and run read-only HogQL via `call execute-sql {"query": …}`. The
+`qa-env-runner` agent definition allowlists this tool. Cite "via PostHog MCP"
+in evidence.
+
+Fallback: `npx tsx scripts/qa-posthog-events.ts` (read-only HogQL probe; see
+its header for flags). It requires `POSTHOG_PERSONAL_API_KEY` (Query:Read
+scope) and `POSTHOG_PROJECT_ID` in the environment or `.env.local` — **these
+are deliberately unprovisioned as of 2026-08-23**; the script becomes the
+primary path for cloud/CI sessions only if Ken provisions the keys later.
 
 Prerequisites and caveats:
 
-- `POSTHOG_PERSONAL_API_KEY` (Query:Read scope) and `POSTHOG_PROJECT_ID` must be
-  in the environment or `.env.local`. If absent, every assertion below is a
-  `skip` with reason "PostHog query credentials not provisioned" — never a pass.
+- If NEITHER path is available (ToolSearch finds no PostHog tool — possible in
+  cloud/CI sessions where the interactively-authenticated connector is absent,
+  and the keys are unprovisioned), every assertion below is a `skip` with
+  reason "no PostHog query path in this session" — never a pass.
 - All three Vercel environments share one PostHog project. **Always filter on
   the `environment` property** matching the deployment under test:
   `development` (localhost), `preview` (`*.vercel.app`), `production`.
@@ -37,8 +47,24 @@ attributable to it.
 - **Expected**: Every event carries `response_chars` and `response_kb`
   (monitoring-only — plan google-docs-support v5, D7: no size caps are
   enforced; the props exist so PostHog can measure how often responses exceed
-  MCP clients' tool-result budgets). `gmail_get_attachment` additionally keeps
-  its historical `attachment_chars`/`attachment_kb`.
+  MCP clients' tool-result budgets). `gmail_get_attachment` additionally
+  carries `attachment_chars`/`attachment_kb` on every outcome, including the
+  over-cap ⚠️ failure (first shipped with the raw-api-classification change —
+  earlier docs described these props ahead of the code).
+
+### A9: Raw Google API calls carry product/action classification
+- Inspect `$mcp_tool_call` events where `$mcp_tool_name` is `google_api_get`
+  or `google_api_modify` from this run (capability 10 generates them: a raw
+  Gmail read, a raw Sheets call, and an unknown-family passthrough).
+- **Expected**: every such event carries `raw_api_kind` (one of `sheets`,
+  `sheets_create`, `docs`, `docs_create`, `gmail_read`, `gmail_send`,
+  `passthrough`, `denied`), `raw_api_mutating`, and `raw_api_endpoint` whose
+  value is the HTTP method plus an **id-stripped** path template — it must
+  contain `{id}`/`{range}` placeholders where the call used real identifiers
+  and must NOT contain any actual spreadsheet/message/document id.
+  `raw_api_family` is present on every non-denied event (`gmail`,
+  `spreadsheets`, `documents`, or the passthrough family); denied events
+  carry `denial_code` instead.
 
 ### A1: Canonical tool-call events arrive with tool names
 - Run: `npx tsx scripts/qa-posthog-events.ts --event '$mcp_tool_call' --since <run window> --environment <tier>`
