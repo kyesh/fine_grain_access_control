@@ -13,6 +13,7 @@
  * in ./googleApiPolicy.ts.
  */
 import { createMcpHandler, experimental_withMcpAuth } from 'mcp-handler';
+import type { JWTVerifyGetKey } from 'jose';
 import { verifyClerkToken } from '@clerk/mcp-tools/next';
 import { auth } from '@clerk/nextjs/server';
 import { z } from 'zod';
@@ -1597,13 +1598,94 @@ function expectedClerkIssuer(): string | null {
 }
 
 /**
+ * Kill switch for the auth optimizations below (JWKS singleton + strategy
+ * memo). Set MCP_AUTH_OPTIMIZATIONS=disabled to restore the legacy behavior
+ * (fresh JWKS per call, fixed clerk→direct try-order) without a code revert.
+ */
+const authOptimizationsEnabled = () => process.env.MCP_AUTH_OPTIMIZATIONS !== 'disabled';
+
+/**
+ * Optimization A: one remote JWKS per function instance instead of per
+ * request. jose caches fetched keys inside this object — it refetches
+ * immediately when it sees an unknown `kid` (rate-limited by
+ * cooldownDuration) and expires known keys after cacheMaxAge, so a retired
+ * signing key is trusted for at most 5 minutes. These are public keys; the
+ * security control is the pinned-issuer check in the caller, which is
+ * unchanged.
+ */
+let jwksSingleton: { issuer: string; jwks: JWTVerifyGetKey } | null = null;
+
+async function getClerkJwks(issuer: string): Promise<JWTVerifyGetKey> {
+  const { createRemoteJWKSet } = await import('jose');
+  const url = new URL(`${issuer}/.well-known/jwks.json`);
+  if (!authOptimizationsEnabled()) return createRemoteJWKSet(url);
+  if (!jwksSingleton || jwksSingleton.issuer !== issuer) {
+    jwksSingleton = {
+      issuer,
+      jwks: createRemoteJWKSet(url, { cooldownDuration: 30_000, cacheMaxAge: 300_000 }),
+    };
+  }
+  return jwksSingleton.jwks;
+}
+
+/**
+ * Optimization B: remember which verification strategy last worked for each
+ * OAuth client so established CLI clients skip the doomed Clerk auth()
+ * attempt. Routing hint ONLY — both strategies remain fail-closed and the
+ * other one still runs when the preferred one fails, so a wrong (or
+ * attacker-planted) memo entry can never grant access, only reorder two
+ * verifiers. Bounded LRU so bogus client_ids can't grow it without limit.
+ */
+const STRATEGY_MEMO_MAX = 500;
+const strategyMemo = new Map<string, 'clerk' | 'direct'>();
+
+function strategyMemoGet(clientId: string): 'clerk' | 'direct' | undefined {
+  const v = strategyMemo.get(clientId);
+  if (v !== undefined) {
+    strategyMemo.delete(clientId);
+    strategyMemo.set(clientId, v);
+  }
+  return v;
+}
+
+function strategyMemoSet(clientId: string, strategy: 'clerk' | 'direct'): void {
+  if (strategyMemo.has(clientId)) {
+    strategyMemo.delete(clientId);
+  } else if (strategyMemo.size >= STRATEGY_MEMO_MAX) {
+    const oldest = strategyMemo.keys().next().value;
+    if (oldest !== undefined) strategyMemo.delete(oldest);
+  }
+  strategyMemo.set(clientId, strategy);
+}
+
+/**
+ * client_id from the UNVERIFIED token payload — used only to look up the
+ * strategy memo and label auth metrics, never to authorize.
+ */
+function unverifiedTokenClaims(token?: string): { clientId?: string; kid?: string } {
+  if (!token) return {};
+  try {
+    const [headerB64, payloadB64] = token.split('.');
+    if (!payloadB64) return {};
+    const payload = JSON.parse(Buffer.from(payloadB64, 'base64url').toString());
+    const header = JSON.parse(Buffer.from(headerB64, 'base64url').toString());
+    return {
+      clientId: typeof payload.client_id === 'string' ? payload.client_id : undefined,
+      kid: typeof header.kid === 'string' ? header.kid : undefined,
+    };
+  } catch {
+    return {};
+  }
+}
+
+/**
  * Direct JWT verification fallback for CLI/non-browser OAuth tokens.
  * Used when Clerk's auth()+verifyClerkToken fails to extract userId/clientId.
  * Fails closed unless the token's issuer is exactly our Clerk instance.
  */
 async function verifyClerkJwtDirect(token: string) {
   try {
-    const { createRemoteJWKSet, jwtVerify } = await import('jose');
+    const { jwtVerify } = await import('jose');
     const [, payloadB64] = token.split('.');
     if (!payloadB64) return undefined;
     const rawPayload = JSON.parse(Buffer.from(payloadB64, 'base64url').toString());
@@ -1615,7 +1697,7 @@ async function verifyClerkJwtDirect(token: string) {
       return undefined;
     }
 
-    const JWKS = createRemoteJWKSet(new URL(`${issuer}/.well-known/jwks.json`));
+    const JWKS = await getClerkJwks(issuer);
     const { payload: verified } = await jwtVerify(token, JWKS, { issuer, clockTolerance: 30 });
     const sub = verified.sub;
     const cid = (verified as Record<string, unknown>).client_id as string | undefined;
@@ -1633,22 +1715,90 @@ async function verifyClerkJwtDirect(token: string) {
   }
 }
 
+/**
+ * Success events are sampled 1-in-20 to keep mcp_auth_attempt volume inside
+ * the PostHog free tier (~220k MCP requests/mo); failures always capture.
+ * Deterministic on the token so a given session is consistently in or out.
+ */
+const AUTH_SUCCESS_SAMPLE = 20;
+function inSuccessSample(token?: string): boolean {
+  if (!token) return true;
+  let h = 0;
+  for (let i = 0; i < Math.min(token.length, 64); i++) h = (h * 31 + token.charCodeAt(i)) | 0;
+  return Math.abs(h) % AUTH_SUCCESS_SAMPLE === 0;
+}
+
 const verifyMcpAuth = async (req: Request, bearerToken?: string) => {
   let authInfo: ReturnType<typeof verifyClerkToken> | Awaited<ReturnType<typeof verifyClerkJwtDirect>> | undefined;
+  let strategyUsed: 'clerk' | 'direct' | 'none' = 'none';
+  let clerkErrorClass: string | undefined;
 
-  // Strategy 1: Try Clerk's built-in auth() + verifyClerkToken
-  try {
-    const clerkAuth = await auth({ acceptsToken: 'oauth_token' });
-    const result = verifyClerkToken(clerkAuth, bearerToken);
-    if (result?.extra?.userId) authInfo = result;
-  } catch (error) {
-    console.warn('[MCP] Clerk auth() failed, will try direct JWT:', error);
-  }
+  const { clientId: clientIdHint, kid } = unverifiedTokenClaims(bearerToken);
+  const memoStrategy =
+    authOptimizationsEnabled() && clientIdHint ? strategyMemoGet(clientIdHint) : undefined;
+
+  // Strategy 1: Clerk's built-in auth() + verifyClerkToken
+  const tryClerk = async () => {
+    try {
+      const clerkAuth = await auth({ acceptsToken: 'oauth_token' });
+      const result = verifyClerkToken(clerkAuth, bearerToken);
+      if (result?.extra?.userId) {
+        authInfo = result;
+        strategyUsed = 'clerk';
+      }
+    } catch (error) {
+      clerkErrorClass = error instanceof Error ? error.name : 'unknown';
+      console.warn('[MCP] Clerk auth() failed:', error);
+    }
+  };
 
   // Strategy 2: Direct JWT verification (fallback for CLI/non-browser contexts)
-  if (!authInfo && bearerToken) {
-    console.log('[MCP] Falling back to direct JWT verification');
-    authInfo = await verifyClerkJwtDirect(bearerToken);
+  const tryDirect = async () => {
+    if (!bearerToken) return;
+    const result = await verifyClerkJwtDirect(bearerToken);
+    if (result) {
+      authInfo = result;
+      strategyUsed = 'direct';
+    }
+  };
+
+  // Optimization B: try the strategy that last worked for this client first;
+  // the other still runs on a miss, so try-order never changes the outcome.
+  if (memoStrategy === 'direct') {
+    await tryDirect();
+    if (!authInfo) await tryClerk();
+  } else {
+    await tryClerk();
+    if (!authInfo) {
+      if (!memoStrategy) console.log('[MCP] Falling back to direct JWT verification');
+      await tryDirect();
+    }
+  }
+
+  if (authInfo && clientIdHint && strategyUsed !== 'none' && authOptimizationsEnabled()) {
+    strategyMemoSet(clientIdHint, strategyUsed);
+  }
+
+  // Auth-health instrumentation: every failure, sampled successes. This is
+  // the alerting substrate for the JWKS/strategy optimizations — an auth
+  // regression shows up here (and as vanishing $mcp_tool_call volume) long
+  // before anyone reads function logs.
+  const outcome = authInfo ? 'ok' : bearerToken ? 'invalid_token' : 'no_token';
+  if (outcome !== 'ok' || inSuccessSample(bearerToken)) {
+    captureServerEvent(
+      (authInfo?.extra?.userId as string | undefined) ?? 'anonymous-mcp',
+      'mcp_auth_attempt',
+      {
+        outcome,
+        strategy_used: strategyUsed,
+        memo_hit: memoStrategy !== undefined,
+        optimizations_enabled: authOptimizationsEnabled(),
+        success_sample_rate: AUTH_SUCCESS_SAMPLE,
+        error_class: clerkErrorClass,
+        kid: outcome === 'invalid_token' ? kid : undefined,
+        method: req.method,
+      },
+    );
   }
 
   // Install-funnel measurement (pre-Clerk visibility): an unauthenticated MCP
