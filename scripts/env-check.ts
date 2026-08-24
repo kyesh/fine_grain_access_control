@@ -109,6 +109,33 @@ if (dbIsProd && mode === 'test') {
   console.log(ok('Database and Clerk instance are consistent.'));
 }
 
+// ── PostHog query access (analytics verification) ──────────────────────────
+// Two consumers, two different env sources — a key in one place does not make
+// the other work:
+//   * The `posthog` MCP server (.mcp.json) expands ${POSTHOG_PERSONAL_API_KEY}
+//     from the SHELL environment at `claude` launch. .env.local is invisible
+//     to it. No key at launch → the server fails auth silently and its tools
+//     never appear in the session.
+//   * scripts/qa-posthog-events.ts reads .env.local via dotenv.
+console.log('\nPOSTHOG (query access)');
+const phKey = process.env.POSTHOG_PERSONAL_API_KEY;
+if (!phKey) {
+  console.log(warn('POSTHOG_PERSONAL_API_KEY not set — analytics verification is blind'));
+  console.log(`${DIM}    Neither the posthog MCP server nor qa-posthog-events.ts can query events.`);
+  console.log(`    Fix (user action — needs the PostHog UI): create a personal API key`);
+  console.log(`    (phx_…, Query:Read scope, project 343912), then:`);
+  console.log(`      export POSTHOG_PERSONAL_API_KEY=phx_…   # in ~/.zshrc, for the MCP server`);
+  console.log(`      npx vercel env add POSTHOG_PERSONAL_API_KEY development  # for the script,`);
+  console.log(`      npx vercel env pull .env.local --environment=development # then re-pull${RESET}`);
+} else if (!phKey.startsWith('phx_')) {
+  console.log(warn('POSTHOG_PERSONAL_API_KEY is set but does not look like a personal key (phx_…)'));
+  console.log(`${DIM}    NEXT_PUBLIC_POSTHOG_KEY (phc_…) is the write-side ingestion key and cannot query.${RESET}`);
+} else {
+  console.log(ok('POSTHOG_PERSONAL_API_KEY present (phx_…)'));
+  console.log(`${DIM}    Note: the posthog MCP server only sees it if it was exported in the shell`);
+  console.log(`    that launched Claude Code — .env.local alone is enough only for scripts.${RESET}`);
+}
+
 // ── Stray production credential files ──────────────────────────────────────
 import { existsSync } from 'fs';
 const strays = ['.env.production.local', '.env.production'].filter(existsSync);
