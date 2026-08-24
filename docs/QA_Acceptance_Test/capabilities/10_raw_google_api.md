@@ -48,6 +48,12 @@
   per-document rules when Google Docs support landed — a raw
   `v1/documents/<id>` call must be FGAC-classified (capability 19 A6), never
   `raw_api_passthrough`. Sheets and Docs are both enforced families now.
+- **Comments carve-out (2026-08-23)**: `drive/v3/files/<id>/comments` (and
+  `/replies`) classify as `file_comments` and inherit the file's per-file
+  rule — a comment write on a read-only or blocked doc/sheet is denied, and
+  the event carries `raw_api_family: 'drive_comments'`, never
+  `raw_api_passthrough`. Bare `drive/v3/files` (no comments segment) remains
+  passthrough as asserted above.
 
 ### A4: Non-send Gmail write is denied
 - `google_api_modify` with path `gmail/v1/users/me/messages/<any-id>/modify`
@@ -92,16 +98,18 @@
 
 ### A10: Raw fallback is discoverable at every decision point
 - Call `initialize` and `tools/list` on the hosted MCP endpoint; then a
-  successful `docs_append_text` (or `sheets_update_range`) on a Read & Write
-  fixture.
+  successful `sheets_update_range` on a Read & Write fixture.
 - **Expected**: the `initialize` result carries a server `instructions` block
-  naming `google_api_get` / `google_api_modify` as the full-surface fallback
-  and describing the denial → approval-link pattern. Every convenience tool
-  with a raw superset (`gmail_list`, `gmail_read`, `gmail_send`,
-  `sheets_update_range`, `sheets_append_rows`, `docs_append_text`,
-  `docs_replace_text`) names its fallback tool in its description
-  (lint-enforced by `scripts/mcp-tool-lint.ts`). The typed write success
-  response carries an `fgac_hint` pointing at the relevant `batchUpdate`
-  endpoint. Rationale: 2026-08-23 field failure — an agent shipped a
-  pipe-character text table because nothing at its decision point referenced
-  the raw fallback.
+  naming `google_api_get` / `google_api_modify` as the full-surface fallback,
+  the `docs_edit`/`sheets_edit` batchUpdate tools, the comments pair, and the
+  denial → approval-link pattern. Every convenience tool with a superset
+  names its fallback in its description (`gmail_list`/`gmail_read` →
+  `google_api_get`; `gmail_send` → `google_api_modify`;
+  `sheets_update_range`/`sheets_append_rows` → `sheets_edit`;
+  `docs_read_document` → `docs_edit`; `docs_edit`/`sheets_edit` →
+  `google_api_modify`), lint-enforced by `scripts/mcp-tool-lint.ts`. The
+  sheets values write success carries an `fgac_hint` pointing at
+  `sheets_edit`. `docs_append_text` and `docs_replace_text` are ABSENT from
+  `tools/list` (removed 2026-08-23; `docs_edit` replaces them). Rationale:
+  2026-08-23 field failure — an agent shipped a pipe-character text table
+  because nothing at its decision point referenced the raw fallback.

@@ -37,7 +37,7 @@ import {
   classifyGoogleApiCall, extractSendRecipients, sheetsApprovalAction, docsApprovalAction,
   templateGoogleApiPath, rawApiFamily,
 } from './googleApiPolicy';
-import { DRIVE_FILE_KINDS, type DriveFileKind } from '@/lib/driveFileKinds';
+import { DRIVE_FILE_KINDS, ACTIVE_DRIVE_FILE_KINDS, type DriveFileKind } from '@/lib/driveFileKinds';
 
 /** Env URL values have shipped with trailing whitespace/newlines (pasted
  * Vercel vars); a whitespace-only value must also not win the fallback chain.
@@ -635,6 +635,39 @@ function docsDenialAction(perm: FilePermission, documentId: string, isMutating: 
   return docsApprovalAction(perm.denial, documentId, isMutating);
 }
 
+/**
+ * Comments address files by bare Drive file id, which doesn't say whether the
+ * file is a doc or a sheet — resolve the kind from whichever service's rules
+ * mention the id, then run the standard per-file check for that kind. A file
+ * no rule mentions denies as not-exposed WITHOUT an approval action: the
+ * service is unknown, so no expose action could be minted for it.
+ */
+async function checkCommentsPermission(
+  conn: ConnectionApproved,
+  proxyKeyId: string,
+  fileId: string,
+  isMutating: boolean,
+): Promise<{ denial: Awaited<ReturnType<typeof policyDenialWithLink>> } | { kind: DriveFileKind; perm: FilePermission }> {
+  const rules = await db.select().from(accessRules).where(eq(accessRules.userId, conn.user.id));
+  const kind = ACTIVE_DRIVE_FILE_KINDS.find(k =>
+    rules.some(r => r.service === DRIVE_FILE_KINDS[k].service && (r.targetResourceId === fileId || r.regexPattern === fileId)),
+  );
+  if (!kind) {
+    addToolCallProps({ denial_code: 'file_not_exposed' });
+    return { denial: textResult(`🚫 Access Denied: File '${fileId}' is not exposed in your FGAC rules. Ask the user to expose the document or spreadsheet via the dashboard picker, or call request_access with the file id.`) };
+  }
+  const perm = await checkFilePermission(kind, conn.user.id, proxyKeyId, fileId, isMutating);
+  if (!perm.allowed) {
+    const action = kind === 'doc'
+      ? docsApprovalAction(perm.denial, fileId, isMutating)
+      : sheetsApprovalAction(perm.denial, fileId, isMutating);
+    return { denial: await policyDenialWithLink(conn, proxyKeyId, perm.reason, action) };
+  }
+  return { kind, perm };
+}
+
+const COMMENT_LIST_FIELDS = 'nextPageToken,comments(id,content,resolved,createdTime,modifiedTime,author(displayName),quotedFileContent(value),replies(id,content,action,createdTime,author(displayName)))';
+
 // ─── Gmail Message Parsing (token-frugal responses) ─────────────────────────
 
 const MAX_BODY_CHARS = 20_000;
@@ -960,6 +993,18 @@ async function executeRawGoogleCall(
     return jsonResult(result.data);
   }
 
+  if (cls.kind === 'file_comments') {
+    // Comments are content on the file: they inherit the file's per-file
+    // rule (comment writes need Read & Write) instead of scope-only
+    // passthrough. Same enforcement as the comments_read / comments_add
+    // typed tools.
+    const check = await checkCommentsPermission(conn, resolved.proxyKeyId, cls.fileId, cls.isMutating);
+    if ('denial' in check) return check.denial;
+    const result = await withGrantGrace(check.kind, check.perm, () => googleFetch(rawUrl(cleanPath), resolved.token, method, serializeBody(body), resolved.targetEmail));
+    if (!result.ok) return errorResult(result.error);
+    return jsonResult(result.data);
+  }
+
   if (cls.kind === 'passthrough') {
     // Classify-don't-block: unknown Google API families are forwarded with
     // the account's token (Google's scopes are the enforcement backstop) and
@@ -1058,7 +1103,7 @@ const handler = createMcpHandler(
             sheets: 'Spreadsheet access is granted per sheet: call sheets_get_spreadsheet with a spreadsheetId, or request_access — a denial returns a one-click approval link for the user.',
             docs: 'Google Docs access is granted per document: call docs_read_document with a documentId, or request_access — a denial returns a one-click approval link for the user.',
             sending: 'Email sending is off by default; the first gmail_send returns a one-click approval link the user can use to whitelist the recipient.',
-            raw_api: "Anything the typed tools can't express — Docs tables/styles, Sheets formatting, Gmail threads, Drive, creating new files — is reachable via google_api_get / google_api_modify under the same rules (see their descriptions).",
+            raw_api: "Anything the typed tools can't express — Gmail threads/drafts, Drive listing and export, creating new docs or sheets — is reachable via google_api_get / google_api_modify under the same rules (see their descriptions).",
           },
           add_more_accounts: {
             own_account: `To add another Gmail account the user owns: ${DASHBOARD_URL}/dashboard/accounts → "Accessible Gmail Accounts" → add the account and complete Google sign-in for it.`,
@@ -1301,7 +1346,7 @@ const handler = createMcpHandler(
         if (!result.ok) return sheetsErrorResult(result, spreadsheetId);
         return jsonResult({
           ...(result.data as Record<string, unknown>),
-          fgac_hint: 'Values written. Formatting, charts, and structural changes: google_api_modify with the Sheets batchUpdate endpoint (same rule authorizes both).',
+          fgac_hint: 'Values written. Formatting, charts, and structural changes: sheets_edit (same rule authorizes both).',
         });
       }
     );
@@ -1331,8 +1376,33 @@ const handler = createMcpHandler(
         if (!result.ok) return sheetsErrorResult(result, spreadsheetId);
         return jsonResult({
           ...(result.data as Record<string, unknown>),
-          fgac_hint: 'Rows appended as values. Formatting or structural changes: google_api_modify with the Sheets batchUpdate endpoint (same rule authorizes both).',
+          fgac_hint: 'Rows appended as values. Formatting or structural changes: sheets_edit (same rule authorizes both).',
         });
+      }
+    );
+
+    // ── sheets_edit ───────────────────────────────────────────────────
+    server.registerTool(
+      TOOL_DEFS.sheets_edit.name,
+      toolConfig(TOOL_DEFS.sheets_edit, {
+        spreadsheetId: z.string().describe('Google Spreadsheet ID'),
+        requests: z.array(z.record(z.string(), z.any())).min(1).describe('Sheets API batchUpdate request objects, applied in order (e.g. repeatCell, addSheet, updateSheetProperties, addChart, mergeCells, setDataValidation)'),
+        account: z.string().optional().describe('Email account to use.'),
+      }),
+      async ({ spreadsheetId, requests, account }, { authInfo }) => {
+        const conn = await requireApproval(authInfo);
+        if ('content' in conn) return conn;
+
+        const resolved = await resolveAccountAndToken(conn, account);
+        if ('error' in resolved) return textResult(resolved.error);
+
+        const perm = await checkSheetsPermission(conn.user.id, resolved.proxyKeyId, spreadsheetId, true);
+        if (!perm.allowed) return policyDenialWithLink(conn, resolved.proxyKeyId, perm.reason, sheetsDenialAction(perm, spreadsheetId, true));
+
+        const body = JSON.stringify({ requests });
+        const result = await withSheetsGrace(perm, () => sheetsFetch(resolved.token, `${spreadsheetId}:batchUpdate`, 'POST', body, resolved.targetEmail));
+        if (!result.ok) return sheetsErrorResult(result, spreadsheetId);
+        return jsonResult(result.data);
       }
     );
 
@@ -1361,15 +1431,15 @@ const handler = createMcpHandler(
       }
     );
 
-    // ── docs_append_text ──────────────────────────────────────────────
+    // ── docs_edit ─────────────────────────────────────────────────────
     server.registerTool(
-      TOOL_DEFS.docs_append_text.name,
-      toolConfig(TOOL_DEFS.docs_append_text, {
+      TOOL_DEFS.docs_edit.name,
+      toolConfig(TOOL_DEFS.docs_edit, {
         documentId: z.string().describe('Google Docs document ID'),
-        text: z.string().describe('Plain text to append at the end of the document'),
+        requests: z.array(z.record(z.string(), z.any())).min(1).describe('Docs API batchUpdate request objects, applied in order (e.g. insertText, insertTable, updateTextStyle, updateParagraphStyle, replaceAllText, insertInlineImage)'),
         account: z.string().optional().describe('Email account to use.'),
       }),
-      async ({ documentId, text, account }, { authInfo }) => {
+      async ({ documentId, requests, account }, { authInfo }) => {
         const conn = await requireApproval(authInfo);
         if ('content' in conn) return conn;
 
@@ -1379,49 +1449,69 @@ const handler = createMcpHandler(
         const perm = await checkDocsPermission(conn.user.id, resolved.proxyKeyId, documentId, true);
         if (!perm.allowed) return policyDenialWithLink(conn, resolved.proxyKeyId, perm.reason, docsDenialAction(perm, documentId, true));
 
-        const body = JSON.stringify({
-          requests: [{ insertText: { endOfSegmentLocation: { segmentId: '' }, text } }],
-        });
+        const body = JSON.stringify({ requests });
         const result = await withDocsGrace(perm, () => docsFetch(resolved.token, `${encodeURIComponent(documentId)}:batchUpdate`, 'POST', body, resolved.targetEmail));
         if (!result.ok) return docsErrorResult(result, documentId);
-        // Mid-task discoverability: the limitation bites right after a
-        // plain-text success, so the pointer to the full surface rides on it.
-        return jsonResult({
-          ...(result.data as Record<string, unknown>),
-          fgac_hint: 'Appended as plain text. Tables, styles, headings, and positional edits: google_api_modify with the Docs batchUpdate endpoint (same rule authorizes both).',
-        });
+        return jsonResult(result.data);
       }
     );
 
-    // ── docs_replace_text ─────────────────────────────────────────────
+    // ── comments_read ─────────────────────────────────────────────────
     server.registerTool(
-      TOOL_DEFS.docs_replace_text.name,
-      toolConfig(TOOL_DEFS.docs_replace_text, {
-        documentId: z.string().describe('Google Docs document ID'),
-        find: z.string().describe('Text to find (every occurrence is replaced)'),
-        replace: z.string().describe('Replacement text'),
-        matchCase: z.boolean().optional().describe('Case-sensitive match (default: true)'),
+      TOOL_DEFS.comments_read.name,
+      toolConfig(TOOL_DEFS.comments_read, {
+        fileId: z.string().describe('Google Docs document ID or Google Sheets spreadsheet ID'),
+        pageToken: z.string().optional().describe('nextPageToken from a previous page of results'),
         account: z.string().optional().describe('Email account to use.'),
       }),
-      async ({ documentId, find, replace, matchCase, account }, { authInfo }) => {
+      async ({ fileId, pageToken, account }, { authInfo }) => {
         const conn = await requireApproval(authInfo);
         if ('content' in conn) return conn;
 
         const resolved = await resolveAccountAndToken(conn, account);
         if ('error' in resolved) return textResult(resolved.error);
 
-        const perm = await checkDocsPermission(conn.user.id, resolved.proxyKeyId, documentId, true);
-        if (!perm.allowed) return policyDenialWithLink(conn, resolved.proxyKeyId, perm.reason, docsDenialAction(perm, documentId, true));
+        const check = await checkCommentsPermission(conn, resolved.proxyKeyId, fileId, false);
+        if ('denial' in check) return check.denial;
 
-        const body = JSON.stringify({
-          requests: [{ replaceAllText: { containsText: { text: find, matchCase: matchCase ?? true }, replaceText: replace } }],
-        });
-        const result = await withDocsGrace(perm, () => docsFetch(resolved.token, `${encodeURIComponent(documentId)}:batchUpdate`, 'POST', body, resolved.targetEmail));
-        if (!result.ok) return docsErrorResult(result, documentId);
-        return jsonResult({
-          ...(result.data as Record<string, unknown>),
-          fgac_hint: 'Plain-text replacement. Richer edits (tables, styles, positional changes): google_api_modify with the Docs batchUpdate endpoint (same rule authorizes both).',
-        });
+        const url = `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}/comments?fields=${encodeURIComponent(COMMENT_LIST_FIELDS)}&pageSize=50${pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : ''}`;
+        const result = await withGrantGrace(check.kind, check.perm, () => googleFetch(url, resolved.token, 'GET', undefined, resolved.targetEmail));
+        if (!result.ok) return errorResult(result.error);
+        return jsonResult(result.data);
+      }
+    );
+
+    // ── comments_add ──────────────────────────────────────────────────
+    server.registerTool(
+      TOOL_DEFS.comments_add.name,
+      toolConfig(TOOL_DEFS.comments_add, {
+        fileId: z.string().describe('Google Docs document ID or Google Sheets spreadsheet ID'),
+        content: z.string().describe('Comment or reply text'),
+        commentId: z.string().optional().describe('Existing comment ID to reply to (from comments_read). Omit to create a new file-level comment.'),
+        resolve: z.boolean().optional().describe('With commentId: also mark the comment resolved (Drive reply action "resolve")'),
+        account: z.string().optional().describe('Email account to use.'),
+      }),
+      async ({ fileId, content, commentId, resolve, account }, { authInfo }) => {
+        const conn = await requireApproval(authInfo);
+        if ('content' in conn) return conn;
+        if (resolve && !commentId) {
+          return textResult('❌ resolve requires commentId — resolving happens via a reply to an existing comment.');
+        }
+
+        const resolved = await resolveAccountAndToken(conn, account);
+        if ('error' in resolved) return textResult(resolved.error);
+
+        const check = await checkCommentsPermission(conn, resolved.proxyKeyId, fileId, true);
+        if ('denial' in check) return check.denial;
+
+        const base = `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}`;
+        const url = commentId
+          ? `${base}/comments/${encodeURIComponent(commentId)}/replies?fields=${encodeURIComponent('id,content,action,createdTime')}`
+          : `${base}/comments?fields=${encodeURIComponent('id,content,createdTime')}`;
+        const payload = JSON.stringify(commentId && resolve ? { content, action: 'resolve' } : { content });
+        const result = await withGrantGrace(check.kind, check.perm, () => googleFetch(url, resolved.token, 'POST', payload, resolved.targetEmail));
+        if (!result.ok) return errorResult(result.error);
+        return jsonResult(result.data);
       }
     );
 
@@ -1592,11 +1682,11 @@ const handler = createMcpHandler(
     // must be stated up front, not only inside individual descriptions.
     instructions:
       'FGAC proxies Google Workspace behind per-user access rules enforced upstream at the proxy — every tool passes through the same enforcement. ' +
-      'The typed tools (gmail_*, sheets_*, docs_*) are convenience shortcuts for common operations. The full Google API surface is available through ' +
-      'google_api_get (reads) and google_api_modify (writes): when a typed tool cannot express an operation (Docs tables and styling via batchUpdate, ' +
-      'Sheets formatting and charts, Gmail threads and drafts, Drive file listing and export, creating new documents or spreadsheets), fall back to the ' +
-      'raw pair instead of treating the operation as unsupported. A denied call is not a dead end: it returns a one-click approval link — show it to the ' +
-      'user and retry after they approve.',
+      'The typed tools are shortcuts for common operations: docs_edit and sheets_edit accept native Google batchUpdate requests (tables, text styles, ' +
+      'cell formatting, charts, sheet tabs), comments_read and comments_add cover Drive-API comments on docs and sheets, and the values/gmail tools ' +
+      'handle the simple cases. The full Google API surface is available through google_api_get (reads) and google_api_modify (writes) — Gmail threads ' +
+      'and drafts, Drive file listing and export, creating new documents or spreadsheets. Fall back to them instead of treating an operation as ' +
+      'unsupported. A denied call is not a dead end: it returns a one-click approval link — show it to the user and retry after they approve.',
   },
   {
     basePath: '/api',

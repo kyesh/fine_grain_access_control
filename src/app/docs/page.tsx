@@ -22,6 +22,7 @@ const READ_TOOLS: Array<[string, string]> = [
   ["sheets_get_spreadsheet", "Spreadsheet metadata and sheet tabs"],
   ["sheets_read_range", "Reads cell values from a range"],
   ["docs_read_document", "Reads a Google Doc (optionally trimmed by a field mask)"],
+  ["comments_read", "Lists the comments and replies on a doc or sheet"],
   ["get_my_permissions", "Shows the rules that govern this connection"],
   ["google_api_get", "Any Google API read endpoint, rule-checked (others limited by your Google grant)"],
   ["request_access", "Asks you to approve a specific permission upgrade"],
@@ -31,8 +32,9 @@ const WRITE_TOOLS: Array<[string, string]> = [
   ["gmail_send", "Sends mail — recipients must be on your send whitelist"],
   ["sheets_update_range", "Overwrites cells — needs Read & Write on the sheet"],
   ["sheets_append_rows", "Appends rows — needs Read & Write on the sheet"],
-  ["docs_append_text", "Appends text to a doc — needs Read & Write on the doc"],
-  ["docs_replace_text", "Replaces text in a doc — needs Read & Write on the doc"],
+  ["docs_edit", "Edits a doc via Docs batchUpdate (text, tables, styles) — needs Read & Write"],
+  ["sheets_edit", "Formats/restructures a sheet via Sheets batchUpdate — needs Read & Write"],
+  ["comments_add", "Adds a comment or reply on a doc or sheet — needs Read & Write"],
   ["google_api_modify", "Write endpoints incl. Docs/Sheets batchUpdate and file creation, rule-checked"],
 ];
 

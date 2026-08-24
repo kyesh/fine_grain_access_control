@@ -27,10 +27,11 @@ const REQUIRED_FALLBACK_REF: Record<string, string> = {
   gmail_list: 'google_api_get',
   gmail_read: 'google_api_get',
   gmail_send: 'google_api_modify',
-  sheets_update_range: 'google_api_modify',
-  sheets_append_rows: 'google_api_modify',
-  docs_append_text: 'google_api_modify',
-  docs_replace_text: 'google_api_modify',
+  sheets_update_range: 'sheets_edit',
+  sheets_append_rows: 'sheets_edit',
+  sheets_edit: 'google_api_modify',
+  docs_read_document: 'docs_edit',
+  docs_edit: 'google_api_modify',
 };
 
 const MAX_DESCRIPTION_CHARS = 1500;

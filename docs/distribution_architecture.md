@@ -72,10 +72,11 @@ chars, no tool forwarding both safe and unsafe HTTP methods.
 - **Read-only tools** (`readOnlyHint: true` — MCP clients may auto-run these):
   `list_accounts`, `gmail_list`, `gmail_read`, `gmail_get_attachment`,
   `gmail_labels`, `sheets_get_spreadsheet`, `sheets_read_range`,
-  `docs_read_document`, `get_my_permissions`, `request_access`, `google_api_get`
+  `docs_read_document`, `comments_read`, `get_my_permissions`, `request_access`,
+  `google_api_get`
 - **Write tools** (`destructiveHint` set — MCP clients prompt before running):
-  `gmail_send`, `sheets_update_range`, `sheets_append_rows`, `docs_append_text`,
-  `docs_replace_text`, `google_api_modify`
+  `gmail_send`, `sheets_update_range`, `sheets_append_rows`, `sheets_edit`,
+  `docs_edit`, `comments_add`, `google_api_modify`
 
 **Raw Google API pair.** The former `raw_google_api_call` (one tool spanning
 GET→DELETE — an automatic directory rejection) is split into `google_api_get`
@@ -93,21 +94,37 @@ in `src/app/api/mcp/googleApiPolicy.ts`:
 - Creation is allowed and auto-granted to the calling key (2026-08-19 posture
   change): `POST v4/spreadsheets` / `POST v1/documents` mint an
   "Agent-created: …" Read & Write rule for the new id.
-- Unknown Google API families (Drive, Calendar, …) **pass through** with the
-  account's token — classify-don't-block, with Google's OAuth scopes as the
-  backstop (`drive.file` limits Drive to picked/app-created files) — and are
-  stamped `raw_api_passthrough` for demand monitoring.
+- Comment paths (`drive/v3/files/{id}/comments`, incl. replies) are classified
+  `file_comments` and inherit the file's per-file rule — comment writes on a
+  read-only or blocked doc/sheet are denied, never scope-only passthrough.
+  The `comments_read` / `comments_add` typed tools ride the same check.
+- Other unknown Google API families (Drive listing/export, Calendar, …)
+  **pass through** with the account's token — classify-don't-block, with
+  Google's OAuth scopes as the backstop (`drive.file` limits Drive to
+  picked/app-created files) — and are stamped `raw_api_passthrough` for
+  demand monitoring.
 - Batch endpoints and non-send Gmail writes are denied. DELETE is not exposed
   at all.
 
 **Discoverability layers** (2026-08-23, after an agent shipped a pipe-character
 text table because nothing at its decision point mentioned the raw fallback):
-the server `instructions` block states the typed-tools-are-shortcuts model
-up front; every convenience tool's description ends with a redirect to its
-raw-pair superset (lint-enforced by `mcp-tool-lint.ts`); typed write successes
-carry an `fgac_hint` pointer; `list_accounts.next_steps` and
-`get_my_permissions.defaults` name the raw pair. The typed layer is capped —
-a request for a new typed tool is first a test of whether these layers made
+the server `instructions` block states the typed-tools-are-shortcuts model up
+front; every convenience tool's description ends with a redirect to its
+superset (values tools → `sheets_edit`; `_edit` tools → `google_api_modify`;
+gmail tools → the raw pair), lint-enforced by `mcp-tool-lint.ts`; sheets
+values successes carry an `fgac_hint` pointer; `list_accounts.next_steps` and
+`get_my_permissions.defaults` name the raw pair.
+
+**Typed-layer shape** (2026-08-23 reshape, grounded in 30d usage data): one
+read tool plus one `{service}_edit` tool bound to the service's native
+batchUpdate endpoint (`docs_edit`, `sheets_edit` — full editing surface via
+`requests[]` passthrough), values-style shortcuts only where the native
+simple path is meaningfully simpler (Sheets values' A1 notation at 1,200
+calls/30d; `gmail_send`'s MIME assembly), and the cross-service
+`comments_read`/`comments_add` pair for Drive-API comments. The plain-text
+`docs_append_text`/`docs_replace_text` wrappers were removed (9 calls/30d;
+their names taught agents a false plain-text-only capability model). A
+request for a new typed tool is first a test of whether these layers made
 the operation findable.
 
 ## API Surfaces

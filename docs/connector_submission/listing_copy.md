@@ -34,10 +34,13 @@ we get surfaced.
 >
 > More Google Workspace Connections Coming Soon!
 
-> **PENDING UPDATE (Google Docs support, 2026-08-20)**: the connector now
-> also serves Google Docs (per-document read/append/replace behind the same
-> per-file rules — tools `docs_read_document`, `docs_append_text`,
-> `docs_replace_text`). The DECIDED tagline/description above predate this
+> **PENDING UPDATE (Google Docs support, 2026-08-20; tool reshape
+> 2026-08-23)**: the connector now also serves Google Docs (per-document
+> read and full batchUpdate editing behind the same per-file rules — tools
+> `docs_read_document`, `docs_edit`; `sheets_edit` and the
+> `comments_read`/`comments_add` pair landed in the same reshape, and the
+> plain-text `docs_append_text`/`docs_replace_text` wrappers were removed).
+> The DECIDED tagline/description above predate this
 > and need the owner's sign-off before resubmission. Proposed tagline
 > (≤55 chars): `Gmail, Google Sheets & Docs — on your terms` (43).
 > Proposed description addition: "…and let it update Google Sheets and
