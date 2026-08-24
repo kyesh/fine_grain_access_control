@@ -103,8 +103,11 @@ field — gives reviewers expected outcomes per prompt):
 **Notes for the reviewer**
 
 - Read-only tools carry `readOnlyHint`; write tools carry `destructiveHint`.
-- `google_api_get` / `google_api_modify` accept freeform Gmail/Sheets API
-  paths; try `google_api_get` with `drive/v3/files` to see the deny-by-default
-  behavior (unsupported APIs are refused server-side).
+- `google_api_get` / `google_api_modify` accept freeform Google API paths.
+  Gmail/Sheets/Docs paths are rule-enforced server-side (try a non-send Gmail
+  write via `google_api_modify` to see a denial); other API families (e.g.
+  `google_api_get` with `drive/v3/files`) are forwarded with the account's
+  token, bounded by the OAuth scopes the user granted — `drive.file` limits
+  Drive to files the user picked or the connector created.
 - Public docs: `https://fgac.ai/docs` · Privacy: `https://fgac.ai/privacy`
 - Support / questions: `support@fgac.ai`

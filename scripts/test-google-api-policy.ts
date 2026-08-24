@@ -85,6 +85,20 @@ expect('no id → null', extractDocsDocumentId('v1/documents'), (id: string | nu
 expect('unknown API (drive) → passthrough with family (classify, not block)',
   classifyGoogleApiCall('drive/v3/files', 'GET'),
   (c: { kind: string; family?: string }) => c.kind === 'passthrough' && c.family === 'drive/v3');
+expect('drive comments GET → file_comments (per-file rule, not passthrough)',
+  classifyGoogleApiCall('drive/v3/files/1BxiM2doc-ID_x/comments?fields=comments', 'GET'),
+  (c: { kind: string; fileId?: string; isMutating?: boolean }) =>
+    c.kind === 'file_comments' && c.fileId === '1BxiM2doc-ID_x' && c.isMutating === false);
+expect('drive comments POST → file_comments mutating',
+  classifyGoogleApiCall('/drive/v3/files/1BxiM2doc-ID_x/comments', 'POST'),
+  (c: { kind: string; isMutating?: boolean }) => c.kind === 'file_comments' && c.isMutating === true);
+expect('drive comment replies POST → file_comments mutating',
+  classifyGoogleApiCall('drive/v3/files/1BxiM2doc-ID_x/comments/AAAAc1/replies', 'POST'),
+  (c: { kind: string; fileId?: string; isMutating?: boolean }) =>
+    c.kind === 'file_comments' && c.fileId === '1BxiM2doc-ID_x' && c.isMutating === true);
+expect('drive file metadata GET stays passthrough (no comments segment)',
+  classifyGoogleApiCall('drive/v3/files/1BxiM2doc-ID_x', 'GET'),
+  (c: { kind: string }) => c.kind === 'passthrough');
 expect('unknown API (calendar) → passthrough with family',
   classifyGoogleApiCall('calendar/v3/calendars/primary/events', 'GET'),
   (c: { kind: string; family?: string }) => c.kind === 'passthrough' && c.family === 'calendar/v3');
@@ -207,6 +221,9 @@ expect('gmail read → gmail',
 expect('gmail send → gmail',
   rawApiFamily(classifyGoogleApiCall('gmail/v1/users/me/messages/send', 'POST')),
   (f: string | null) => f === 'gmail');
+expect('file_comments family → drive_comments',
+  rawApiFamily(classifyGoogleApiCall('drive/v3/files/1BxiM2doc-ID_x/comments', 'POST')),
+  (f: string | null) => f === 'drive_comments');
 expect('passthrough carries classifier family',
   rawApiFamily(classifyGoogleApiCall('calendar/v3/calendars/primary/events', 'GET')),
   (f: string | null) => f === 'calendar/v3');

@@ -4,7 +4,9 @@
 Covers the Google Docs per-file access lifecycle end to end: the dashboard UX for
 exposing a document to a profile (Google Picker `DOCUMENTS` view, sharing the
 sheets `drive.file` machinery), the curated MCP tools (`docs_read_document`,
-`docs_append_text`, `docs_replace_text`), raw-API enforcement of the `documents`
+`docs_edit` — which replaced `docs_append_text`/`docs_replace_text` in the
+2026-08-23 reshape — and the cross-service `comments_read`/`comments_add`
+pair), raw-API enforcement of the `documents`
 family (which was unenforced passthrough before this feature), the proxy-route
 twin, agent-created-doc auto-grant, and the docs approval/recovery funnel.
 Everything here mirrors capability 09/17 semantics for sheets — where behavior
@@ -80,14 +82,15 @@ intentionally differs, the assertion says so.
   events (capability 16 A8).
 
 ### A8: Writes require Read & Write — and use batchUpdate semantics
-- With the rule at `doc_read`: call `docs_append_text`, `docs_replace_text`,
-  and raw `google_api_modify` `v1/documents/<id>:batchUpdate`.
-- **Expected**: All denied with `denial_code=docs_read_only` and a
+- With the rule at `doc_read`: call `docs_edit` (any request, e.g. an
+  `insertText`) and raw `google_api_modify` `v1/documents/<id>:batchUpdate`.
+- **Expected**: Both denied with `denial_code=docs_read_only` and a
   `docs_write` approval link (write-level, never a read-only under-grant —
   same matrix as sheets). After flipping the rule to `doc_read_write`:
-  `docs_append_text` appends text at the end of the document (existing content
-  untouched), `docs_replace_text` replaces occurrences, raw batchUpdate
-  succeeds, and the changes are visible in a follow-up `docs_read_document`.
+  `docs_edit` with an end-of-segment `insertText` appends text (existing
+  content untouched), an `insertTable` request inserts a real table, a
+  `replaceAllText` request replaces occurrences, raw batchUpdate succeeds,
+  and the changes are visible in a follow-up `docs_read_document`.
 
 ### A9: doc_block denies everything and never mints a link
 - Set the rule to `doc_block` (Blocked in either dashboard select).
@@ -126,8 +129,23 @@ intentionally differs, the assertion says so.
      reports `missing` → after a Picker pick, `ok` with the title
      (full-fidelity pick via the Playwright CDP path, as in capability 09).
 
+### A13: Comments follow the file's rule (typed pair and raw path)
+- On the exposed doc at `doc_read`: `comments_read` (expect 200 — comment
+  listing is a read), then `comments_add` with a short comment (expect 🚫
+  `docs_read_only` with a `docs_write` approval link). Flip to
+  `doc_read_write`: `comments_add` succeeds (new comment id returned);
+  `comments_add` again with that `commentId` and `resolve: true` posts a
+  resolving reply; `comments_read` shows the comment with `resolved: true`.
+- Raw path parity: `google_api_get` on
+  `drive/v3/files/<exposed id>/comments?fields=comments(id)` succeeds and
+  stamps `raw_api_family='drive_comments'` (never `raw_api_passthrough`);
+  the same POST on the never-picked external doc id denies with
+  `denial_code=file_not_exposed` and NO approval link (service unknown for
+  an unruled bare file id).
+
 ## Analytics hooks
 `docs_grant_verification`, `docs_grant_recovered`, `agent_doc_created`,
 `approval_link_minted` with `action=docs_expose|docs_write`, denial codes
-`docs_not_exposed|docs_read_only|docs_blocked`, grace props `docs_grace_*`,
+`docs_not_exposed|docs_read_only|docs_blocked|file_not_exposed`, grace props
+`docs_grace_*`, `raw_api_family='drive_comments'` on raw comment calls,
 and universal `response_chars`/`response_kb` (capability 16).

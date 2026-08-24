@@ -2,9 +2,11 @@
  * Pure classification + parsing helpers for the raw Google API tools
  * (google_api_get / google_api_modify).
  *
- * Deny-by-default: only path families we can map onto FGAC rule enforcement
- * are forwarded. Everything else — unknown Google APIs, batch endpoints,
- * unrecognized Gmail writes — is refused before any network call.
+ * Enforced families (Gmail, Sheets, Docs) are mapped onto FGAC rule
+ * enforcement; batch endpoints and unrecognized Gmail writes are refused
+ * before any network call. Unknown Google API families pass through with the
+ * account's token (2026-08-19 posture change: classify usage, don't block it —
+ * Google's OAuth scopes are the backstop) and are stamped for analytics.
  *
  * No db/env imports: unit-testable via `npx tsx scripts/test-google-api-policy.ts`.
  */
@@ -16,6 +18,7 @@ export type RawCallClass =
   | { kind: 'docs_create' }
   | { kind: 'gmail_read' }
   | { kind: 'gmail_send' }
+  | { kind: 'file_comments'; fileId: string; isMutating: boolean }
   | { kind: 'passthrough'; family: string; isMutating: boolean }
   | { kind: 'denied'; reason: string; code: DenialCode };
 
@@ -87,6 +90,15 @@ export function classifyGoogleApiCall(rawPath: string, method: string): RawCallC
     return { kind: 'denied', code: 'gmail_write_unsupported', reason: '🚫 Access Denied: This Gmail write endpoint is not permitted through FGAC. The only supported Gmail write is messages/send (recipients are checked against the send whitelist).' };
   }
 
+  // Comments on a Drive file (which is how Docs/Sheets comments are
+  // addressed) are content reads/writes on that file, so they inherit the
+  // file's per-file rule instead of falling through to scope-only
+  // passthrough — a read-only or blocked doc must not accept comment writes.
+  const commentsMatch = path.match(/^drive\/v3\/files\/([^/?#]+)\/comments(\/|$)/i);
+  if (commentsMatch) {
+    return { kind: 'file_comments', fileId: decodeURIComponent(commentsMatch[1]), isMutating };
+  }
+
   // Unknown API families pass through (2026-08-19 posture change: classify
   // usage instead of blocking it — enforcement gets built when demand shows
   // up). Google's own OAuth scopes are the backstop: the token can only reach
@@ -153,6 +165,8 @@ export function rawApiFamily(cls: RawCallClass): string | null {
     case 'gmail_read':
     case 'gmail_send':
       return 'gmail';
+    case 'file_comments':
+      return 'drive_comments';
     case 'passthrough':
       return cls.family;
     case 'denied':

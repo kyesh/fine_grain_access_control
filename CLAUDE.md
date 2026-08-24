@@ -155,6 +155,28 @@ that infers state from Clerk must verify the key mode (`sk_live_` vs `sk_test_`)
 if a majority of users resolve as deleted. The branch database is a copy of main, so its
 user ids are production-instance ids too.
 
+## Preview Database Architecture (verified 2026-08-24)
+
+Vercel **Preview deployments run against an isolated Neon branch**, named
+`preview/<git-branch>`, created by the Vercel–Neon integration on the first preview
+deploy of that git branch. Facts that are easy to get wrong:
+
+- **`vercel env ls` / `vercel env pull --environment=preview` CANNOT see this.** They
+  show the stored project vars, where `POSTGRES_URL` points at production. The
+  integration injects the branch-scoped `neon__`-prefixed vars per-deployment; that is
+  why `resolveConnection` checks `neon__POSTGRES_URL` FIRST even in production runtime.
+  Never infer a deployment's database from pulled env — verify at runtime (where does a
+  write land, or a logged resolved host).
+- **Preview builds migrate the preview branch, not production.** `migrate.ts`'s
+  `VERCEL=1` bypass only skips local neonctl auto-provisioning; the connection chain
+  still resolves the injected branch URL.
+- **The preview branch is a copy of production data** at branch-creation time.
+  Stateful QA against a preview is DB-isolated, but the branch holds real customer
+  data — the public-repo rules apply to anything quoted from it.
+- **Preview branches and local `db:branch` branches share the same Neon branch cap.**
+  Both kinds count toward the plan limit; when preview deploys fail instantly with
+  empty Builds, check the combined branch count first (read-only) before any cleanup.
+
 ## Database Rules
 
 1. **Isolation First**: BEFORE creating any migration or pushing schema changes, ALWAYS run `npm run db:branch` so Drizzle-Kit executes against an isolated development branch.

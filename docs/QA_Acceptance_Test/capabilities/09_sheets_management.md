@@ -90,6 +90,17 @@ events do not route into the iframe — tiles cannot be clicked from this harnes
   permission to **Read Only** and confirm the same write is blocked again with the
   Read-Only error — proving the permission toggle is live in both directions.
 
+### A9: sheets_edit applies batchUpdate under the same write matrix (2026-08-23 reshape)
+- With the exposed sheet at **Read Only**: call `sheets_edit` with a harmless
+  formatting request (e.g. `repeatCell` setting a background color on one QA cell).
+- **Expected**: 🚫 denied with `denial_code=sheets_read_only` and a `sheets_write`
+  approval link. After flipping to **Read & Write**: the same `sheets_edit` call
+  succeeds against the real sheet (Google returns the batchUpdate reply), and an
+  `addSheet` request creates a QA-tagged tab visible via `sheets_get_spreadsheet`.
+  Cleanup: delete the QA tab (`deleteSheet` request) and restore **Read Only**.
+  The success response of a values write (`sheets_update_range`) carries an
+  `fgac_hint` naming `sheets_edit` (capability 10 A10 cross-check).
+
 ### A7: Drive listing is Google-native; per-file Drive access respects sheet rules
 - `GET {proxy}/drive/v3/files` with the profile's bearer token, then
   `GET {proxy}/drive/v3/files/<id>` for (a) an exposed sheet, (b) a sheet with a

@@ -239,8 +239,8 @@ curl -s $BASE_URL/api/mcp -X POST \
 
 ## Capability: Docs Management (→ capabilities/19_docs_management.md)
 
-- A5–A10: `tools/call` via curl on `docs_read_document` / `docs_append_text` /
-  `docs_replace_text` / `google_api_get` (`v1/documents/<id>`) /
+- A5–A10, A13: `tools/call` via curl on `docs_read_document` / `docs_edit` /
+  `comments_read` / `comments_add` / `google_api_get` (`v1/documents/<id>`) /
   `google_api_modify` (`:batchUpdate`, and POST `v1/documents` for the
   auto-grant), using the setup doc's exposed + external docs fixtures.
 - A11: proxy-route probes with the profile's `sk_proxy_` bearer against

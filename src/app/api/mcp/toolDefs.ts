@@ -8,6 +8,9 @@
  *   - tool names are ≤ 64 characters
  *   - no tool forwards both safe and unsafe HTTP methods
  *   - freeform-path tools name/link the target API in their description
+ *   - convenience tools reference their raw-API fallback in the description
+ *     (google_api_get / google_api_modify are the full surface; typed tools
+ *     are shortcuts — every dead end must point at the escape hatch)
  */
 
 export interface FgacToolDef {
@@ -34,13 +37,13 @@ export const TOOL_DEFS = {
   gmail_list: {
     name: 'gmail_list',
     title: 'List Gmail messages',
-    description: 'List recent Gmail message IDs, optionally filtered by a Gmail search query (e.g. "is:unread"). Works across every connected or delegated Gmail inbox — pass the "account" parameter to target a specific mailbox (see list_accounts).',
+    description: 'List recent Gmail message IDs, optionally filtered by a Gmail search query (e.g. "is:unread"). Works across every connected or delegated Gmail inbox — pass the "account" parameter to target a specific mailbox (see list_accounts). Other Gmail read endpoints (threads, drafts, history, settings) are available via google_api_get.',
     readOnly: true,
   },
   gmail_read: {
     name: 'gmail_read',
     title: 'Read a Gmail message',
-    description: 'Read a Gmail message by ID. Returns parsed headers, body text, and attachment metadata. Reading is allowed by default; messages matching the user\'s read-block rules (labels or content patterns), if any, are withheld. Works across every connected or delegated Gmail inbox via the "account" parameter.',
+    description: 'Read a Gmail message by ID. Returns parsed headers, body text, and attachment metadata. Reading is allowed by default; messages matching the user\'s read-block rules (labels or content patterns), if any, are withheld. Works across every connected or delegated Gmail inbox via the "account" parameter. For a full thread use google_api_get with gmail/v1/users/me/threads/{id}.',
     readOnly: true,
   },
   gmail_get_attachment: {
@@ -52,7 +55,7 @@ export const TOOL_DEFS = {
   gmail_send: {
     name: 'gmail_send',
     title: 'Send an email',
-    description: 'Send a plain-text email from any connected or delegated account (via the "account" parameter). Recipients must match the user\'s FGAC send whitelist; denied sends include a link the user can use to approve the recipient.',
+    description: 'Send a plain-text email from any connected or delegated account (via the "account" parameter). Recipients must match the user\'s FGAC send whitelist; denied sends include a link the user can use to approve the recipient. Plain text only — for HTML, attachments, or threaded replies, use google_api_modify with Gmail messages/send and a raw RFC 2822 MIME body; the same whitelist applies.',
     readOnly: false,
     destructive: true,
     openWorld: true,
@@ -78,48 +81,61 @@ export const TOOL_DEFS = {
   sheets_update_range: {
     name: 'sheets_update_range',
     title: 'Update spreadsheet cells',
-    description: 'Overwrite cell values in a range of a Google Spreadsheet. Requires a Read & Write FGAC rule for the spreadsheet.',
+    description: 'Overwrite cell values in a range of a Google Spreadsheet. Requires a Read & Write FGAC rule for the spreadsheet. Values only — for formatting, charts, or structural changes use sheets_edit; the same rule authorizes both.',
     readOnly: false,
     destructive: true,
   },
   sheets_append_rows: {
     name: 'sheets_append_rows',
     title: 'Append spreadsheet rows',
-    description: 'Append rows to a sheet in a Google Spreadsheet without modifying existing cells. Requires a Read & Write FGAC rule for the spreadsheet.',
+    description: 'Append rows to a sheet in a Google Spreadsheet without modifying existing cells. Requires a Read & Write FGAC rule for the spreadsheet. Values only — for formatting or structural changes use sheets_edit; the same rule authorizes both.',
     readOnly: false,
     destructive: false,
+  },
+  sheets_edit: {
+    name: 'sheets_edit',
+    title: 'Edit a Google Spreadsheet (batchUpdate)',
+    description: 'Apply Google Sheets batchUpdate requests to a spreadsheet — the full Sheets structural surface: cell and number formatting, conditional formats, charts, adding/renaming/deleting sheet tabs, merges, borders, filters, data validation, protected ranges (https://developers.google.com/sheets/api/reference/rest/v4/spreadsheets/batchUpdate). For plain cell values prefer sheets_update_range / sheets_append_rows (simpler A1 ranges). Requires a Read & Write FGAC rule for the spreadsheet. Spreadsheet comments live in the Drive API — use comments_read / comments_add. To create a new spreadsheet, use google_api_modify (POST v4/spreadsheets).',
+    readOnly: false,
+    destructive: true,
   },
   docs_read_document: {
     name: 'docs_read_document',
     title: 'Read a Google Doc',
-    description: 'Read a Google Docs document exposed by the user\'s FGAC rules. Returns the raw Docs API document resource (title, body content as structured JSON). Large documents can be trimmed with the optional "fields" mask (e.g. "title,body.content") — use it if a full read is too big.',
+    description: 'Read a Google Docs document exposed by the user\'s FGAC rules. Returns the raw Docs API document resource (title, body content as structured JSON). Large documents can be trimmed with the optional "fields" mask (e.g. "title,body.content") — use it if a full read is too big. To edit the document use docs_edit; comments live in the Drive API — use comments_read.',
     readOnly: true,
   },
-  docs_append_text: {
-    name: 'docs_append_text',
-    title: 'Append text to a Google Doc',
-    description: 'Append plain text at the end of a Google Docs document without modifying existing content. Requires a Read & Write FGAC rule for the document.',
-    readOnly: false,
-    destructive: false,
-  },
-  docs_replace_text: {
-    name: 'docs_replace_text',
-    title: 'Replace text in a Google Doc',
-    description: 'Replace every occurrence of a text string in a Google Docs document (Docs API replaceAllText). Requires a Read & Write FGAC rule for the document. Note: a Read & Write rule on a document permits full-document editing.',
+  docs_edit: {
+    name: 'docs_edit',
+    title: 'Edit a Google Doc (batchUpdate)',
+    description: 'Apply Google Docs batchUpdate requests to a document — the full Docs editing surface: insert or delete text, tables, text styles, headings, images, page breaks, positional edits (https://developers.google.com/docs/api/reference/rest/v1/documents/batchUpdate). Examples: append text {"insertText":{"endOfSegmentLocation":{},"text":"..."}}; insert a 3x3 table {"insertTable":{"rows":3,"columns":3,"endOfSegmentLocation":{}}}; replace every occurrence {"replaceAllText":{"containsText":{"text":"old","matchCase":true},"replaceText":"new"}}. Requires a Read & Write FGAC rule for the document. Doc comments live in the Drive API — use comments_read / comments_add. To create a new document, use google_api_modify (POST v1/documents).',
     readOnly: false,
     destructive: true,
+  },
+  comments_read: {
+    name: 'comments_read',
+    title: 'Read file comments',
+    description: 'List the comments on a Google Docs document or Google Sheets spreadsheet — content, resolution state, author names, quoted anchor text, and replies — via the Drive API comments endpoint (https://developers.google.com/drive/api/reference/rest/v3/comments). Works for any file exposed by an FGAC rule.',
+    readOnly: true,
+  },
+  comments_add: {
+    name: 'comments_add',
+    title: 'Add a comment or reply',
+    description: 'Add a comment to a Google Docs document or Google Sheets spreadsheet, or reply to an existing comment (pass commentId; set resolve to also mark it resolved), via the Drive API (https://developers.google.com/drive/api/reference/rest/v3/replies). Requires a Read & Write FGAC rule for the file. New comments are file-level (unanchored); anchoring to a specific range is not supported.',
+    readOnly: false,
+    destructive: false,
   },
   google_api_get: {
     name: 'google_api_get',
     title: 'Raw Google API read',
-    description: 'Perform a read-only GET request against any endpoint of the Gmail API (https://developers.google.com/gmail/api/reference/rest), Google Sheets API (https://developers.google.com/sheets/api/reference/rest), or Google Docs API (https://developers.google.com/docs/api/reference/rest). Access model: Gmail reads are allowed by default and filtered by the user\'s read-block rules if any; Sheets and Docs require an explicit per-file rule; other Google APIs and batch endpoints are denied.',
+    description: 'Perform a read-only GET request against any Google API endpoint by path — the full read surface behind the typed convenience tools. Gmail (https://developers.google.com/gmail/api/reference/rest): messages, threads, drafts, labels, history, settings — reads are allowed by default and filtered by the user\'s read-block rules if any. Google Sheets (https://developers.google.com/sheets/api/reference/rest) and Google Docs (https://developers.google.com/docs/api/reference/rest): require a per-file FGAC rule. Other Google APIs (e.g. Drive drive/v3 for file listing, metadata, export, revisions) are forwarded subject to the Google OAuth scopes the user granted — with the standard grant, Drive is limited by drive.file to files the user picked or this agent created. Exception: comment paths (drive/v3/files/{id}/comments) follow the file\'s FGAC rule — comments_read is the shortcut. Batch endpoints are denied. Use this whenever no typed read tool covers the endpoint you need.',
     readOnly: true,
     freeformMethods: ['GET'],
   },
   google_api_modify: {
     name: 'google_api_modify',
     title: 'Raw Google API write',
-    description: 'Perform a POST, PUT, or PATCH request against supported write endpoints of the Gmail API (https://developers.google.com/gmail/api/reference/rest), Google Sheets API (https://developers.google.com/sheets/api/reference/rest), or Google Docs API (https://developers.google.com/docs/api/reference/rest). Allowed writes: Gmail messages/send (recipients are checked against the user\'s FGAC send whitelist), Sheets value updates/appends on spreadsheets with Read & Write rules, and Docs batchUpdate on documents with Read & Write rules. All other write endpoints are denied. DELETE is never available through FGAC.',
+    description: 'Perform a POST, PUT, or PATCH request against a Google API endpoint by path — the full write surface behind the typed convenience tools. Docs (https://developers.google.com/docs/api/reference/rest): v1/documents/{id}:batchUpdate supports tables, text styles, headings, images, and positional edits on documents with a Read & Write rule — e.g. body {"requests":[{"insertTable":{"rows":3,"columns":3,"endOfSegmentLocation":{}}}]} inserts a table. Sheets (https://developers.google.com/sheets/api/reference/rest): every write endpoint on spreadsheets with a Read & Write rule, including v4/spreadsheets/{id}:batchUpdate for formatting, charts, and sheet management. Creating files is allowed and auto-granted to this connection: POST v1/documents or POST v4/spreadsheets. Gmail (https://developers.google.com/gmail/api/reference/rest): the only supported write is messages/send with a base64url raw RFC 2822 body (HTML/MIME/threaded replies supported; recipients are checked against the user\'s send whitelist); other Gmail writes are denied. Comment writes (drive/v3/files/{id}/comments) require a Read & Write rule for the file — comments_add is the shortcut. Writes to other Google APIs are forwarded subject to the user\'s granted OAuth scopes. Batch endpoints are denied; DELETE is never available through FGAC. Denied calls return a one-click approval link for the user.',
     readOnly: false,
     destructive: true,
     openWorld: true,
