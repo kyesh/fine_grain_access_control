@@ -107,6 +107,46 @@ These rules are enforced by `.claude/hooks/guard-local-env.sh` (PreToolUse), whi
 local database containers, schema pushes without an isolated branch, and hand-written
 `.env` files.
 
+## PostHog Verification (analytics tasks)
+
+Any task that verifies analytics events — telemetry fixes, the analytics
+review, QA capability 16, "did this event land?" — has a **required first
+move, before writing any code**: load the PostHog MCP with
+
+> `ToolSearch "posthog exec"`
+
+That exact keyword matters. The connector's tool is named `exec` under a
+**connector-UUID prefix** (`mcp__<uuid>__exec`) — generic queries like
+"posthog query insights events" rank it poorly and can return only noise.
+That exact failure happened on 2026-08-24: the connector was present the whole
+session, a generic search missed it, and a production-data question that one
+HogQL query settles in seconds was instead argued from code inspection for the
+whole task. If the first search looks wrong, try the documented keyword before
+concluding the connector is absent. Never hardcode the UUID (it changes);
+never conclude "unavailable" without diagnosing *why*.
+
+Production event data outranks code inspection: query first, then read code to
+explain what the data shows.
+
+If the connector is genuinely absent (headless/cron sessions, CI), two
+fallback paths exist with **different env sources** — provisioning one does
+not enable the other:
+
+| path | reads the key from | works when |
+| --- | --- | --- |
+| `posthog` MCP server (`.mcp.json` → mcp.posthog.com) | `${POSTHOG_PERSONAL_API_KEY}` in the **shell env at `claude` launch** (`.env.local` is invisible to it) | key exported in `~/.zshrc` (or launcher env) |
+| `scripts/qa-posthog-events.ts` | `.env.local` via dotenv | key in Vercel dev env + `vercel env pull` |
+
+`NEXT_PUBLIC_POSTHOG_KEY` (`phc_…`) is the write-side ingestion key and cannot
+query — only a personal API key (`phx_…`, Query:Read scope) can. As of
+2026-08-24 that key is unprovisioned everywhere; creating one is a **user
+action** in the PostHog UI (agents must not create accounts or keys), and
+`npm run env:check` diagnoses this exact gap with remediation steps. When
+blocked, report it explicitly and early ("production verification blocked:
+POSTHOG_PERSONAL_API_KEY unprovisioned") instead of silently substituting
+local-only validation, and never leave a "verify in PostHog" step implicit —
+name the query to run and the result that confirms success.
+
 ## Production Credentials on a Local Machine
 
 Pulling live credentials for diagnostics is fine. Letting them become the *ambient*
