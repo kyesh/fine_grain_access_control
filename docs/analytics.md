@@ -59,8 +59,11 @@ re-check there fires `sheets_grant_recovered`. Funnel health =
 `$mcp_*` property names) so PostHog's built-in MCP views resolve the tool name.
 `$mcp_is_error` is true only for upstream failures/exceptions; the finer-grained
 FGAC story is in the custom `outcome` property: `success`, `denied_by_policy`
-(🚫 FGAC rule), `pending_approval` (⏳ connection not yet approved), `failed`
-(❌ auth/input problems), `error` (upstream Google failure), `exception`.
+(🚫 FGAC rule), `pending_approval` (⏳ connection not yet approved),
+`size_capped` (⚠️ deliberate refusal to return an oversized payload — the tool
+worked; before 2026-08-24 this classified as `failed` and inflated
+`gmail_get_attachment` error-rate readings), `failed` (❌ auth/input problems),
+`error` (upstream Google failure), `exception`.
 Unauthenticated calls attribute to the `anonymous-mcp` / `anonymous-proxy` persons.
 
 > **Legacy naming (before 2026-08):** tool calls were captured as a custom
@@ -91,9 +94,14 @@ fraction of successful reads exceed ~25k tokens' worth of chars for
 correlate with abandoned tool sequences? If material, per-kind caps with
 recovery guidance get built (Phase 6 of the plan) with thresholds calibrated
 from this distribution. `gmail_get_attachment` additionally carries
-`attachment_chars`/`attachment_kb` on EVERY outcome — including the over-cap
-⚠️ failure, where the generic props only see the short refusal message, so
-these are the only record of the actual size that triggered the cap. (These
+`attachment_chars`/`attachment_kb` on EVERY outcome that reaches the
+attachment fetch — including the over-cap ⚠️ refusal (`outcome=size_capped`
+since 2026-08-24), where the generic props only see the short refusal
+message, so these are the only record of the actual size that triggered the
+cap. Events where the attachment fetch itself failed can't carry a measured
+size; those instead carry `attachment_declared_kb`, the size declared in the
+parent message's MIME metadata (stamped before the fetch), so error rows are
+still attributable to size vs genuine upstream failure. (These
 two props were documented ahead of the code: the original commit `5aa23bd`
 was stranded on an unmerged branch and the props first ship with the
 raw-api-classification change, 2026-08-21.) The pre-existing 200k-char cap

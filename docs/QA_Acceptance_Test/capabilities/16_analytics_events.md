@@ -48,9 +48,12 @@ attributable to it.
   (monitoring-only — plan google-docs-support v5, D7: no size caps are
   enforced; the props exist so PostHog can measure how often responses exceed
   MCP clients' tool-result budgets). `gmail_get_attachment` additionally
-  carries `attachment_chars`/`attachment_kb` on every outcome, including the
-  over-cap ⚠️ failure (first shipped with the raw-api-classification change —
-  earlier docs described these props ahead of the code).
+  carries `attachment_chars`/`attachment_kb` on every outcome that reaches
+  the attachment fetch, including the over-cap ⚠️ refusal — which since
+  2026-08-24 classifies as `outcome=size_capped`, not `failed` (first shipped
+  with the raw-api-classification change — earlier docs described these props
+  ahead of the code). Events whose attachment fetch itself failed carry
+  `attachment_declared_kb` (size from the parent's MIME metadata) instead.
 
 ### A9: Raw Google API calls carry product/action classification
 - Inspect `$mcp_tool_call` events where `$mcp_tool_name` is `google_api_get`
@@ -82,7 +85,7 @@ attributable to it.
   call and one policy-denied call, e.g. capability 01 A1 + A2)
 - **Expected**: at least one `success` and at least one `denied_by_policy`;
   every outcome value is within {success, denied_by_policy, pending_approval,
-  failed, error, exception}
+  size_capped, failed, error, exception}
 
 ### A4: Events attribute to the Clerk user, not anonymous
 - Inspect `rows[].distinct_id` from A1
