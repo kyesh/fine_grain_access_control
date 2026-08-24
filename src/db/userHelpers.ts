@@ -1,6 +1,6 @@
 import { db } from '@/db';
 import { users, proxyKeys, keyEmailAccess } from '@/db/schema';
-import { eq, and, desc, isNull } from 'drizzle-orm';
+import { eq, and, desc, isNull, inArray } from 'drizzle-orm';
 import * as jose from 'jose';
 import { syncDefaultProfileDelegatedAccess } from '@/db/defaultProfile';
 
@@ -28,10 +28,30 @@ export async function resolveDbUser(clerkUserId: string, email: string) {
   if (byClerkId) {
     // Keep the email in sync if it changed on Clerk's side.
     if (byClerkId.email !== email) {
+      console.warn(
+        `[resolveDbUser] Primary email changed for ${clerkUserId}: ${byClerkId.email} -> ${email}`,
+      );
       const [updated] = await db.update(users)
         .set({ email })
         .where(eq(users.id, byClerkId.id))
         .returning();
+      // The user's own-mailbox access rows (delegation_id NULL) are keyed by
+      // this same address — re-point them so identity and key access can't
+      // drift apart. Delegated rows (delegation_id set) belong to *other*
+      // people's mailboxes and must not be touched. Without this, the MCP
+      // own-vs-delegated token branch misroutes the user's own mailbox into
+      // the delegation path and every call fails (support case 2026-08-24).
+      const ownKeys = await db.select({ id: proxyKeys.id }).from(proxyKeys)
+        .where(eq(proxyKeys.userId, byClerkId.id));
+      if (ownKeys.length > 0) {
+        await db.update(keyEmailAccess)
+          .set({ targetEmail: email })
+          .where(and(
+            inArray(keyEmailAccess.proxyKeyId, ownKeys.map(k => k.id)),
+            eq(keyEmailAccess.targetEmail, byClerkId.email),
+            isNull(keyEmailAccess.delegationId),
+          ));
+      }
       return updated;
     }
     return byClerkId;

@@ -22,6 +22,7 @@ import { resolveDbUser } from '@/db/userHelpers';
 import { parseManifest } from '@/lib/partner/manifest';
 import { provisionPartnerConnection } from '@/lib/partner/provision';
 import { expectedClerkIssuer } from '@/lib/partner/clerkOauth';
+import { clerkPrimaryEmail } from '@/lib/clerkPrimaryEmail';
 
 export async function POST(req: NextRequest) {
   const { userId } = await auth();
@@ -71,7 +72,7 @@ export async function POST(req: NextRequest) {
   }
 
   const clerkUser = await currentUser();
-  const email = clerkUser?.emailAddresses[0]?.emailAddress;
+  const email = clerkUser ? clerkPrimaryEmail(clerkUser) : undefined;
   if (!email) return NextResponse.json({ error: 'Account has no email' }, { status: 400 });
   const dbUser = await resolveDbUser(userId, email);
   if (!dbUser) return NextResponse.json({ error: 'User not found' }, { status: 404 });

@@ -247,7 +247,14 @@ export default function SetupPage() {
                 <p className="mt-0.5 text-[13px] leading-relaxed text-muted-foreground">
                   Click <strong>+ Expose a sheet</strong> on a profile and pick
                   files. Each sheet starts read-only; enable write access per
-                  sheet when the agent needs it.
+                  sheet when the agent needs it. Full walkthrough with video:{" "}
+                  <Link
+                    href="/use-cases/google-sheets-agent"
+                    className="text-primary underline underline-offset-2"
+                  >
+                    let an agent update your Sheets
+                  </Link>
+                  .
                 </p>
               </div>
             </div>
@@ -313,7 +320,14 @@ export default function SetupPage() {
               account
             </code>{" "}
             parameter. Every delegation keeps its own rules and is revocable in
-            one click.
+            one click. Step-by-step guide with video:{" "}
+            <Link
+              href="/use-cases/multiple-gmail-accounts"
+              className="text-primary underline underline-offset-2"
+            >
+              connect multiple Gmail accounts
+            </Link>
+            .
           </p>
           <div className="flex flex-col gap-2.5">
             <div className="rounded-sm border border-border bg-card px-3.5 py-3 font-mono text-[13px]">
@@ -333,6 +347,59 @@ export default function SetupPage() {
                 boss@company.com
               </span>
             </div>
+          </div>
+        </section>
+
+        {/* ── Use-case guides ─────────────────────────────────────────── */}
+        <section className="flex flex-col gap-5">
+          <div className="text-center">
+            <h2 className="mb-1 text-xl font-bold tracking-[-0.01em] text-foreground">
+              Go deeper: use-case guides
+            </h2>
+            <p className="mx-auto max-w-md text-sm text-muted-foreground">
+              Step-by-step walkthroughs — each with a demo video — for the two
+              most common setups.
+            </p>
+          </div>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Link
+              href="/use-cases/google-sheets-agent"
+              className="group rounded-lg border border-border bg-card p-6 hover:border-ring"
+            >
+              <span className="mb-2.5 inline-block rounded-full border border-sheets-border bg-sheets-bg px-2.5 py-0.5 text-xs font-bold text-sheets">
+                Sheets
+              </span>
+              <h3 className="mb-1.5 text-[15px] font-bold text-foreground">
+                Let an agent update your Google Sheets
+              </h3>
+              <p className="text-[13px] leading-relaxed text-muted-foreground">
+                Expose individual spreadsheets, grant read or read&nbsp;&amp;
+                write per sheet, and keep the rest of Drive invisible.
+              </p>
+              <span className="mt-3 inline-flex items-center gap-1.5 text-[13px] font-semibold text-primary">
+                Read the guide
+                <ArrowRight className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5" />
+              </span>
+            </Link>
+            <Link
+              href="/use-cases/multiple-gmail-accounts"
+              className="group rounded-lg border border-border bg-card p-6 hover:border-ring"
+            >
+              <span className="mb-2.5 inline-block rounded-full border border-gmail-border bg-gmail-bg px-2.5 py-0.5 text-xs font-bold text-gmail">
+                Gmail
+              </span>
+              <h3 className="mb-1.5 text-[15px] font-bold text-foreground">
+                Multiple Gmail accounts, one agent
+              </h3>
+              <p className="text-[13px] leading-relaxed text-muted-foreground">
+                Work + personal inboxes, and mailboxes teammates delegate to
+                you — each under its own rules, revocable in one click.
+              </p>
+              <span className="mt-3 inline-flex items-center gap-1.5 text-[13px] font-semibold text-primary">
+                Read the guide
+                <ArrowRight className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5" />
+              </span>
+            </Link>
           </div>
         </section>
 

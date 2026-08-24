@@ -38,7 +38,8 @@ export function AddDelegatedAccountButton() {
             <div className="px-6 pb-5 space-y-3 text-[13px] text-muted-foreground">
               <p>
                 Access has to be granted by the mailbox owner — you can&apos;t request it
-                from here.
+                from here. That applies to your own second account too: sign in to FGAC
+                as that account (another browser profile works) and follow the same steps.
               </p>
               <ol className="list-decimal space-y-1.5 pl-5">
                 <li>Ask them to sign up at <span className="font-semibold text-foreground">fgac.ai</span> with the Google account you need.</li>
