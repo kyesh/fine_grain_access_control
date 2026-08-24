@@ -170,9 +170,7 @@ export default async function AccountsPage() {
                 </Link>{' '}
                 (with video): add an account you own with{' '}
                 <strong>+ Add account</strong>{' '}above, or have the other
-                account&apos;s owner sign in and delegate it to you. Adding an
-                email address to your profile does <strong>not</strong> grant
-                mailbox access.
+                account&apos;s owner sign in and delegate it to you.
               </p>
             </div>
           </Card>
