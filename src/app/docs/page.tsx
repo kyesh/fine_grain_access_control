@@ -23,7 +23,7 @@ const READ_TOOLS: Array<[string, string]> = [
   ["sheets_read_range", "Reads cell values from a range"],
   ["docs_read_document", "Reads a Google Doc (optionally trimmed by a field mask)"],
   ["get_my_permissions", "Shows the rules that govern this connection"],
-  ["google_api_get", "Any Gmail/Sheets/Docs read endpoint, rule-checked"],
+  ["google_api_get", "Any Google API read endpoint, rule-checked (others limited by your Google grant)"],
   ["request_access", "Asks you to approve a specific permission upgrade"],
 ];
 
@@ -33,7 +33,7 @@ const WRITE_TOOLS: Array<[string, string]> = [
   ["sheets_append_rows", "Appends rows — needs Read & Write on the sheet"],
   ["docs_append_text", "Appends text to a doc — needs Read & Write on the doc"],
   ["docs_replace_text", "Replaces text in a doc — needs Read & Write on the doc"],
-  ["google_api_modify", "Supported Gmail/Sheets/Docs write endpoints, rule-checked"],
+  ["google_api_modify", "Write endpoints incl. Docs/Sheets batchUpdate and file creation, rule-checked"],
 ];
 
 const EXAMPLES: Array<{

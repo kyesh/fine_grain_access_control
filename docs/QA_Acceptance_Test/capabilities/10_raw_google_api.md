@@ -22,6 +22,12 @@
   the returned data is base64url-encoded (URL-safe alphabet, padded — a
   15,326-byte fixture ends in exactly one "=", verified 2026-08-16; the
   description must match the actual output, per the tester finding)
+- **Also expected** (2026-08-23 discoverability change): the raw-pair
+  descriptions state the REAL access model — unknown-family passthrough
+  bounded by OAuth scopes, Docs/Sheets `:batchUpdate` on Read & Write files,
+  creation via POST `v1/documents` / `v4/spreadsheets` with auto-grant, batch
+  denied, DELETE never. They must NOT claim "other Google APIs are denied"
+  (stale pre-2026-08-19 posture).
 
 ### A2: Raw Gmail read succeeds
 - `google_api_get` with path `gmail/v1/users/me/messages?maxResults=2`
@@ -83,3 +89,19 @@
   the calling key (visible in dashboard rules as "Agent-created: …"), and a
   follow-up `sheets_read_range` on the new id succeeds without any approval
   link. An `agent_sheet_created` event fires with `auto_granted: true`.
+
+### A10: Raw fallback is discoverable at every decision point
+- Call `initialize` and `tools/list` on the hosted MCP endpoint; then a
+  successful `docs_append_text` (or `sheets_update_range`) on a Read & Write
+  fixture.
+- **Expected**: the `initialize` result carries a server `instructions` block
+  naming `google_api_get` / `google_api_modify` as the full-surface fallback
+  and describing the denial → approval-link pattern. Every convenience tool
+  with a raw superset (`gmail_list`, `gmail_read`, `gmail_send`,
+  `sheets_update_range`, `sheets_append_rows`, `docs_append_text`,
+  `docs_replace_text`) names its fallback tool in its description
+  (lint-enforced by `scripts/mcp-tool-lint.ts`). The typed write success
+  response carries an `fgac_hint` pointing at the relevant `batchUpdate`
+  endpoint. Rationale: 2026-08-23 field failure — an agent shipped a
+  pipe-character text table because nothing at its decision point referenced
+  the raw fallback.

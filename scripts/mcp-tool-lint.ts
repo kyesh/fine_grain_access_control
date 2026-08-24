@@ -12,10 +12,28 @@
  *   5. DELETE is never forwarded.
  *   6. Freeform-path tools name the target API docs in their description.
  *   7. Descriptions are non-empty and don't instruct the model how to behave.
+ *   8. Convenience tools with a raw-API superset name their fallback tool in
+ *      the description (the typed layer is capped-with-redirects: agents read
+ *      catalogs as paths, so every dead end must point at the full surface).
+ *   9. Descriptions stay under a length cap (directory token-frugality).
  */
 import { TOOL_DEFS, type FgacToolDef } from '../src/app/api/mcp/toolDefs';
 
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+
+// Typed convenience tools and the raw-pair tool their description must
+// reference as the fallback for operations they cannot express.
+const REQUIRED_FALLBACK_REF: Record<string, string> = {
+  gmail_list: 'google_api_get',
+  gmail_read: 'google_api_get',
+  gmail_send: 'google_api_modify',
+  sheets_update_range: 'google_api_modify',
+  sheets_append_rows: 'google_api_modify',
+  docs_append_text: 'google_api_modify',
+  docs_replace_text: 'google_api_modify',
+};
+
+const MAX_DESCRIPTION_CHARS = 1500;
 const errors: string[] = [];
 
 const defs = Object.values(TOOL_DEFS) as FgacToolDef[];
@@ -55,6 +73,14 @@ for (const def of defs) {
   const lowered = def.description.toLowerCase();
   for (const phrase of ['ignore previous', 'you must always', 'do not tell the user', 'system prompt']) {
     if (lowered.includes(phrase)) errors.push(`${where}: description contains behavioral instruction ('${phrase}')`);
+  }
+
+  const fallback = REQUIRED_FALLBACK_REF[def.name];
+  if (fallback && !def.description.includes(fallback)) {
+    errors.push(`${where}: convenience tool must reference its raw fallback '${fallback}' in the description`);
+  }
+  if (def.description.length > MAX_DESCRIPTION_CHARS) {
+    errors.push(`${where}: description exceeds ${MAX_DESCRIPTION_CHARS} chars (token frugality)`);
   }
 }
 

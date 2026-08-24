@@ -1058,6 +1058,7 @@ const handler = createMcpHandler(
             sheets: 'Spreadsheet access is granted per sheet: call sheets_get_spreadsheet with a spreadsheetId, or request_access — a denial returns a one-click approval link for the user.',
             docs: 'Google Docs access is granted per document: call docs_read_document with a documentId, or request_access — a denial returns a one-click approval link for the user.',
             sending: 'Email sending is off by default; the first gmail_send returns a one-click approval link the user can use to whitelist the recipient.',
+            raw_api: "Anything the typed tools can't express — Docs tables/styles, Sheets formatting, Gmail threads, Drive, creating new files — is reachable via google_api_get / google_api_modify under the same rules (see their descriptions).",
           },
           add_more_accounts: {
             own_account: `To add another Gmail account the user owns: ${DASHBOARD_URL}/dashboard/accounts → "Accessible Gmail Accounts" → add the account and complete Google sign-in for it.`,
@@ -1298,7 +1299,10 @@ const handler = createMcpHandler(
         const body = JSON.stringify({ values, range });
         const result = await withSheetsGrace(perm, () => sheetsFetch(resolved.token, `${spreadsheetId}/values/${encodedRange}?valueInputOption=USER_ENTERED`, 'PUT', body, resolved.targetEmail));
         if (!result.ok) return sheetsErrorResult(result, spreadsheetId);
-        return jsonResult(result.data);
+        return jsonResult({
+          ...(result.data as Record<string, unknown>),
+          fgac_hint: 'Values written. Formatting, charts, and structural changes: google_api_modify with the Sheets batchUpdate endpoint (same rule authorizes both).',
+        });
       }
     );
 
@@ -1325,7 +1329,10 @@ const handler = createMcpHandler(
         const body = JSON.stringify({ values });
         const result = await withSheetsGrace(perm, () => sheetsFetch(resolved.token, `${spreadsheetId}/values/${encodedRange}:append?valueInputOption=USER_ENTERED`, 'POST', body, resolved.targetEmail));
         if (!result.ok) return sheetsErrorResult(result, spreadsheetId);
-        return jsonResult(result.data);
+        return jsonResult({
+          ...(result.data as Record<string, unknown>),
+          fgac_hint: 'Rows appended as values. Formatting or structural changes: google_api_modify with the Sheets batchUpdate endpoint (same rule authorizes both).',
+        });
       }
     );
 
@@ -1377,7 +1384,12 @@ const handler = createMcpHandler(
         });
         const result = await withDocsGrace(perm, () => docsFetch(resolved.token, `${encodeURIComponent(documentId)}:batchUpdate`, 'POST', body, resolved.targetEmail));
         if (!result.ok) return docsErrorResult(result, documentId);
-        return jsonResult(result.data);
+        // Mid-task discoverability: the limitation bites right after a
+        // plain-text success, so the pointer to the full surface rides on it.
+        return jsonResult({
+          ...(result.data as Record<string, unknown>),
+          fgac_hint: 'Appended as plain text. Tables, styles, headings, and positional edits: google_api_modify with the Docs batchUpdate endpoint (same rule authorizes both).',
+        });
       }
     );
 
@@ -1406,7 +1418,10 @@ const handler = createMcpHandler(
         });
         const result = await withDocsGrace(perm, () => docsFetch(resolved.token, `${encodeURIComponent(documentId)}:batchUpdate`, 'POST', body, resolved.targetEmail));
         if (!result.ok) return docsErrorResult(result, documentId);
-        return jsonResult(result.data);
+        return jsonResult({
+          ...(result.data as Record<string, unknown>),
+          fgac_hint: 'Plain-text replacement. Richer edits (tables, styles, positional changes): google_api_modify with the Docs batchUpdate endpoint (same rule authorizes both).',
+        });
       }
     );
 
@@ -1545,6 +1560,7 @@ const handler = createMcpHandler(
             sheets: 'DENIED unless a per-spreadsheet rule below exposes the sheet',
             docs: 'DENIED unless a per-document rule below exposes the document',
             deletion: 'NEVER available through any tool',
+            rawApi: 'google_api_get / google_api_modify expose the full Google API surface under these same rules; unknown Google API families (e.g. Drive) are forwarded subject to the Google OAuth scopes the user granted; POST v4/spreadsheets and POST v1/documents create new files auto-granted to this key',
           },
           rules: applicableRules.map(r => ({
             name: r.ruleName,
@@ -1570,6 +1586,17 @@ const handler = createMcpHandler(
       name: 'fgac',
       version: '1.3.0',
     },
+    // Surfaced in the `initialize` result and loaded into the client's context
+    // before any tool is called. Agents read tool catalogs as paths (task →
+    // first plausible tool → stop), so the shortcut/full-surface relationship
+    // must be stated up front, not only inside individual descriptions.
+    instructions:
+      'FGAC proxies Google Workspace behind per-user access rules enforced upstream at the proxy — every tool passes through the same enforcement. ' +
+      'The typed tools (gmail_*, sheets_*, docs_*) are convenience shortcuts for common operations. The full Google API surface is available through ' +
+      'google_api_get (reads) and google_api_modify (writes): when a typed tool cannot express an operation (Docs tables and styling via batchUpdate, ' +
+      'Sheets formatting and charts, Gmail threads and drafts, Drive file listing and export, creating new documents or spreadsheets), fall back to the ' +
+      'raw pair instead of treating the operation as unsupported. A denied call is not a dead end: it returns a one-click approval link — show it to the ' +
+      'user and retry after they approve.',
   },
   {
     basePath: '/api',

@@ -72,23 +72,43 @@ chars, no tool forwarding both safe and unsafe HTTP methods.
 - **Read-only tools** (`readOnlyHint: true` — MCP clients may auto-run these):
   `list_accounts`, `gmail_list`, `gmail_read`, `gmail_get_attachment`,
   `gmail_labels`, `sheets_get_spreadsheet`, `sheets_read_range`,
-  `get_my_permissions`, `google_api_get`
+  `docs_read_document`, `get_my_permissions`, `request_access`, `google_api_get`
 - **Write tools** (`destructiveHint` set — MCP clients prompt before running):
-  `gmail_send`, `sheets_update_range`, `sheets_append_rows`, `google_api_modify`
+  `gmail_send`, `sheets_update_range`, `sheets_append_rows`, `docs_append_text`,
+  `docs_replace_text`, `google_api_modify`
 
 **Raw Google API pair.** The former `raw_google_api_call` (one tool spanning
 GET→DELETE — an automatic directory rejection) is split into `google_api_get`
 (GET only) and `google_api_modify` (POST/PUT/PATCH). Both classify the request
-deny-by-default in `src/app/api/mcp/googleApiPolicy.ts`:
+in `src/app/api/mcp/googleApiPolicy.ts`:
 
 - Gmail GETs are forwarded, then the **full response** passes the same
   label/content read-restriction checks as `gmail_read` (labels are collected
   recursively, so thread/list responses are covered).
 - The only Gmail write is `messages/send`, with recipients parsed out of the
   RFC 2822 payload and checked against the send whitelist (unparseable → deny).
-- Sheets calls require a per-spreadsheet rule; writes require Read & Write.
-- Batch endpoints, spreadsheet creation, all other Gmail writes, and every
-  other Google API are denied. DELETE is not exposed at all.
+- Sheets and Docs calls with a file id require a per-file rule; writes require
+  Read & Write. Any write endpoint on a permitted file passes (including
+  `:batchUpdate` — Docs tables/styles, Sheets formatting/charts).
+- Creation is allowed and auto-granted to the calling key (2026-08-19 posture
+  change): `POST v4/spreadsheets` / `POST v1/documents` mint an
+  "Agent-created: …" Read & Write rule for the new id.
+- Unknown Google API families (Drive, Calendar, …) **pass through** with the
+  account's token — classify-don't-block, with Google's OAuth scopes as the
+  backstop (`drive.file` limits Drive to picked/app-created files) — and are
+  stamped `raw_api_passthrough` for demand monitoring.
+- Batch endpoints and non-send Gmail writes are denied. DELETE is not exposed
+  at all.
+
+**Discoverability layers** (2026-08-23, after an agent shipped a pipe-character
+text table because nothing at its decision point mentioned the raw fallback):
+the server `instructions` block states the typed-tools-are-shortcuts model
+up front; every convenience tool's description ends with a redirect to its
+raw-pair superset (lint-enforced by `mcp-tool-lint.ts`); typed write successes
+carry an `fgac_hint` pointer; `list_accounts.next_steps` and
+`get_my_permissions.defaults` name the raw pair. The typed layer is capped —
+a request for a new typed tool is first a test of whether these layers made
+the operation findable.
 
 ## API Surfaces
 

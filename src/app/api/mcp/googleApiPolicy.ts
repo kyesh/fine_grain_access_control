@@ -2,9 +2,11 @@
  * Pure classification + parsing helpers for the raw Google API tools
  * (google_api_get / google_api_modify).
  *
- * Deny-by-default: only path families we can map onto FGAC rule enforcement
- * are forwarded. Everything else — unknown Google APIs, batch endpoints,
- * unrecognized Gmail writes — is refused before any network call.
+ * Enforced families (Gmail, Sheets, Docs) are mapped onto FGAC rule
+ * enforcement; batch endpoints and unrecognized Gmail writes are refused
+ * before any network call. Unknown Google API families pass through with the
+ * account's token (2026-08-19 posture change: classify usage, don't block it —
+ * Google's OAuth scopes are the backstop) and are stamped for analytics.
  *
  * No db/env imports: unit-testable via `npx tsx scripts/test-google-api-policy.ts`.
  */
