@@ -235,8 +235,10 @@ export default function DocsPage() {
               Sheets API
             </a>{" "}
             without loosening anything: raw reads pass the same read rules, the
-            only raw Gmail write is <em>send</em> (whitelist-checked), and
-            unrecognized endpoints are denied.
+            only raw Gmail write is <em>send</em> (whitelist-checked), Sheets
+            and Docs writes (including <em>batchUpdate</em> and file creation)
+            need the same Read &amp; Write grants, and endpoints outside those
+            services are bounded by the narrow Google OAuth scopes FGAC holds.
           </p>
         </section>
 
@@ -253,7 +255,7 @@ export default function DocsPage() {
 
           <ul className="m-0 flex list-none flex-col gap-2.5 p-0">
             {[
-              ["Gmail, Google Sheets, and Google Docs only.", "Other Google services (Calendar, Slides, full Drive browsing) are denied — support arrives service by service, each behind its own rules."],
+              ["Gmail, Google Sheets, and Google Docs are the enforced services.", "Requests to other Google services are limited by the narrow OAuth scopes FGAC holds — Drive access, for example, covers only files you picked or the agent created (drive.file), and services like Calendar or Slides fail at Google without a granted scope. Rule enforcement arrives service by service."],
               ["Agents can never delete.", "No tool exposes DELETE. Trash, empty-trash, and destructive Gmail settings are refused regardless of your rules."],
               ["Sending requires a whitelist.", "With no send-whitelist rule configured, all outbound mail is refused. That's the default. When a send is denied, you get a one-click, single-use link to approve exactly that recipient — or the agent can ask via request_access."],
               ["New connections start read-only.", "Connecting attaches the agent to your Default Profile: it can read this account's mail — plus any inbox its owner has delegated to you — and nothing else: no sending, no Sheets or Docs, no undelegated inboxes. You can review, re-scope, or block it from the dashboard at any time."],
