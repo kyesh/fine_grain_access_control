@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import { users, proxyKeys } from '@/db/schema';
 import { eq } from 'drizzle-orm';
 import { getDelegationsToEmail, getDelegationsFromEmail } from '@/db/delegationQueries';
@@ -158,6 +159,21 @@ export default async function AccountsPage() {
                   </div>
                 </div>
               ))}
+
+              <p className="pt-1.5 text-[12px] leading-relaxed text-muted-foreground">
+                Want your agent in another inbox? Watch the{' '}
+                <Link
+                  href="/use-cases/multiple-gmail-accounts"
+                  className="text-primary underline underline-offset-2"
+                >
+                  multi-account setup walkthrough
+                </Link>{' '}
+                (with video): add an account you own with{' '}
+                <strong>+ Add account</strong>{' '}above, or have the other
+                account&apos;s owner sign in and delegate it to you. Adding an
+                email address to your profile does <strong>not</strong> grant
+                mailbox access.
+              </p>
             </div>
           </Card>
 
