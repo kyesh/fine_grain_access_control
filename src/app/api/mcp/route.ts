@@ -1144,7 +1144,11 @@ const handler = createMcpHandler(
             raw_api: "Anything the typed tools can't express — Gmail threads/drafts, Drive listing and export, creating new docs or sheets — is reachable via google_api_get / google_api_modify under the same rules (see their descriptions).",
           },
           add_more_accounts: {
-            own_account: `To add another Gmail account the user owns: ${DASHBOARD_URL}/dashboard/accounts → "Accessible Gmail Accounts" → add the account and complete Google sign-in for it.`,
+            // Every extra mailbox — the user's own second account included —
+            // arrives via delegation from its own FGAC signup. There is no
+            // in-dashboard "link a second Google account" flow; describing
+            // one here sent users hunting for it (support case 2026-08-24).
+            own_account: `To add another Gmail account the user owns: sign in to ${DASHBOARD_URL} AS that account (e.g. in another browser profile), then on its Accounts page use "Delegations You've Granted" to delegate that mailbox to this user's email. It then appears here automatically. Walkthrough: ${DASHBOARD_URL}/use-cases/multiple-gmail-accounts`,
             someone_elses: `To access someone else's mailbox: that person signs up at ${DASHBOARD_URL} and uses "Delegations You've Granted" on their own Accounts page to delegate their mailbox to this user. It then appears here automatically.`,
           },
         });

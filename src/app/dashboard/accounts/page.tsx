@@ -161,16 +161,17 @@ export default async function AccountsPage() {
               ))}
 
               <p className="pt-1.5 text-[12px] leading-relaxed text-muted-foreground">
-                Want your agent in another inbox? Watch the{' '}
+                Want your agent in another inbox? Every extra mailbox — your
+                own second account included — is granted by signing in to FGAC
+                as that account and delegating it to this one. Watch the{' '}
                 <Link
                   href="/use-cases/multiple-gmail-accounts"
                   className="text-primary underline underline-offset-2"
                 >
                   multi-account setup walkthrough
                 </Link>{' '}
-                (with video): add an account you own with{' '}
-                <strong>+ Add account</strong>{' '}above, or have the other
-                account&apos;s owner sign in and delegate it to you.
+                (with video), or click <strong>+ Add account</strong>{' '}above
+                for the steps.
               </p>
             </div>
           </Card>
