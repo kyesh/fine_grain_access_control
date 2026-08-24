@@ -17,6 +17,7 @@ import { partnerApps, emailDelegations, users } from '@/db/schema';
 import { and, eq } from 'drizzle-orm';
 import { resolveDbUser } from '@/db/userHelpers';
 import { parseManifest, describeManifest } from '@/lib/partner/manifest';
+import { clerkPrimaryEmail } from '@/lib/clerkPrimaryEmail';
 
 export const dynamic = 'force-dynamic';
 
@@ -78,7 +79,7 @@ export default async function AuthorizePage({
   }
 
   const clerkUser = await currentUser();
-  const email = clerkUser?.emailAddresses[0]?.emailAddress;
+  const email = clerkUser ? clerkPrimaryEmail(clerkUser) : undefined;
   if (!email) return <ErrorCard title="Account error" detail="Your account has no email address." />;
   const dbUser = await resolveDbUser(userId, email);
   if (!dbUser) redirect('/dashboard');

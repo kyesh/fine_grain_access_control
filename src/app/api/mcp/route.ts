@@ -38,6 +38,7 @@ import {
   templateGoogleApiPath, rawApiFamily,
 } from './googleApiPolicy';
 import { DRIVE_FILE_KINDS, ACTIVE_DRIVE_FILE_KINDS, type DriveFileKind } from '@/lib/driveFileKinds';
+import { clerkPrimaryEmail } from '@/lib/clerkPrimaryEmail';
 
 /** Env URL values have shipped with trailing whitespace/newlines (pasted
  * Vercel vars); a whitespace-only value must also not win the fallback chain.
@@ -86,7 +87,7 @@ async function resolveConnection(userId: string, clientId: string | undefined): 
     try {
       const client = await clerkClient();
       const clerkUser = await client.users.getUser(userId);
-      const email = clerkUser.emailAddresses[0]?.emailAddress;
+      const email = clerkPrimaryEmail(clerkUser);
 
       if (!email) {
         return { authorized: false, reason: 'user_not_found' };
@@ -243,6 +244,34 @@ async function checkEmailAccess(proxyKeyId: string, targetEmail: string) {
   return rows.find(r => r.targetEmail.toLowerCase() === targetEmail.toLowerCase());
 }
 
+/**
+ * Whether `email` belongs to the key owner's own Clerk account — a verified
+ * email address or the connected Google external account. Guards against
+ * identity drift: `users.email` once tracked `emailAddresses[0]`, whose order
+ * changes when a second address is added, so a key's own-mailbox access row
+ * can legitimately name an address that no longer equals `users.email`
+ * (support case 2026-08-24). Only consulted after the delegation lookup
+ * fails, so it costs nothing on the happy paths.
+ */
+async function isOwnClerkEmail(clerkUserId: string, email: string): Promise<boolean> {
+  try {
+    const client = await clerkClient();
+    const clerkUser = await client.users.getUser(clerkUserId);
+    const target = email.toLowerCase();
+    const ownVerified = clerkUser.emailAddresses.some(
+      e => e.emailAddress.toLowerCase() === target && e.verification?.status === 'verified',
+    );
+    const ownGoogle = clerkUser.externalAccounts.some(
+      e => (e.provider === 'oauth_google' || (e.provider as string) === 'google') &&
+        e.emailAddress?.toLowerCase() === target,
+    );
+    return ownVerified || ownGoogle;
+  } catch (err) {
+    console.error('[MCP] Clerk lookup failed while checking own-email fallback:', err);
+    return false;
+  }
+}
+
 async function getGoogleToken(targetEmail: string, keyOwner: { id: string; email: string; clerkUserId: string }) {
   let tokenOwnerClerkId: string;
 
@@ -254,18 +283,27 @@ async function getGoogleToken(targetEmail: string, keyOwner: { id: string; email
       .where(eq(users.email, targetEmail))
       .limit(1).then(r => r[0]);
 
-    if (!emailOwner) return null;
-
     // Verify active delegation
-    const delegation = await db.select().from(emailDelegations)
-      .where(and(
-        eq(emailDelegations.ownerUserId, emailOwner.id),
-        eq(emailDelegations.delegateUserId, keyOwner.id),
-        eq(emailDelegations.status, 'active'),
-      )).limit(1).then(r => r[0]);
+    const delegation = emailOwner
+      ? await db.select().from(emailDelegations)
+          .where(and(
+            eq(emailDelegations.ownerUserId, emailOwner.id),
+            eq(emailDelegations.delegateUserId, keyOwner.id),
+            eq(emailDelegations.status, 'active'),
+          )).limit(1).then(r => r[0])
+      : undefined;
 
-    if (!delegation) return null;
-    tokenOwnerClerkId = emailOwner.clerkUserId;
+    if (emailOwner && delegation) {
+      tokenOwnerClerkId = emailOwner.clerkUserId;
+    } else if (await isOwnClerkEmail(keyOwner.clerkUserId, targetEmail)) {
+      // Not a delegation — the address is the key owner's own mailbox under a
+      // drifted `users.email`. Use their token and record that the fallback
+      // fired so analytics can watch the drift population shrink.
+      addToolCallProps({ google_token_identity_fallback: true });
+      tokenOwnerClerkId = keyOwner.clerkUserId;
+    } else {
+      return null;
+    }
   }
 
   const client = await clerkClient();

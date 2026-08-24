@@ -8,6 +8,7 @@ import { db } from '@/db';
 import { ConnectGoogleWarning } from './ConnectGoogleWarning';
 import { AgentProfilesView } from './AgentProfilesView';
 import { checkGoogleAccess } from './googleAccess';
+import { clerkPrimaryEmail } from '@/lib/clerkPrimaryEmail';
 
 export default async function DashboardPage() {
   const user = await currentUser();
@@ -18,7 +19,7 @@ export default async function DashboardPage() {
 
   // Resolves by Clerk id, adopts an existing row for the same email if Clerk
   // reissued the id, and keeps the email in sync — all handled in one place.
-  const currentEmail = user.emailAddresses[0]?.emailAddress ?? 'unknown';
+  const currentEmail = clerkPrimaryEmail(user) ?? 'unknown';
   const dbUser = await resolveDbUser(user.id, currentEmail);
 
   const hasCompleteGoogleAccess = await checkGoogleAccess(user);

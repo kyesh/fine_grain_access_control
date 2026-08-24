@@ -12,6 +12,7 @@ import { ExposedFilesManager } from '../ExposedFilesManager';
 import { AddDelegatedAccountButton } from './AddDelegatedAccountButton';
 import { ReconnectGoogleButton } from './ReconnectGoogleButton';
 import { checkGoogleAccess } from '../googleAccess';
+import { clerkPrimaryEmail } from '@/lib/clerkPrimaryEmail';
 
 export default async function AccountsPage() {
   const user = await currentUser();
@@ -20,10 +21,22 @@ export default async function AccountsPage() {
     redirect('/');
   }
 
-  const currentEmail = user.emailAddresses[0]?.emailAddress ?? 'unknown';
+  const currentEmail = clerkPrimaryEmail(user) ?? 'unknown';
   const dbUser = await resolveDbUser(user.id, currentEmail);
 
   const hasCompleteGoogleAccess = await checkGoogleAccess(user);
+
+  // The card below must show the account Google actually issued the grant
+  // for — not `dbUser.email`. The two can differ (multiple addresses on one
+  // Clerk user), and rendering the identity email here once sent a user
+  // chasing a "wrong connected account" that was in fact correct.
+  const googleAccount = user.externalAccounts.find(
+    acc => acc.provider === 'oauth_google' || (acc.provider as string) === 'google',
+  );
+  const connectedGoogleEmail = googleAccount?.emailAddress ?? null;
+  const googleAccountMismatch =
+    connectedGoogleEmail !== null &&
+    connectedGoogleEmail.toLowerCase() !== dbUser.email.toLowerCase();
 
   // Resolved by email, not by user row id — duplicate `users` rows for the same
   // email would otherwise hide existing delegations. See delegationQueries.ts.
@@ -58,11 +71,17 @@ export default async function AccountsPage() {
               <div className="flex flex-wrap items-center justify-between gap-3 rounded-sm border border-border bg-card px-4 py-3">
                 <div className="flex items-center gap-3 min-w-0">
                   <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-primary bg-primary-muted text-[13px] font-bold text-primary">
-                    {dbUser.email.slice(0, 2).toUpperCase()}
+                    {(connectedGoogleEmail ?? dbUser.email).slice(0, 2).toUpperCase()}
                   </div>
                   <div className="min-w-0">
-                    <p className="truncate text-[13px] font-semibold text-foreground">{dbUser.email}</p>
-                    <p className="text-[11px] text-muted-foreground">Connected via Google OAuth</p>
+                    <p className="truncate text-[13px] font-semibold text-foreground">
+                      {connectedGoogleEmail ?? 'No Google account connected'}
+                    </p>
+                    <p className="text-[11px] text-muted-foreground">
+                      {connectedGoogleEmail
+                        ? 'Connected via Google OAuth'
+                        : 'Click "Reconnect Google" to connect one'}
+                    </p>
                   </div>
                 </div>
 
@@ -77,6 +96,21 @@ export default async function AccountsPage() {
                   )}
                 </div>
               </div>
+
+              {googleAccountMismatch && (
+                <div className="mt-3 rounded-sm border border-warning-foreground bg-warning px-4 py-3 text-[13px] text-warning-foreground">
+                  <p className="font-semibold">
+                    Connected Google account doesn&apos;t match your account email
+                  </p>
+                  <p className="mt-1">
+                    Your FGAC account is <strong>{dbUser.email}</strong>, but the
+                    Google grant is for <strong>{connectedGoogleEmail}</strong> —
+                    agents reach <em>that</em> mailbox and Drive. If this is wrong,
+                    click &quot;Reconnect Google&quot; and choose{' '}
+                    <strong>{dbUser.email}</strong> on Google&apos;s account screen.
+                  </p>
+                </div>
+              )}
 
               {!hasCompleteGoogleAccess && (
                 <p className="mt-3 text-[13px] text-muted-foreground">
