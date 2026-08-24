@@ -236,7 +236,7 @@ export default function DocsPage() {
             </a>{" "}
             without loosening anything: raw reads pass the same read rules, the
             only raw Gmail write is <em>send</em> (whitelist-checked), Sheets
-            and Docs writes (including <em>batchUpdate</em> and file creation)
+            and Docs writes (including <em>batchUpdate</em>{" "}and file creation)
             need the same Read &amp; Write grants, and endpoints outside those
             services are bounded by the narrow Google OAuth scopes FGAC holds.
           </p>
