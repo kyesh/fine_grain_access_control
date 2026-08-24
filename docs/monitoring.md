@@ -25,6 +25,22 @@ Volume control: failures always capture; successes are sampled **1 in 20**
 (deterministic per token; `success_sample_rate` property carries the factor).
 Multiply `outcome=ok` counts by 20 to estimate true success volume.
 
+Sampling mechanics (`src/lib/authSampling.ts`, guarded by
+`scripts/test-auth-sampling.ts` in `npm run mcp:lint`): the gate hashes the
+token's **signature segment** (after the last `.`; whole token for opaque
+non-JWT bearers) with FNV-1a + an avalanche finalizer, and captures when
+`hash % 20 === 0`. Do not "simplify" this back to a prefix hash: the original
+implementation hashed the first 64 chars, which for a Clerk JWT sit entirely
+inside the per-instance-constant header — every production token hashed
+identically and **zero** `outcome=ok` events captured between the event's
+launch (2026-08-23) and the 2026-08-24 fix. `ok` rows before that fix's deploy
+do not exist, and `strategy_used`/`memo_hit` are only meaningful from it
+onward.
+
+Note the unit of sampling is the **token**, not the user or session: Clerk
+access tokens rotate frequently, so every active client surfaces in the sample
+within a few refresh cycles.
+
 ## 2–3. PostHog alerts (hourly evaluation, email to Ken)
 
 | alert | insight | threshold | rationale |

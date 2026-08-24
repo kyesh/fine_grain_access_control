@@ -30,6 +30,7 @@ import { resolveDbUser } from '@/db/userHelpers';
 import { loadApplicableRules, checkReadRestrictions, type ApplicableRules } from '@/lib/gmailRules';
 import { captureServerEvent } from '@/lib/posthogServer';
 import { runWithToolCallProps, addToolCallProps, getToolCallProps } from '@/lib/toolCallContext';
+import { inSuccessSample, AUTH_SUCCESS_SAMPLE } from '@/lib/authSampling';
 import { ensureDefaultProfile } from '@/db/defaultProfile';
 import { mintApprovalLink, approvalLinkMinutes, type ApprovalAction } from '@/lib/approvalLinks';
 import { TOOL_DEFS, toolAnnotations, type FgacToolDef } from './toolDefs';
@@ -775,14 +776,19 @@ type ToolAnalyticsResult = { isError?: boolean; content?: Array<{ type?: string;
 /**
  * Tool responses follow a strict convention (textResult/errorResult above):
  * isError marks upstream/auth failures, and policy outcomes carry a leading
- * ⏳ (pending approval), 🚫 (denied by FGAC policy), or ❌/⚠️ (failed).
+ * ⏳ (pending approval), 🚫 (denied by FGAC policy), ❌ (failed), or
+ * ⚠️ (size-capped: a deliberate refusal to return an oversized payload —
+ * the tool worked, so it must not count as a tool error in any error-rate
+ * metric; before 2026-08-24 it classified as `failed` and inflated the
+ * gmail_get_attachment error rate).
  */
 function classifyToolOutcome(result: ToolAnalyticsResult): string {
   if (result.isError) return 'error';
   const text = result.content?.[0]?.text ?? '';
   if (text.startsWith('⏳')) return 'pending_approval';
   if (text.startsWith('🚫')) return 'denied_by_policy';
-  if (text.startsWith('❌') || text.startsWith('⚠️')) return 'failed';
+  if (text.startsWith('⚠️')) return 'size_capped';
+  if (text.startsWith('❌')) return 'failed';
   return 'success';
 }
 
@@ -1198,6 +1204,25 @@ const handler = createMcpHandler(
         if (restriction) {
           captureServerEvent(conn.user.clerkUserId, 'read_restriction_enforced', { via: 'gmail_get_attachment', restriction });
           return textResult(restriction);
+        }
+
+        // Declared size from the parent's MIME metadata, stamped BEFORE the
+        // attachment fetch: if that fetch fails, the event still says how big
+        // the attachment was, so error rows are attributable to size vs
+        // genuine upstream failure. (attachment_kb below is the measured
+        // truth when the fetch succeeds and overwrites nothing — different
+        // property name on purpose.)
+        const declaredSize = (function findDeclared(part?: { body?: { attachmentId?: string; size?: number }; parts?: unknown[] }): number | undefined {
+          if (!part) return undefined;
+          if (part.body?.attachmentId === attachmentId) return part.body.size;
+          for (const child of (part.parts as typeof part[] | undefined) ?? []) {
+            const found = findDeclared(child);
+            if (found !== undefined) return found;
+          }
+          return undefined;
+        })((parentResult.data as { payload?: { body?: { attachmentId?: string; size?: number }; parts?: unknown[] } }).payload);
+        if (declaredSize !== undefined) {
+          addToolCallProps({ attachment_declared_kb: Math.round(declaredSize / 1024) });
         }
 
         const attachmentResult = await gmailFetch(
@@ -1832,18 +1857,10 @@ async function verifyClerkJwtDirect(token: string) {
   }
 }
 
-/**
- * Success events are sampled 1-in-20 to keep mcp_auth_attempt volume inside
- * the PostHog free tier (~220k MCP requests/mo); failures always capture.
- * Deterministic on the token so a given session is consistently in or out.
- */
-const AUTH_SUCCESS_SAMPLE = 20;
-function inSuccessSample(token?: string): boolean {
-  if (!token) return true;
-  let h = 0;
-  for (let i = 0; i < Math.min(token.length, 64); i++) h = (h * 31 + token.charCodeAt(i)) | 0;
-  return Math.abs(h) % AUTH_SUCCESS_SAMPLE === 0;
-}
+// Success events are sampled 1-in-20 (deterministic per token); failures
+// always capture. Extracted to src/lib/authSampling.ts after the 2026-08-24
+// incident where a prefix-only hash sampled 0% of successes — see the module
+// header there and scripts/test-auth-sampling.ts.
 
 const verifyMcpAuth = async (req: Request, bearerToken?: string) => {
   let authInfo: ReturnType<typeof verifyClerkToken> | Awaited<ReturnType<typeof verifyClerkJwtDirect>> | undefined;
