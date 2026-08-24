@@ -125,6 +125,12 @@ export default async function LandingPage() {
                 ✓ allowed
               </span>
             </div>
+            <Link
+              href="/use-cases/google-sheets-agent"
+              className="text-sm font-semibold text-primary hover:underline"
+            >
+              See the Sheets guide →
+            </Link>
           </div>
 
           <div className="flex flex-col gap-3 rounded-lg border border-border bg-card p-7">
@@ -164,6 +170,12 @@ export default async function LandingPage() {
               <span className="font-semibold text-primary">gmail_list</span>
               <span>account=mom@gmail.com</span>
             </div>
+            <Link
+              href="/use-cases/multiple-gmail-accounts"
+              className="text-sm font-semibold text-primary hover:underline"
+            >
+              See the multi-account guide →
+            </Link>
           </div>
         </div>
       </section>
