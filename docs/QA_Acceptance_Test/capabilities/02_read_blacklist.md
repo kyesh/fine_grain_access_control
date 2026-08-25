@@ -48,9 +48,15 @@ Both outcomes are required. Step 1 alone would also pass if the matcher blocked
 everything unconditionally; step 2 alone would also pass if the pattern never
 compiled.
 
-**Send side**: a `send_whitelist` rule with pattern `*@allowed.example.com`,
-sending to `blocked@untrusted.com`, returns **403** *"...add
-'blocked@untrusted.com' to the sending whitelist."* Note this message differs
-from the zero-rules case, which ends *"Default access is DENIED."* — check the
-wording, since only the first proves a rule was actually evaluated. Do NOT
-assert the positive send case this way; it delivers real mail.
+**Send side**: assert both directions from ONE rule, so a non-compiling
+pattern cannot pass. With `send_whitelist` = `*@umich.edu` (matching
+`USER_B_EMAIL`) on the profile:
+
+- send to `USER_B_EMAIL` → **200**, response carries a Gmail message `id` and
+  `labelIds: ["SENT"]`. This delivers real mail to the QA account, which is
+  expected and permitted.
+- send to `blocked@untrusted.com` → **403** *"...add 'blocked@untrusted.com'
+  to the sending whitelist."*
+
+The wording matters: the zero-rules branch ends *"Default access is DENIED."*
+instead, so only the first phrasing proves a rule was actually evaluated.
