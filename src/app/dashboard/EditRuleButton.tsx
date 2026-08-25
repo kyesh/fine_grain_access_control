@@ -42,6 +42,14 @@ export function EditRuleButton({
   const [gmailLabels, setGmailLabels] = useState<GmailLabel[]>([]);
   const [isLoadingLabels, setIsLoadingLabels] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /**
+   * See RuleControls: React 19 resets an uncontrolled form after its action
+   * resolves. Here that would silently revert the user's edits to the rule's
+   * stored values, which reads as "my change was saved" when it was rejected.
+   */
+  const [draft, setDraft] = useState<Record<string, string> | null>(null);
+  const [draftKeyIds, setDraftKeyIds] = useState<string[] | null>(null);
+  const [formKey, setFormKey] = useState(0);
 
   useEffect(() => {
     let ignore = false;
@@ -66,15 +74,31 @@ export function EditRuleButton({
     return () => { ignore = true; };
   }, [isOpen, selectedService, gmailLabels.length]);
 
+  function closeModal() {
+    setIsOpen(false);
+    setError(null);
+    setDraft(null);
+    setDraftKeyIds(null);
+  }
+
   async function onSubmit(formData: FormData) {
     setError(null);
     startTransition(async () => {
       // Returned failure, not a thrown one — see RuleControls for why.
       const result = await updateRule(formData);
       if (!result.ok) {
+        setDraft({
+          ruleName: String(formData.get("ruleName") ?? ""),
+          regexPattern: String(formData.get("regexPattern") ?? ""),
+          targetEmail: String(formData.get("targetEmail") ?? ""),
+        });
+        setDraftKeyIds(formData.getAll("keyIds").map(String));
+        setFormKey(k => k + 1);
         setError(result.error);
         return;
       }
+      setDraft(null);
+      setDraftKeyIds(null);
       setIsOpen(false);
     });
   }
@@ -98,7 +122,7 @@ export function EditRuleButton({
               Update the rule&apos;s settings and key assignments.
             </p>
 
-            <form action={onSubmit} className="flex flex-col gap-5">
+            <form key={formKey} action={onSubmit} className="flex flex-col gap-5">
               <input type="hidden" name="ruleId" value={rule.id} />
 
               <div>
@@ -109,7 +133,7 @@ export function EditRuleButton({
                   type="text"
                   name="ruleName"
                   required
-                  defaultValue={rule.ruleName}
+                  defaultValue={draft?.ruleName ?? rule.ruleName}
                   className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 shadow-sm"
                 />
               </div>
@@ -204,7 +228,7 @@ export function EditRuleButton({
                     type="text"
                     name="regexPattern"
                     required
-                    defaultValue={rule.targetResourceId || rule.regexPattern || ""}
+                    defaultValue={draft?.regexPattern ?? (rule.targetResourceId || rule.regexPattern || "")}
                     placeholder="e.g. 1cS2oyMtx-Wa..."
                     className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm font-mono text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 shadow-sm"
                   />
@@ -221,7 +245,7 @@ export function EditRuleButton({
                     <select
                       name="regexPattern"
                       required
-                      defaultValue={rule.regexPattern || ""}
+                      defaultValue={draft?.regexPattern ?? (rule.regexPattern || "")}
                       className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 shadow-sm"
                     >
                       <option value="">{isLoadingLabels ? "Loading labels..." : "Choose a Gmail Label..."}</option>
@@ -235,7 +259,7 @@ export function EditRuleButton({
                         type="text"
                         name="regexPattern"
                         required
-                        defaultValue={rule.regexPattern || ""}
+                        defaultValue={draft?.regexPattern ?? (rule.regexPattern || "")}
                         className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm font-mono text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 shadow-sm"
                       />
                       <p className="text-xs text-slate-500 mt-1">
@@ -252,7 +276,7 @@ export function EditRuleButton({
                 </label>
                 <select
                   name="targetEmail"
-                  defaultValue={rule.targetEmail || ""}
+                  defaultValue={draft?.targetEmail ?? (rule.targetEmail || "")}
                   className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 shadow-sm"
                 >
                   <option value="">All accessible emails</option>
@@ -279,7 +303,7 @@ export function EditRuleButton({
                           type="checkbox"
                           name="keyIds"
                           value={k.id}
-                          defaultChecked={rule.assignedKeyIds.includes(k.id)}
+                          defaultChecked={(draftKeyIds ?? rule.assignedKeyIds).includes(k.id)}
                           className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
                         />
                         {k.label}
@@ -302,7 +326,7 @@ export function EditRuleButton({
               <div className="mt-4 flex justify-end gap-3 pt-2">
                 <button
                   type="button"
-                  onClick={() => { setIsOpen(false); setError(null); }}
+                  onClick={closeModal}
                   className="px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-100 hover:text-slate-900 rounded-md transition-colors"
                 >
                   Cancel
