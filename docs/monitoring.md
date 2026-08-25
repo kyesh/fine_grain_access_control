@@ -158,7 +158,12 @@ GROUP BY hour ORDER BY hour
 ```
 
 Healthy: `est_successes` is non-zero in every hour that carries traffic, and
-tracks `$mcp_tool_call` volume within roughly ±20% at hourly granularity.
+rises and falls together with `$mcp_tool_call`. Do **not** expect the two to
+match: this counts authenticated *requests*, and every MCP request
+authenticates (`initialize`, `tools/list`, `ping`, each tool call), so
+`est_successes` should sit comfortably **above** tool-call volume. The ratio is
+a per-client property of how chatty its MCP session is — establish the normal
+ratio empirically before treating a change in it as signal.
 **Zero `ok` across several consecutive active hours is the exact signature of
 the sampling bias returning** — check `src/lib/authSampling.ts` before
 concluding the endpoint is down.
