@@ -19,3 +19,20 @@ if [ -f "$CONFIG_FILE" ]; then
     FORBIDDEN_PATTERN="(sk_proxy_[a-fA-F0-9]{15,}|$PRIVATE_EMAILS)"
   fi
 fi
+
+# ── Generic email guard (deny-by-default) ────────────────────────────────────
+# This repo is PUBLIC. After an internal/personal address slipped through (the
+# pattern above only knew proxy keys + QA emails), the hooks now treat EVERY
+# email address in newly added content as forbidden unless it matches the
+# allowlist below. Real addresses of any kind — customers, operators, personal
+# accounts — never belong in a commit; use placeholders on example.com.
+#
+# Allowlist: the public support address, noreply senders (includes the
+# Co-Authored-By trailer), GitHub noreply, and RFC 2606 placeholder domains.
+EMAIL_REGEX='[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}'
+ALLOWED_EMAIL_REGEX='^support@fgac\.ai$|^(noreply|no-reply)@|@users\.noreply\.github\.com$|@(example|test|invalid|localhost)\.|@company\.com$'
+
+# stdin -> prints disallowed addresses found (empty when clean)
+scan_disallowed_emails() {
+  grep -oE "$EMAIL_REGEX" 2>/dev/null | grep -viE "$ALLOWED_EMAIL_REGEX" | sort -u
+}

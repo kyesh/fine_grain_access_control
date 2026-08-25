@@ -14,4 +14,16 @@ if grep -qE "$FORBIDDEN_PATTERN" "$1" 2>/dev/null; then
   exit 1
 fi
 
+# Same deny-by-default email guard as pre-commit, applied to the message
+# itself (the Co-Authored-By noreply trailer is allowlisted).
+MSG_EMAILS=$(scan_disallowed_emails < "$1")
+if [ -n "$MSG_EMAILS" ]; then
+  echo "🚨 ERROR: Commit rejected — the commit message contains email address(es) not on the allowlist:"
+  printf '  %s\n' $MSG_EMAILS
+  echo "Commit messages are permanent and this repository is public. Describe the"
+  echo "affected account without naming it, or use an example.com placeholder."
+  echo "If this is a false positive, bypass with: git commit --no-verify"
+  exit 1
+fi
+
 echo "✅ Commit message scan passed."
