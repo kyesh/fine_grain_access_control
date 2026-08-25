@@ -4,29 +4,37 @@ description: Handle a support email end-to-end — investigate via a root-cause 
 
 # Support Triage
 
-Run this when a support email arrives. The support mailbox is **ken@fgac.ai**
-(support@fgac.ai forwards into it), delegated to Ken's account and readable
+Run this when a support email arrives. Public-facing support address:
+**support@fgac.ai**. It forwards into a private operator mailbox — that
+address lives in local memory/config only (never in this repo). Read it
 through the **production** FGAC MCP connector (`gmail_list` / `gmail_read`
-with `account: 'ken@fgac.ai'`; full threads via `google_api_get`
-`gmail/v1/users/me/threads/{id}`). Reference case: the 2026-08-24 identity
-drift issue — `docs/bug_reports/identity_email_drift_breaks_token_lookup.md`.
+with `account: '<operator mailbox from local memory>'`; full threads via
+`google_api_get` `gmail/v1/users/me/threads/{id}`). Reference case: the
+2026-08-24 identity drift issue —
+`docs/bug_reports/identity_email_drift_breaks_token_lookup.md`.
 
 **Hard rules:**
 
-- **Never send email.** Every message is a draft Ken reviews and sends.
-  The FGAC proxy blocks Gmail draft creation (`messages/send` is its only
-  Gmail write), so create drafts with the direct Gmail MCP — they land in
-  kenyesh@gmail.com; remind Ken to switch From to support@fgac.ai (or move
-  the copy to the support mailbox) at send time.
+- **Never send email.** Every message is a draft the operator reviews and
+  sends. The FGAC proxy blocks Gmail draft creation (`messages/send` is its
+  only Gmail write), so create drafts with the operator's direct Gmail MCP —
+  they land in that MCP's authenticated personal account; remind the
+  operator to switch From to support@fgac.ai (or move the copy into the
+  support mailbox) at send time.
 - **Production access is read-only.** SELECTs and GET-only calls. Pull creds
   with `npx vercel env pull .secrets/prod.env --environment=production`, run
   scripts from inside `.secrets/` (gitignored; module resolution works
   there), delete `.secrets/prod.env` and any scripts when done.
-- **Public-repo rules**: no customer emails, Clerk ids, proxy keys, or
-  verbatim DB rows in anything that reaches GitHub. Placeholders only.
-- **Account writes are Ken's call** (Clerk edits, data repair). Propose the
-  exact change; never execute it. If an outreach draft promises remediation
-  ("we are removing X"), list the pending manual actions for Ken explicitly.
+- **Public-repo rules — and they cover operators too**: no real email
+  addresses of any kind (customer OR internal/personal), Clerk ids, proxy
+  keys, or verbatim DB rows in anything that reaches GitHub. support@fgac.ai
+  is the only address that may appear. Placeholders elsewhere. The husky
+  pre-commit/commit-msg hooks enforce this on newly added lines; treat a
+  block as a real catch, never bypass with --no-verify.
+- **Account writes are the operator's call** (Clerk edits, data repair).
+  Propose the exact change; never execute it. If an outreach draft promises
+  remediation ("we are removing X"), list the pending manual actions
+  explicitly.
 
 First, acknowledge: draft a short same-day reply — the clarifying question
 that best splits the hypothesis space, links to the relevant self-serve
@@ -68,18 +76,18 @@ or "product bug" alone; it is almost always both.
 
 - Code fix through the normal flow: branch off latest main, plan in
   `docs/implementation_plans/`, bug report in `docs/bug_reports/`, PR +
-  `/deploy-pr-preview`; Ken runs `/deploy-prod`.
+  `/deploy-pr-preview`; the user runs `/deploy-prod`.
 - **Prefer self-healing fixes**: tolerate the broken state (fallbacks) AND
   converge it back to correct on next contact, so affected users need zero
   manual steps.
 - **Close the entry point**: config/settings changes that remove the trap
-  (e.g. Clerk dashboard options), guard rails or truthful copy near the
-  decoy control, corrected guidance in MCP tool responses. Name anything
-  only Ken can do as an explicit action item.
+  (e.g. auth-provider dashboard options), guard rails or truthful copy near
+  the decoy control, corrected guidance in MCP tool responses. Name anything
+  only the operator can do as an explicit action item.
 
 ## 3. Draft the reply to the user who reached out
 
-Ken's voice, modeled on the reference case's sent resolution email:
+House support voice, modeled on the reference case's sent resolution email:
 
 ```
 Hi <Name>,
@@ -110,29 +118,29 @@ Your detailed issue report helped narrow this down quickly!
 Please don't hesitate to reach out if you run into any other issues.
 
 Thank You,
-Ken
+<operator first name>
 ```
 
-Style rules from Ken's edits: short; lead "Update as promised"; emphasize
-email addresses (the load-bearing nouns); say what *we changed* rather than
-internals; always one concrete next step with an fgac.ai use-case link (not
-raw video URLs); address the inferred underlying goal with complete numbered
-steps including sign-out/sign-in cycling; credit their report; no
-over-apology, no "you did everything right" unless the data shows it, no
-unverified claims.
+Style rules (from operator edits on the reference case): short; lead "Update
+as promised"; emphasize email addresses (the load-bearing nouns); say what
+*we changed* rather than internals; always one concrete next step with an
+fgac.ai use-case link (not raw video URLs); address the inferred underlying
+goal with complete numbered steps including sign-out/sign-in cycling; credit
+their report; no over-apology, no "you did everything right" unless the data
+shows it, no unverified claims.
 
 ## 4. Identify other users who fell into the same trap
 
 One report means more affected users who didn't write in. Derive the data
 signature of the broken state and scan production (read-only) across **all
 live users** — e.g. for identity drift: own-mailbox
-`key_email_access.target_email` ≠ `users.email`; at-risk: multi-email Clerk
-profiles, primary/Google mismatches. Cross-reference each hit with PostHog:
-did they ever get a successful call, when did they go silent? Classify:
-actively broken / silently healed by the fix / at-risk only / churned on
-first contact (prime win-back candidates). Add the signature to the daily
-health-check watch items
-(`~/.claude/scheduled-tasks/fgac-user-behavior-review/SKILL.md`).
+`key_email_access.target_email` ≠ `users.email`; at-risk: multi-email
+auth-provider profiles, primary/Google mismatches. Cross-reference each hit
+with PostHog: did they ever get a successful call, when did they go silent?
+Classify: actively broken / silently healed by the fix / at-risk only /
+churned on first contact (prime win-back candidates). Add the signature to
+the daily health-check watch items (the scheduled task's SKILL.md, local to
+the operator's machine).
 
 ## 5. Draft proactive outreach to the affected users
 
@@ -159,10 +167,10 @@ follow the setup instructions/video here:
 Please don't hesitate to reach out if you run into any issues.
 
 Thank You,
-Ken
+<operator first name>
 ```
 
 Keep each draft truthful per-recipient (someone merely at-risk gets "could
-interfere," not "broke your account"). Finish by reporting to Ken: where
-each draft lives, the From-address caveat, and every manual step the drafts
-promise that he still needs to perform.
+interfere," not "broke your account"). Finish by reporting to the operator:
+where each draft lives, the From-address caveat, and every manual step the
+drafts promise that they still need to perform.

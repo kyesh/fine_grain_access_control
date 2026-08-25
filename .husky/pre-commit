@@ -32,4 +32,22 @@ if [ -n "$FOUND" ]; then
   exit 1
 fi
 
+# Deny-by-default email guard on NEWLY ADDED lines only (existing content is
+# grandfathered — this scans the staged diff's additions, not whole files, so
+# legacy occurrences don't block unrelated commits).
+ADDED_EMAILS=$(git diff --cached --unified=0 --diff-filter=ACM \
+  | grep -E '^\+' | grep -vE '^\+\+\+' \
+  | scan_disallowed_emails)
+
+if [ -n "$ADDED_EMAILS" ]; then
+  echo "🚨 ERROR: Commit rejected — newly added lines contain email address(es) not on the allowlist:"
+  printf '  %s\n' $ADDED_EMAILS
+  echo "This is a PUBLIC repository. Real addresses (customer, operator, or personal)"
+  echo "never belong in commits — use placeholders on example.com, or keep the value"
+  echo "in gitignored local config and reference it indirectly."
+  echo "If this is genuinely a public address, add it to ALLOWED_EMAIL_REGEX in"
+  echo ".husky/secret-pattern.sh in the same commit. Bypass (rarely): git commit --no-verify"
+  exit 1
+fi
+
 echo "✅ Secret scan passed."
