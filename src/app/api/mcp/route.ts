@@ -25,9 +25,9 @@ import {
 import { eq, and } from 'drizzle-orm';
 import { filterLiveDelegatedAccess } from '@/db/delegationQueries';
 import { clerkClient } from '@clerk/nextjs/server';
-import safeRegex from 'safe-regex';
 import { resolveDbUser } from '@/db/userHelpers';
 import { loadApplicableRules, checkReadRestrictions, type ApplicableRules } from '@/lib/gmailRules';
+import { compileRulePattern } from '@/lib/rulePatterns';
 import { captureServerEvent } from '@/lib/posthogServer';
 import { runWithToolCallProps, addToolCallProps, getToolCallProps } from '@/lib/toolCallContext';
 import { inSuccessSample, AUTH_SUCCESS_SAMPLE } from '@/lib/authSampling';
@@ -363,9 +363,9 @@ function checkSendWhitelist(rules: ApplicableRules, recipients: string[] | null)
     let isWhitelisted = false;
     for (const rule of sendRules) {
       if (!rule.regexPattern) continue;
-      const regexStr = rule.regexPattern.replace(/\*/g, '.*');
-      if (!safeRegex(regexStr)) continue;
-      if (new RegExp(regexStr, 'i').test(recipient)) { isWhitelisted = true; break; }
+      const regex = compileRulePattern(rule.regexPattern);
+      if (!regex) continue;
+      if (regex.test(recipient)) { isWhitelisted = true; break; }
     }
     if (!isWhitelisted) {
       return {

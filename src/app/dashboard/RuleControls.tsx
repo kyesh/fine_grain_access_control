@@ -33,6 +33,7 @@ export function RuleControls({
   const [isPending, startTransition] = useTransition();
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedActionType, setSelectedActionType] = useState("read_blacklist");
+  const [error, setError] = useState<string | null>(null);
   const [gmailLabels, setGmailLabels] = useState<GmailLabel[]>([]);
   const [isLoadingLabels, setIsLoadingLabels] = useState(false);
 
@@ -64,8 +65,16 @@ export function RuleControls({
   }, [isModalOpen, gmailLabels.length]);
 
   async function onSubmit(formData: FormData) {
+    setError(null);
     startTransition(async () => {
-      await createRule(formData);
+      // The action RETURNS its failure rather than throwing — Next redacts
+      // thrown server-action messages in production. Keep the modal (and the
+      // user's input) on screen so the pattern can be corrected in place.
+      const result = await createRule(formData);
+      if (!result.ok) {
+        setError(result.error);
+        return;
+      }
       setIsModalOpen(false);
       setSelectedActionType("read_blacklist");
     });
@@ -99,7 +108,7 @@ export function RuleControls({
               Create Custom Rule
             </h3>
             <p className="text-sm text-slate-800 mb-5">
-              Define your Fine Grain Access Control regex pattern.
+              Define a match pattern. Use * as a wildcard.
             </p>
 
             <form action={onSubmit} className="flex flex-col gap-5">
@@ -155,7 +164,7 @@ export function RuleControls({
               </div>
               <div>
                 <label className="block text-sm font-semibold text-slate-700 mb-1.5">
-                  {selectedActionType.startsWith('label_') ? 'Select Label' : 'Regex Pattern'}
+                  {selectedActionType.startsWith('label_') ? 'Select Label' : 'Match Pattern'}
                 </label>
                 {selectedActionType.startsWith('label_') ? (
                   <select
@@ -169,13 +178,20 @@ export function RuleControls({
                     ))}
                   </select>
                 ) : (
-                  <input
-                    type="text"
-                    name="regexPattern"
-                    required
-                    className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm font-mono text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 shadow-sm"
-                    placeholder="e.g. *@competitor.com"
-                  />
+                  <>
+                    <input
+                      type="text"
+                      name="regexPattern"
+                      required
+                      className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm font-mono text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 shadow-sm"
+                      placeholder="e.g. *@competitor.com"
+                    />
+                    <p className="text-xs text-slate-500 mt-1">
+                      <code>*</code> matches anything — <code>*@competitor.com</code> covers
+                      every address at that domain, and <code>*</code> on its own matches
+                      everything.
+                    </p>
+                  </>
                 )}
               </div>
 
@@ -230,10 +246,16 @@ export function RuleControls({
                 </div>
               )}
 
+              {error && (
+                <p role="alert" className="rounded-md bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">
+                  {error}
+                </p>
+              )}
+
               <div className="mt-4 flex justify-end gap-3 pt-2">
                 <button
                   type="button"
-                  onClick={() => setIsModalOpen(false)}
+                  onClick={() => { setIsModalOpen(false); setError(null); }}
                   className="px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-100 hover:text-slate-900 rounded-md transition-colors"
                 >
                   Cancel

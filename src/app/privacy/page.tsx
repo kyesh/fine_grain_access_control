@@ -65,7 +65,7 @@ export default function PrivacyPolicy() {
           <section>
             <h2 className="text-xl font-bold text-gray-900 mb-3">6. Third-Party Sharing</h2>
             <p>
-              We do not sell your data or share it with third parties for their own purposes. Data is processed only by the infrastructure providers we use to run the service — Clerk (authentication and OAuth token management), Neon (database hosting), and Vercel (application hosting) — each acting on our behalf under their own data processing terms.
+              We do not sell your data or share it with third parties for their own purposes. Data is processed only by the infrastructure providers we use to run the service — Clerk (authentication and OAuth token management), Neon (database hosting), Vercel (application hosting), and PostHog (product analytics and error monitoring) — each acting on our behalf under their own data processing terms. PostHog receives your account identifier and product usage events, plus technical error reports when something goes wrong; it never receives your Google Workspace content.
             </p>
           </section>
 

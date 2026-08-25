@@ -5,7 +5,7 @@
  * read-time filtering — a message a key cannot read must also never be
  * announced to a partner webhook.
  */
-import safeRegex from 'safe-regex';
+import { compileRulePattern } from '@/lib/rulePatterns';
 import { db } from '@/db';
 import { accessRules, keyRuleAssignments } from '@/db/schema';
 import { eq } from 'drizzle-orm';
@@ -65,9 +65,9 @@ export function checkReadRestrictions(
   const bodyStr = JSON.stringify(message);
   for (const rule of gmailRules.filter(r => r.actionType === 'read_blacklist')) {
     if (!rule.regexPattern) continue;
-    const regexStr = rule.regexPattern.replace(/\*/g, '.*');
-    if (!safeRegex(regexStr)) continue;
-    if (new RegExp(regexStr, 'i').test(bodyStr)) {
+    const regex = compileRulePattern(rule.regexPattern);
+    if (!regex) continue;
+    if (regex.test(bodyStr)) {
       return `🚫 Access restricted: Content blocked by rule '${rule.ruleName}'.`;
     }
   }
