@@ -2,12 +2,16 @@
  * Unit tests for mcp_auth_attempt success sampling (src/lib/authSampling.ts).
  * Run: npx tsx scripts/test-auth-sampling.ts  (part of `npm run mcp:lint`)
  *
- * Regression guard for the 2026-08-24 telemetry gap: the previous hash read
- * only the first 64 chars of the bearer token, which for a Clerk JWT sit
- * entirely inside the per-instance-constant header — so the "1-in-20 sample"
- * selected either every token or (as in production) none of them.
+ * Regression guard for two shipped telemetry defects, both of which made the
+ * gate a pure function of the bearer token:
+ *   1. 2026-08-23 — hashed a constant token prefix; sampled 0% in production.
+ *   2. 2026-08-24 — hashed the token signature; sampled correctly in aggregate
+ *      over MANY tokens, but decided once per token, so any single token was
+ *      always-in or always-out for life and `ok` counts were biased.
+ *
+ * The load-bearing assertion is therefore `per-request, not per-token`: one
+ * fixed token, sampled many times, must still land at the nominal rate.
  */
-import crypto from 'node:crypto';
 import { inSuccessSample, AUTH_SUCCESS_SAMPLE } from '../src/lib/authSampling';
 
 let failures = 0;
@@ -16,87 +20,74 @@ function check(name: string, cond: boolean) {
   else console.log(`  ✓ ${name}`);
 }
 
-const b64u = (o: unknown) => Buffer.from(JSON.stringify(o)).toString('base64url');
-const rand = (n: number) => crypto.randomBytes(n * 2).toString('base64url').slice(0, n);
-
-/** A structurally faithful Clerk session JWT. No real token is ever used here. */
-function clerkJwt(instance: { cat: string; kid: string }, sub: string): string {
-  const header = b64u({ alg: 'RS256', cat: instance.cat, kid: instance.kid, typ: 'JWT' });
-  const payload = b64u({
-    azp: 'https://claude.ai', exp: 1756000060, fva: [0, -1], iat: 1756000000,
-    iss: 'https://clerk.fgac.ai', jti: rand(16), nbf: 1755999990,
-    sid: `sess_${rand(27)}`, sub, v: 2,
-  });
-  const sig = crypto.randomBytes(256).toString('base64url'); // RS256 = 256-byte sig
-  return `${header}.${payload}.${sig}`;
-}
+const nominal = 100 / AUTH_SUCCESS_SAMPLE;
+const draw = (n: number, rate?: number) =>
+  Array.from({ length: n }, () => (rate === undefined ? inSuccessSample() : inSuccessSample(rate)))
+    .filter(Boolean).length;
 
 function main() {
-  // One Clerk instance mints every production token, so cat/kid are constant.
-  const instance = { cat: `cl_${rand(28)}`, kid: `ins_${rand(27)}` };
   const N = 20_000;
-  // A realistic population: a modest number of users, many tokens each
-  // (Clerk access tokens are short-lived and refresh constantly).
-  const users = Array.from({ length: 50 }, () => `user_${rand(27)}`);
-  const tokens = Array.from({ length: N }, (_, i) => clerkJwt(instance, users[i % users.length]));
 
-  // The exact shape of the old bug: the first 64 chars are header-only.
-  check('Clerk JWT header segment alone exceeds 64 chars (the old hash window)',
-    tokens[0].split('.')[0].length > 64);
-  check('all tokens share the first 64 chars (why the old hash was constant)',
-    new Set(tokens.map(t => t.slice(0, 64))).size === 1);
-
-  const selected = tokens.filter(t => inSuccessSample(t)).length;
+  // ---- Rate ----------------------------------------------------------------
+  const selected = draw(N);
   const pct = (selected / N) * 100;
-  const nominal = 100 / AUTH_SUCCESS_SAMPLE;
   console.log(`  … selected ${selected}/${N} = ${pct.toFixed(2)}% (nominal ${nominal}%)`);
-
-  // The two failure modes that produced the outage, asserted explicitly.
-  check('sample is not 0% (the production bug)', selected > 0);
+  check('sample is not 0% (the 2026-08-23 production bug)', selected > 0);
   check('sample is not 100%', selected < N);
   // Binomial sd at p=0.05, n=20k is ~0.15pp; ±1pp is ~6.5 sd — tight but not flaky.
   check(`sample is within 1pp of ${nominal}%`, Math.abs(pct - nominal) < 1);
 
-  // Determinism: same token in, same answer out. Retries must not double-count.
-  check('deterministic per token', tokens.slice(0, 500).every(t => inSuccessSample(t) === inSuccessSample(t)));
+  // ---- The 2026-08-24 bug: per-token determinism ---------------------------
+  // Structural guard first: the gate's only parameter is `rate`. A gate that
+  // cannot observe the token cannot be a function of it, which is what both
+  // shipped defects were. This is the assertion that actually forecloses the
+  // regression — a behavioural test cannot feed a token to a gate that takes
+  // none, so it would be vacuous.
+  check('the gate accepts no token argument (cannot be token-dependent)',
+    inSuccessSample.length <= 1);
 
-  // Selection must track the token, not the user — otherwise a single unlucky
-  // user's tokens would carry the whole sample.
-  const perUser = new Map<string, { hit: number; total: number }>();
-  tokens.forEach((t, i) => {
-    const u = users[i % users.length];
-    const rec = perUser.get(u) ?? { hit: 0, total: 0 };
-    rec.total++; if (inSuccessSample(t)) rec.hit++;
-    perUser.set(u, rec);
-  });
-  const usersWithHits = [...perUser.values()].filter(r => r.hit > 0).length;
-  check('sample spreads across users (not concentrated in one)', usersWithHits > users.length * 0.8);
+  // Behavioural corollary: one caller's repeated requests must vary. Under
+  // either old implementation this run was all-true or all-false, because the
+  // caller's token was fixed.
+  const repeatHits = Array.from({ length: N }, () => inSuccessSample()).filter(Boolean).length;
+  const repeatPct = (repeatHits / N) * 100;
+  console.log(`  … one caller, ${N} requests: ${repeatPct.toFixed(2)}%`);
+  check('one caller is neither always-in nor always-out',
+    repeatHits > 0 && repeatHits < N);
+  check(`repeated requests from one caller sample at ~${nominal}%`,
+    Math.abs(repeatPct - nominal) < 1);
 
-  // A second Clerk instance (different cat/kid) must sample the same way. The
-  // old hash's answer was a coin flip decided entirely by these two constants.
-  const other = { cat: `cl_${rand(28)}`, kid: `ins_${rand(27)}` };
-  const otherTokens = Array.from({ length: N }, (_, i) => clerkJwt(other, users[i % users.length]));
-  const otherPct = (otherTokens.filter(t => inSuccessSample(t)).length / N) * 100;
-  console.log(`  … second instance: ${otherPct.toFixed(2)}%`);
-  check('rate is independent of the Clerk instance constants', Math.abs(otherPct - nominal) < 1);
+  // ---- Independence across heavy vs light callers ---------------------------
+  // The bias that mattered: a heavy client contributing zero events. Simulate
+  // one caller making 10k requests and 49 making ~200 each; every caller must
+  // surface, and share of events must track share of REQUESTS.
+  const heavy = draw(10_000);
+  const light = Array.from({ length: 49 }, () => draw(200));
+  check('a heavy caller contributes events proportional to its volume',
+    Math.abs((heavy / 10_000) * 100 - nominal) < 1.5);
+  check('light callers are not starved (most surface at least once)',
+    light.filter(h => h > 0).length > 49 * 0.8);
 
-  // Opaque (non-JWT) bearer tokens still sample, via the whole-token fallback.
-  const opaque = Array.from({ length: N }, () => `sk_proxy_${rand(40)}`);
-  const opaquePct = (opaque.filter(t => inSuccessSample(t)).length / N) * 100;
-  console.log(`  … opaque tokens: ${opaquePct.toFixed(2)}%`);
-  check('opaque tokens sample at the nominal rate too', Math.abs(opaquePct - nominal) < 1);
+  // ---- Unbiasedness of the volume estimate ---------------------------------
+  // The property docs/monitoring.md depends on: ok * AUTH_SUCCESS_SAMPLE
+  // estimates true request volume.
+  const trueVolume = 200_000;
+  const estimated = draw(trueVolume) * AUTH_SUCCESS_SAMPLE;
+  const errPct = Math.abs(estimated - trueVolume) / trueVolume * 100;
+  console.log(`  … volume estimate: ${estimated} vs true ${trueVolume} (${errPct.toFixed(2)}% error)`);
+  check('ok * sample_rate estimates true volume within 3%', errPct < 3);
 
-  // Other rates behave.
+  // ---- Other rates ---------------------------------------------------------
   for (const rate of [2, 5, 100]) {
-    const p = (tokens.filter(t => inSuccessSample(t, rate)).length / N) * 100;
+    const p = (draw(N, rate) / N) * 100;
     check(`rate=${rate} yields ~${(100 / rate).toFixed(1)}% (got ${p.toFixed(2)}%)`,
       Math.abs(p - 100 / rate) < 1.5);
   }
 
-  // Edge cases: no token means "always capture" (a missing token is itself the
-  // failure being measured), and rate<=1 disables sampling.
-  check('undefined token always captures', inSuccessSample(undefined));
-  check('rate=1 captures everything', tokens.slice(0, 200).every(t => inSuccessSample(t, 1)));
+  // ---- Edge cases ----------------------------------------------------------
+  check('rate=1 captures everything',
+    Array.from({ length: 200 }, () => inSuccessSample(1)).every(Boolean));
+  check('rate=0 captures everything (disabled sampling)', inSuccessSample(0));
 
   if (failures > 0) { console.error(`\n${failures} auth-sampling test(s) FAILED`); process.exit(1); }
   console.log('\nAll auth-sampling tests passed.');
