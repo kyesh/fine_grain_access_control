@@ -183,7 +183,7 @@ DDJS "Connect your Gmail" button
        ← this is the ONLY Google screen; FGAC becomes the token holder via Clerk
   → FGAC consent page (server-renders partner_apps manifest):
        "Data Driven Job Search wants to:
-          • Read email in [account picker: kenyesh@gmail.com ▾]  (read-only — cannot send or delete)
+          • Read email in [account picker: user@example.com ▾]  (read-only — cannot send or delete)
           • Be notified when new email arrives
         [Approve] [Deny]"
   → Approve = one click → provisioning transaction (Piece 1) → redirect to

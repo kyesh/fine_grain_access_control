@@ -40,7 +40,7 @@ done <<< "$BODY_FILES"
 EMAILS=$(printf '%s' "$CONTENT" \
   | grep -oiE '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}' \
   | grep -viE '@(example|test|invalid|localhost)\.(com|org|net|edu)?$' \
-  | grep -viE '^(support|noreply|no-reply)@' \
+  | grep -viE '^support@fgac\.ai$|^(noreply|no-reply)@' \
   | grep -viE '@users\.noreply\.github\.com$' \
   | sort -u)
 
