@@ -3,7 +3,7 @@ import { db } from '@/db';
 import { users, proxyKeys, emailDelegations, keyEmailAccess, accessRules, keyRuleAssignments } from '@/db/schema';
 import { eq, and } from 'drizzle-orm';
 import { clerkClient } from '@clerk/nextjs/server';
-import safeRegex from 'safe-regex';
+import { compileRulePattern } from '@/lib/rulePatterns';
 import { captureServerEvent } from '@/lib/posthogServer';
 
 export const dynamic = 'force-dynamic';
@@ -528,12 +528,11 @@ async function handleProxyRequest(request: NextRequest, params: { path: string[]
           let isWhitelisted = false;
           for (const rule of sendRules) {
             if (!rule.regexPattern) continue;
-            const regexStr = rule.regexPattern.replace(/\*/g, '.*');
-            if (!safeRegex(regexStr)) {
-              console.error(`Skipping unsafe regex pattern: ${regexStr}`);
+            const regex = compileRulePattern(rule.regexPattern);
+            if (!regex) {
+              console.error(`Skipping unusable pattern on rule '${rule.ruleName}'`);
               continue;
             }
-            const regex = new RegExp(regexStr, 'i');
             if (regex.test(toAddress)) {
               isWhitelisted = true;
               break;
@@ -693,12 +692,11 @@ async function handleProxyRequest(request: NextRequest, params: { path: string[]
       if (readBlacklistRules.length > 0) {
         for (const rule of readBlacklistRules) {
           if (!rule.regexPattern) continue;
-          const regexStr = rule.regexPattern.replace(/\*/g, '.*');
-          if (!safeRegex(regexStr)) {
-            console.error(`Skipping unsafe regex pattern: ${regexStr}`);
+          const regex = compileRulePattern(rule.regexPattern);
+          if (!regex) {
+            console.error(`Skipping unusable pattern on rule '${rule.ruleName}'`);
             continue;
           }
-          const regex = new RegExp(regexStr, 'i');
           if (regex.test(returnBody)) {
             return NextResponse.json({
               error: `Access restricted: Email content blocked by rule '${rule.ruleName}'.`

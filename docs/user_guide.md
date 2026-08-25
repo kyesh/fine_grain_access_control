@@ -128,8 +128,8 @@ Access rules let you control what your agent can do. Create them in the **"Acces
 
 | Rule Type | What It Does | Example |
 |-----------|-------------|---------|
-| **Read Blacklist** | Blocks agent from reading emails matching a regex pattern | `.*2FA.*` blocks all emails containing "2FA" |
-| **Send Whitelist** | Only allows sending to addresses matching a regex pattern | `.*@yourcompany\.com` limits sending to company emails |
+| **Read Blacklist** | Blocks agent from reading emails matching a pattern | `*2FA*` blocks all emails containing "2FA" |
+| **Send Whitelist** | Only allows sending to addresses matching a pattern | `*@yourcompany.com` limits sending to company emails |
 | **Label Blacklist** | Blocks agent from reading emails that have specific Gmail labels | `Highly-Confidential` blocks reading tagged emails |
 | **Label Whitelist** | Only allows reading emails that have specific Gmail labels | `AI-Allowed` restricts reading to tagged emails only |
 | **Sheets access** | Per-spreadsheet Read Only / Read & Write / Blocked, granted by picking the sheet in the Google Picker | Expose one budget spreadsheet, keep the rest of Drive invisible |
@@ -154,7 +154,7 @@ Click **"+ Quick Add 2FA Block"** to instantly create a rule that blocks your ag
    - **Rule Name**: A descriptive label (e.g., `Block Sensitive Emails`)
    - **Service**: `gmail`
    - **Action Type**: `read_blacklist` or `send_whitelist`
-   - **Regex Pattern**: A regular expression to match against email content (for read rules) or recipient addresses (for send rules)
+   - **Match Pattern**: The text to match against email content (for read rules) or recipient addresses (for send rules). `*` is a wildcard: `*@acme.com` covers every address at that domain, and `*` on its own matches everything. Full regular expressions also work if you need them.
    - **Target Email** (optional): Scope the rule to a specific email. Leave blank to apply globally.
 3. Click **"Create Rule"**.
 
@@ -293,5 +293,5 @@ Click **"Revoke"** to permanently disable a key. Revoked keys return `401 Unauth
 | **Proxy Key** | A `sk_proxy_...` token your agent uses instead of a real Google token |
 | **Key Email Access** | Links a key to one or more email addresses it can access |
 | **Email Delegation** | Owner grants a delegate permission to create keys accessing the owner's email |
-| **Access Rule** | A regex-based filter applied to reads (blacklist) or sends (whitelist) |
+| **Access Rule** | A pattern-based filter applied to reads (blacklist) or sends (whitelist) |
 | **Key Rule Assignment** | Links a rule to a specific key (unassigned rules are global) |

@@ -7,7 +7,7 @@ import { findActiveDelegation } from "@/db/delegationQueries";
 import { syncDefaultProfileDelegatedAccess } from "@/db/defaultProfile";
 import { currentUser } from "@clerk/nextjs/server";
 import { revalidatePath } from "next/cache";
-import safeRegex from "safe-regex";
+import { validateRulePattern, patternKind, assertStorablePattern } from "@/lib/rulePatterns";
 import * as jose from "jose";
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -255,7 +255,30 @@ export async function rollProxyKey(keyId: string) {
 
 // ─── Access Rules ───────────────────────────────────────────────────────────
 
-export async function createRule(formData: FormData) {
+/**
+ * Server actions that a modal submits must RETURN their failure, never throw.
+ * Next.js redacts thrown server-action messages in production and replaces them
+ * with an opaque digest, so a thrown validation error reaches the browser as a
+ * blank 500 — which is precisely why the 2026-04-10 pattern regression went
+ * unnoticed for four months. A returned value is not redacted.
+ */
+export type RuleActionResult = { ok: true } | { ok: false; error: string };
+
+/**
+ * Rule-save telemetry. The pattern itself is NEVER sent: send_whitelist
+ * patterns are real email addresses. Shape and length carry the signal.
+ */
+async function reportRuleSave(
+  clerkUserId: string,
+  event: "rule_saved" | "rule_save_failed",
+  props: Record<string, unknown>,
+) {
+  const { captureServerEvent } = await import("@/lib/posthogServer");
+  captureServerEvent(clerkUserId, event, props);
+}
+
+
+export async function createRule(formData: FormData): Promise<RuleActionResult> {
   const dbUser = await getDbUser();
   const ruleName = formData.get("ruleName") as string;
   const service = formData.get("service") as string;
@@ -266,8 +289,10 @@ export async function createRule(formData: FormData) {
 
   if (!ruleName || !service || !actionType) {
     console.error("[createRule] Missing required fields:", { ruleName, service, actionType });
-    revalidatePath("/dashboard");
-    return;
+    await reportRuleSave(dbUser.clerkUserId, "rule_save_failed", {
+      mode: "create", service, action_type: actionType, reason: "missing_fields",
+    });
+    return { ok: false, error: "Rule name, service and action type are all required." };
   }
 
   let finalRegexPattern: string | null = null;
@@ -277,8 +302,16 @@ export async function createRule(formData: FormData) {
     targetResourceId = rawPattern;
   } else {
     finalRegexPattern = rawPattern;
-    if (finalRegexPattern && !safeRegex(finalRegexPattern)) {
-      throw new Error(`The provided regular expression '${finalRegexPattern}' is too complex and poses a performance risk.`);
+    if (finalRegexPattern) {
+      const check = validateRulePattern(finalRegexPattern);
+      if (!check.ok) {
+        await reportRuleSave(dbUser.clerkUserId, "rule_save_failed", {
+          mode: "create", service, action_type: actionType, reason: check.reason,
+          pattern_kind: patternKind(finalRegexPattern),
+          pattern_length: finalRegexPattern.length,
+        });
+        return { ok: false, error: check.message };
+      }
     }
   }
 
@@ -299,10 +332,20 @@ export async function createRule(formData: FormData) {
     });
   }
 
+  await reportRuleSave(dbUser.clerkUserId, "rule_saved", {
+    mode: "create", service, action_type: actionType,
+    scoped: !!targetEmail, assigned_keys: keyIds.length,
+    ...(finalRegexPattern ? {
+      pattern_kind: patternKind(finalRegexPattern),
+      pattern_length: finalRegexPattern.length,
+    } : {}),
+  });
+
   revalidatePath("/dashboard");
+  return { ok: true };
 }
 
-export async function updateRule(formData: FormData) {
+export async function updateRule(formData: FormData): Promise<RuleActionResult> {
   const dbUser = await getDbUser();
   const ruleId = formData.get("ruleId") as string;
   const ruleName = formData.get("ruleName") as string;
@@ -314,8 +357,10 @@ export async function updateRule(formData: FormData) {
 
   if (!ruleId || !ruleName || !service || !actionType) {
     console.error("[updateRule] Missing required fields");
-    revalidatePath("/dashboard");
-    return;
+    await reportRuleSave(dbUser.clerkUserId, "rule_save_failed", {
+      mode: "update", service, action_type: actionType, reason: "missing_fields",
+    });
+    return { ok: false, error: "Rule name, service and action type are all required." };
   }
 
   let finalRegexPattern: string | null = null;
@@ -325,15 +370,26 @@ export async function updateRule(formData: FormData) {
     targetResourceId = rawPattern;
   } else {
     finalRegexPattern = rawPattern;
-    if (finalRegexPattern && !safeRegex(finalRegexPattern)) {
-      throw new Error(`The provided regular expression '${finalRegexPattern}' is too complex and poses a performance risk.`);
+    if (finalRegexPattern) {
+      const check = validateRulePattern(finalRegexPattern);
+      if (!check.ok) {
+        await reportRuleSave(dbUser.clerkUserId, "rule_save_failed", {
+          mode: "update", service, action_type: actionType, reason: check.reason,
+          pattern_kind: patternKind(finalRegexPattern),
+          pattern_length: finalRegexPattern.length,
+        });
+        return { ok: false, error: check.message };
+      }
     }
   }
 
   // Verify ownership
   const rule = await db.select().from(accessRules).where(eq(accessRules.id, ruleId)).limit(1).then(res => res[0]);
   if (!rule || rule.userId !== dbUser.id) {
-    throw new Error("Unauthorized or Rule not found");
+    await reportRuleSave(dbUser.clerkUserId, "rule_save_failed", {
+      mode: "update", service, action_type: actionType, reason: "not_found_or_forbidden",
+    });
+    return { ok: false, error: "That rule no longer exists, or it is not yours to edit." };
   }
 
   // Update the rule
@@ -355,7 +411,17 @@ export async function updateRule(formData: FormData) {
     });
   }
 
+  await reportRuleSave(dbUser.clerkUserId, "rule_saved", {
+    mode: "update", service, action_type: actionType,
+    scoped: !!targetEmail, assigned_keys: keyIds.length,
+    ...(finalRegexPattern ? {
+      pattern_kind: patternKind(finalRegexPattern),
+      pattern_length: finalRegexPattern.length,
+    } : {}),
+  });
+
   revalidatePath("/dashboard");
+  return { ok: true };
 }
 
 export async function deleteRule(id: string) {
@@ -592,6 +658,9 @@ export async function applyRecommendedSecurityRules() {
     }
   ];
 
+  for (const r of rulesToInsert) {
+    assertStorablePattern(r.regexPattern, 'applyRecommendedSecurityRules');
+  }
   await db.insert(accessRules).values(rulesToInsert);
   const { captureServerEvent } = await import("@/lib/posthogServer");
   captureServerEvent(dbUser.clerkUserId, "shield_enabled", { rules: rulesToInsert.length });
@@ -628,6 +697,7 @@ async function grantSendToAnyone(dbUserId: string, keyId: string): Promise<boole
 
   let rule = reusable;
   if (!rule) {
+    assertStorablePattern('*', 'grantSendToAnyone');
     [rule] = await db.insert(accessRules).values({
       userId: dbUserId,
       ruleName: 'Send to Anyone',

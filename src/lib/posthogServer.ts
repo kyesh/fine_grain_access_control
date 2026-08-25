@@ -39,3 +39,33 @@ export function captureServerEvent(
     void ph.flush().catch(() => {});
   }
 }
+
+/**
+ * Server-side exception capture, shaped like PostHog Error Tracking's
+ * `$exception` so server failures land in the same issue list as client ones.
+ *
+ * Deliberately sends only the error's type, message and stack plus a `where`
+ * label — never interpolated user input. Rule patterns in particular are real
+ * email addresses; validation failures are returned to the caller rather than
+ * thrown, so they never reach this path at all.
+ */
+export function captureServerError(
+  distinctId: string,
+  where: string,
+  error: unknown,
+): void {
+  const err = error instanceof Error ? error : new Error(String(error));
+  captureServerEvent(distinctId, '$exception', {
+    $exception_list: [{
+      type: err.name,
+      value: err.message,
+      mechanism: { handled: true, synthetic: false },
+      stacktrace: { type: 'raw', frames: [] },
+    }],
+    $exception_type: err.name,
+    $exception_message: err.message,
+    $exception_source: where,
+    $exception_stack_trace_raw: err.stack ?? '',
+    where,
+  });
+}

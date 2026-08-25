@@ -24,3 +24,15 @@
   (pattern `*`) assigned to the Default Profile; `gmail_send` to any address
   now succeeds on that profile; other profiles are unaffected; deleting the
   rule restores the deny-by-default posture and the button reappears
+
+### A5: Wildcard rules can be created and re-saved through the form
+- Create a custom rule with pattern `*@example.com`, then open the "Send to
+  Anyone" rule (pattern `*`) from A4, click **Edit**, and click **Save Changes**
+  without altering anything
+- **Expected**: both saves succeed. No 500, no blank page. Regression guard for
+  the 2026-04-10 → 2026-08-25 outage, where the dashboard validated the raw glob
+  instead of its expansion and rejected every `*`-leading pattern — including
+  the one the "Send to Anyone" button had just written
+- Also check the rejection path: a pattern of `[` shows an inline "not a valid
+  match pattern" message with the modal still open and the input preserved, and
+  `(a+)+$` shows an inline "too complex" message. Neither returns a 500

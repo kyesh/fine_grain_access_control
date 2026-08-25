@@ -33,6 +33,17 @@ export function RuleControls({
   const [isPending, startTransition] = useTransition();
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedActionType, setSelectedActionType] = useState("read_blacklist");
+  const [error, setError] = useState<string | null>(null);
+  /**
+   * React 19 resets an uncontrolled form once its action resolves — including
+   * when the action reports a validation failure. Without this, correcting a
+   * rejected pattern means retyping the whole rule. On failure we snapshot the
+   * submitted values and remount the form (via formKey) so they come back as
+   * defaults.
+   */
+  const [draft, setDraft] = useState<Record<string, string> | null>(null);
+  const [draftKeyIds, setDraftKeyIds] = useState<string[]>([]);
+  const [formKey, setFormKey] = useState(0);
   const [gmailLabels, setGmailLabels] = useState<GmailLabel[]>([]);
   const [isLoadingLabels, setIsLoadingLabels] = useState(false);
 
@@ -63,9 +74,33 @@ export function RuleControls({
     return () => { ignore = true; };
   }, [isModalOpen, gmailLabels.length]);
 
+  function closeModal() {
+    setIsModalOpen(false);
+    setError(null);
+    setDraft(null);
+    setDraftKeyIds([]);
+  }
+
   async function onSubmit(formData: FormData) {
+    setError(null);
     startTransition(async () => {
-      await createRule(formData);
+      // The action RETURNS its failure rather than throwing — Next redacts
+      // thrown server-action messages in production. Keep the modal (and the
+      // user's input) on screen so the pattern can be corrected in place.
+      const result = await createRule(formData);
+      if (!result.ok) {
+        setDraft({
+          ruleName: String(formData.get("ruleName") ?? ""),
+          regexPattern: String(formData.get("regexPattern") ?? ""),
+          targetEmail: String(formData.get("targetEmail") ?? ""),
+        });
+        setDraftKeyIds(formData.getAll("keyIds").map(String));
+        setFormKey(k => k + 1);
+        setError(result.error);
+        return;
+      }
+      setDraft(null);
+      setDraftKeyIds([]);
       setIsModalOpen(false);
       setSelectedActionType("read_blacklist");
     });
@@ -99,10 +134,10 @@ export function RuleControls({
               Create Custom Rule
             </h3>
             <p className="text-sm text-slate-800 mb-5">
-              Define your Fine Grain Access Control regex pattern.
+              Define a match pattern. Use * as a wildcard.
             </p>
 
-            <form action={onSubmit} className="flex flex-col gap-5">
+            <form key={formKey} action={onSubmit} className="flex flex-col gap-5">
               <div>
                 <label className="block text-sm font-semibold text-slate-700 mb-1.5">
                   Rule Name
@@ -111,6 +146,7 @@ export function RuleControls({
                   type="text"
                   name="ruleName"
                   required
+                  defaultValue={draft?.ruleName ?? ""}
                   className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 shadow-sm"
                   placeholder="e.g. Block Project X"
                 />
@@ -155,12 +191,13 @@ export function RuleControls({
               </div>
               <div>
                 <label className="block text-sm font-semibold text-slate-700 mb-1.5">
-                  {selectedActionType.startsWith('label_') ? 'Select Label' : 'Regex Pattern'}
+                  {selectedActionType.startsWith('label_') ? 'Select Label' : 'Match Pattern'}
                 </label>
                 {selectedActionType.startsWith('label_') ? (
                   <select
                     name="regexPattern"
                     required
+                    defaultValue={draft?.regexPattern ?? ""}
                     className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 shadow-sm"
                   >
                     <option value="">{isLoadingLabels ? "Loading labels..." : "Choose a Gmail Label..."}</option>
@@ -169,13 +206,21 @@ export function RuleControls({
                     ))}
                   </select>
                 ) : (
-                  <input
-                    type="text"
-                    name="regexPattern"
-                    required
-                    className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm font-mono text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 shadow-sm"
-                    placeholder="e.g. *@competitor.com"
-                  />
+                  <>
+                    <input
+                      type="text"
+                      name="regexPattern"
+                      required
+                      defaultValue={draft?.regexPattern ?? ""}
+                      className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm font-mono text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 shadow-sm"
+                      placeholder="e.g. *@competitor.com"
+                    />
+                    <p className="text-xs text-slate-500 mt-1">
+                      <code>*</code> matches anything — <code>*@competitor.com</code> covers
+                      every address at that domain, and <code>*</code> on its own matches
+                      everything.
+                    </p>
+                  </>
                 )}
               </div>
 
@@ -186,6 +231,7 @@ export function RuleControls({
                 </label>
                 <select
                   name="targetEmail"
+                  defaultValue={draft?.targetEmail ?? ""}
                   className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 shadow-sm"
                 >
                   <option value="">All accessible emails</option>
@@ -217,6 +263,7 @@ export function RuleControls({
                           type="checkbox"
                           name="keyIds"
                           value={k.id}
+                          defaultChecked={draftKeyIds.includes(k.id)}
                           className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
                         />
                         {k.label}
@@ -230,10 +277,16 @@ export function RuleControls({
                 </div>
               )}
 
+              {error && (
+                <p role="alert" className="rounded-md bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">
+                  {error}
+                </p>
+              )}
+
               <div className="mt-4 flex justify-end gap-3 pt-2">
                 <button
                   type="button"
-                  onClick={() => setIsModalOpen(false)}
+                  onClick={closeModal}
                   className="px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-100 hover:text-slate-900 rounded-md transition-colors"
                 >
                   Cancel
