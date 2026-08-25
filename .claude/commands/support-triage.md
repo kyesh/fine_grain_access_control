@@ -1,119 +1,85 @@
 ---
-description: Triage a support email end-to-end — acknowledge fast, verify every claim against production (read-only), classify user-deviation vs product bug, fix and remediate proactively, scan for silently-affected users, and draft the reply in Ken's voice for approval
+description: Handle a support email end-to-end — investigate via a root-cause agent, ship a preventive fix, draft the reply to the reporter, find other affected users, and draft proactive outreach to get them back on track
 ---
 
 # Support Triage
 
-Handle an inbound support email the way the 2026-08-24 "Token Lookup Problem"
-case was handled (see
-`docs/bug_reports/identity_email_drift_breaks_token_lookup.md` for how that
-one resolved). The support mailbox is **ken@fgac.ai** (support@fgac.ai
-forwards into it), delegated to Ken's account and readable through the
-**production** FGAC MCP connector (`gmail_list` / `gmail_read` with
-`account: 'ken@fgac.ai'`; full threads via `google_api_get`
-`gmail/v1/users/me/threads/{id}`).
+Run this when a support email arrives. The support mailbox is **ken@fgac.ai**
+(support@fgac.ai forwards into it), delegated to Ken's account and readable
+through the **production** FGAC MCP connector (`gmail_list` / `gmail_read`
+with `account: 'ken@fgac.ai'`; full threads via `google_api_get`
+`gmail/v1/users/me/threads/{id}`). Reference case: the 2026-08-24 identity
+drift issue — `docs/bug_reports/identity_email_drift_breaks_token_lookup.md`.
 
-**Hard rules, before anything else:**
+**Hard rules:**
 
-- **Never send email.** Every reply is a draft Ken reviews. Place approved
-  copy as a Gmail draft only when Ken asks.
-- **Production access is read-only.** SELECTs and GET-only API calls. Pull
-  creds with `npx vercel env pull .secrets/prod.env --environment=production`,
-  run scripts from inside `.secrets/` (gitignored, and module resolution
-  works there), and `rm .secrets/prod.env` plus any scripts when done.
-- **Public-repo rules apply** to everything that reaches GitHub: no customer
-  emails, Clerk ids, proxy keys, or verbatim DB rows in commits, PRs, or
-  issues. Placeholders only.
-- Account-level remediation (fixing a user's data/settings) is Ken's call —
-  propose it with the exact change; don't execute writes yourself.
+- **Never send email.** Every message is a draft Ken reviews and sends.
+  The FGAC proxy blocks Gmail draft creation (`messages/send` is its only
+  Gmail write), so create drafts with the direct Gmail MCP — they land in
+  kenyesh@gmail.com; remind Ken to switch From to support@fgac.ai (or move
+  the copy to the support mailbox) at send time.
+- **Production access is read-only.** SELECTs and GET-only calls. Pull creds
+  with `npx vercel env pull .secrets/prod.env --environment=production`, run
+  scripts from inside `.secrets/` (gitignored; module resolution works
+  there), delete `.secrets/prod.env` and any scripts when done.
+- **Public-repo rules**: no customer emails, Clerk ids, proxy keys, or
+  verbatim DB rows in anything that reaches GitHub. Placeholders only.
+- **Account writes are Ken's call** (Clerk edits, data repair). Propose the
+  exact change; never execute it. If an outreach draft promises remediation
+  ("we are removing X"), list the pending manual actions for Ken explicitly.
 
-## 1. Acknowledge first, investigate second
+First, acknowledge: draft a short same-day reply — the clarifying question
+that best splits the hypothesis space, links to the relevant self-serve
+pages (https://fgac.ai/use-cases/google-sheets-agent,
+https://fgac.ai/use-cases/multiple-gmail-accounts, https://fgac.ai/setup),
+and a commitment: "Let me investigate and I'll get back to you with an
+update later today."
 
-Send-day acknowledgment matters more than a complete answer. Draft a short
-triage reply for Ken that:
+Then the five core steps:
 
-- asks the clarifying question that splits the hypothesis space (e.g. "are
-  you trying to delegate from one account to another, or are these two
-  separate issues?");
-- asks how their flow deviated from the documented setup, linking the
-  relevant self-serve pages — prefer the fgac.ai use-case pages (they embed
-  the videos): https://fgac.ai/use-cases/google-sheets-agent and
-  https://fgac.ai/use-cases/multiple-gmail-accounts, plus
-  https://fgac.ai/setup;
-- commits to a deadline: "Let me investigate and I'll get back to you with
-  an update later today."
+## 1. Kick off an investigation agent for root-cause analysis
 
-## 2. Verify every claim before believing any of them
+Dispatch a subagent (general-purpose; background) to reconstruct ground
+truth — user reports describe *symptoms* accurately and *causes* wrongly,
+because the UI they're reading may itself be the bug. The agent should:
 
-User reports describe *symptoms accurately* and *causes wrongly* — the UI
-they're reading may itself be the bug. Reconstruct the ground truth:
+- **Repo**: grep the exact quoted error string, read the code path that
+  emits it, note what it keys on.
+- **Production DB** (read-only): the user's `users` row, `proxy_keys`,
+  `key_email_access` (own-mailbox rows have `delegation_id IS NULL`),
+  `email_delegations`. Compare every email field.
+- **Clerk** (read-only; verify `sk_live_`): `GET /v1/users/{clerk_user_id}`.
+  Forensic gold: `email_addresses[].verification.strategy` (`email_code` =
+  typed by hand, `from_oauth_google` = arrived via OAuth), `linked_to`, and
+  `external_accounts[].created_at/updated_at` (shows whether reconnects
+  actually succeeded).
+- **PostHog**: `$mcp_tool_call`/`mcp_tool_call` outcomes,
+  `google_token_fetch_failed`, `google_token_identity_fallback`,
+  `proxy_request` for their addresses — when did failures start, what did
+  they try.
 
-1. **Repo**: find the exact error string they quote (`grep -rn "<message>"
-   src/`) and read the code path that emits it. Note what the code keys on.
-2. **Production DB** (read-only): pull the user's `users` row, `proxy_keys`,
-   `key_email_access` (own rows have `delegation_id IS NULL`), and
-   `email_delegations`. Compare every email address field.
-3. **Clerk** (read-only, `CLERK_SECRET_KEY` from prod env — verify it's
-   `sk_live_`): `GET /v1/users/{clerk_user_id}`. The forensic gold is in
-   `email_addresses[].verification.strategy` (`email_code` = typed in by
-   hand; `from_oauth_google` = arrived via OAuth) and `linked_to`, plus
-   `external_accounts[]` (`created_at`/`updated_at` show whether reconnects
-   actually succeeded). This is how you distinguish "connected the wrong
-   Google account" from "our bookkeeping drifted."
-4. **PostHog**: cross-reference `$mcp_tool_call`/`mcp_tool_call` outcomes,
-   `google_token_fetch_failed`, `google_token_identity_fallback`, and
-   `proxy_request` for their `account_email` / person email. Establish when
-   failures started and what they tried.
+Output: a timeline, then two separate honest statements — **what the user
+did off-script** (with timestamps, no blame) and **what our system did
+wrong** in response (mishandled the step, displayed something misleading, or
+emitted an error pointing away from the cause). Never conclude "user error"
+or "product bug" alone; it is almost always both.
 
-Build a timeline before writing conclusions. If the evidence contradicts the
-user's framing (or your first theory), say so plainly in the internal
-write-up — the classic trap in the reference case: the Accounts page
-*displayed* the identity email labeled as the connected Google account, so
-the user's "wrong account connected" report was a faithful reading of a
-lying UI.
+## 2. Prepare a fix preventing others from falling into the same trap
 
-## 3. Classify honestly
+- Code fix through the normal flow: branch off latest main, plan in
+  `docs/implementation_plans/`, bug report in `docs/bug_reports/`, PR +
+  `/deploy-pr-preview`; Ken runs `/deploy-prod`.
+- **Prefer self-healing fixes**: tolerate the broken state (fallbacks) AND
+  converge it back to correct on next contact, so affected users need zero
+  manual steps.
+- **Close the entry point**: config/settings changes that remove the trap
+  (e.g. Clerk dashboard options), guard rails or truthful copy near the
+  decoy control, corrected guidance in MCP tool responses. Name anything
+  only Ken can do as an explicit action item.
 
-State two things separately, without flattery and without blame:
+## 3. Draft the reply to the user who reached out
 
-- **What the user did off-script**, with evidence and timestamps ("on Aug N,
-  X was added via the profile menu — that step isn't part of any documented
-  flow"). Never write "you did everything right" unless the data shows it.
-- **What our system did wrong** in response — the bug is usually that we
-  mishandled the off-script step, displayed something misleading, or emitted
-  an error that pointed away from the cause.
-
-## 4. Fix, remediate, and prevent
-
-- **Code fix** through the normal flow: branch off latest main, implementation
-  plan in `docs/implementation_plans/`, bug report in `docs/bug_reports/`,
-  PR + `/deploy-pr-preview`; Ken runs `/deploy-prod`.
-- **Prefer self-healing fixes**: make the deployed code tolerate the broken
-  state (fallbacks) AND converge it back to correct on next contact, so
-  affected users need zero manual steps.
-- **Propose account remediation for Ken to execute** (e.g. remove a stray
-  profile email in Clerk, toggle an instance setting that closes the trap
-  door). Doing it *for* the user beats sending them instructions.
-- **Close the entry point**: if a settings/config change prevents recurrence
-  (Clerk dashboard options, guard rails in the UI, better copy near the
-  decoy control), name it explicitly as a Ken action item.
-
-## 5. Scan for silent co-victims
-
-One report usually means more affected users who didn't write in. Derive the
-data signature of the broken state and scan production (read-only) for it —
-e.g. for identity drift: own-mailbox `key_email_access.target_email` ≠
-`users.email`; at-risk: Clerk multi-email profiles or primary/Google-account
-mismatches. Cross-reference each hit with PostHog: did they ever get a
-successful tool call? Users who churned on day one with the signature are
-win-back outreach candidates — list them for Ken with evidence, and add the
-signature to the daily health-check watch items
-(`~/.claude/scheduled-tasks/fgac-user-behavior-review/SKILL.md`).
-
-## 6. The final reply — Ken's voice
-
-Model the resolution email on the actual copy Ken sent in the reference
-case. Structure and style:
+Ken's voice, modeled on the reference case's sent resolution email:
 
 ```
 Hi <Name>,
@@ -122,15 +88,12 @@ Update as promised. Here's the root cause analysis and update.
 
 *What happened:* on <date>, <the off-script step, plainly stated>. That step
 isn't part of any standard FGAC.ai flow and should have been <disabled/
-guarded>. I've <prevention shipped — e.g. "updated our auth provider
-settings to prevent others from falling into that same trap"> and <account
-remediation done for them — e.g. "removed the second email from the
-account">. <One sentence of cause, minimal internals: "The second email
-confused the auth permissions, resulting in the error you experienced.">
+guarded>. I've <prevention shipped> and <remediation done for them>. <One
+plain sentence of cause — minimal internals.>
 
-<What works now and the one concrete next step, with a self-serve link:>
-Google Sheet access should now be working for *<their-address>*. You may
-need to <step>. Please refer to the <linked fgac.ai use-case page>.
+<What works now + the one concrete next step, linking the fgac.ai use-case
+page:> <X> should now be working for *<their-address>*. You may need to
+<step>. Please refer to the <linked page>.
 
 *If your goal is <the inferred underlying goal> as well*, the way to do that
 is <feature>. Please follow the <linked instructions/video>:
@@ -150,22 +113,56 @@ Thank You,
 Ken
 ```
 
-Style rules distilled from Ken's edits:
+Style rules from Ken's edits: short; lead "Update as promised"; emphasize
+email addresses (the load-bearing nouns); say what *we changed* rather than
+internals; always one concrete next step with an fgac.ai use-case link (not
+raw video URLs); address the inferred underlying goal with complete numbered
+steps including sign-out/sign-in cycling; credit their report; no
+over-apology, no "you did everything right" unless the data shows it, no
+unverified claims.
 
-- Short. Lead with "Update as promised" when a triage reply promised one.
-- Bold/emphasize email addresses; they're the load-bearing nouns.
-- Say what *we changed* (prevention + remediation done for them) rather than
-  exposing internals — one plain-language sentence of cause is enough.
-- Always give the one concrete next step and link the fgac.ai use-case page
-  (not raw video URLs) for anything self-serve.
-- Address the inferred underlying goal ("If your goal is X…") with complete
-  numbered steps, including the explicit sign-out/sign-in cycling.
-- Credit their report; invite follow-up. No over-apology, no "you did
-  everything right," no unverified claims.
+## 4. Identify other users who fell into the same trap
 
-## 7. Close the loop
+One report means more affected users who didn't write in. Derive the data
+signature of the broken state and scan production (read-only) across **all
+live users** — e.g. for identity drift: own-mailbox
+`key_email_access.target_email` ≠ `users.email`; at-risk: multi-email Clerk
+profiles, primary/Google mismatches. Cross-reference each hit with PostHog:
+did they ever get a successful call, when did they go silent? Classify:
+actively broken / silently healed by the fix / at-risk only / churned on
+first contact (prime win-back candidates). Add the signature to the daily
+health-check watch items
+(`~/.claude/scheduled-tasks/fgac-user-behavior-review/SKILL.md`).
 
-- Bug report doc committed (sanitized), fix PR linked.
-- Daily health-check task updated with the new watch item / event.
-- Memory updated if the case revealed a durable operational fact.
-- Draft placed for Ken; Ken sends.
+## 5. Draft proactive outreach to the affected users
+
+One draft per affected user (direct Gmail MCP, drafts only), telling them:
+we saw them hit (or be exposed to) the issue, the steps we've taken to
+resolve it, and how to get back on track. Template from the reference case:
+
+```
+Hi,
+
+We identified a bug on FGAC.ai where <the trap, in one sentence — what
+users were attempting and why it didn't work>. The underlying bug has been
+fixed, and <the entry point closed>.
+
+Your account was identified as having followed this path, so we are
+<remediation, naming their specific details — e.g. "removing the extra
+email addresses (<X> and <Y>) from your profile">. Your <what is unaffected
+— e.g. "sign-in and Google connection (<address>)"> are unaffected.
+
+If your goal is <the inferred goal>, the supported way is <feature>. Please
+follow the setup instructions/video here:
+<fgac.ai use-case page URL>
+
+Please don't hesitate to reach out if you run into any issues.
+
+Thank You,
+Ken
+```
+
+Keep each draft truthful per-recipient (someone merely at-risk gets "could
+interfere," not "broke your account"). Finish by reporting to Ken: where
+each draft lives, the From-address caveat, and every manual step the drafts
+promise that he still needs to perform.
