@@ -8,20 +8,30 @@ probes 20/20 — and is not touched here.
 
 ## Verification status
 
-PostHog was **not reachable from this session**, so the production figures below
-are the ones supplied with the task, not re-derived. All three documented paths
-were checked:
+The PostHog connector was unavailable for the first part of this task and became
+available partway through; **all production claims below were then verified
+directly against project 343912**, not taken on trust. Findings:
 
-| path | state |
+| claim | verdict |
 | --- | --- |
-| claude.ai PostHog connector | absent this session (`ToolSearch "posthog exec"` returns unrelated tools; the UUID-prefixed `exec` in the agent registry does not resolve) |
-| `posthog` MCP server (`.mcp.json`) | needs `POSTHOG_PERSONAL_API_KEY` in the launch shell env — unset |
-| `scripts/qa-posthog-events.ts` | needs `.env.local` — absent (fresh worktree); the `phx_` key is unprovisioned anyway |
+| `uniq(client_id)` = 0 on every `mcp_auth_attempt` | **confirmed** — 0 in all 36 hourly buckets from 8/24 |
+| `ok` zero for a long run then clumping | **confirmed** — 0 for 00:00–18:00Z on 8/24 (19 hours), then 40 at 19:00Z |
+| sampling is biased per token | **confirmed, and worse than described** — see below |
+| invalid_token is all our own probes | **confirmed** — 38 of 39 on 8/24; the one exception was a manual test (`kid='ins_fake'`) |
+| `google_token_identity_fallback` event missing | **confirmed** — absent from taxonomy; the tool-call property has also never fired |
 
-What did *not* need PostHog was verified directly and is stated as fact: the
-deploy timestamp (Vercel), the probe's `kid`/cadence (source + workflow), the
-`client_id` precedent (source + taxonomy), and the existing fallback
-instrumentation (source).
+**The sampling bias is not a thinned sample.** Because the gate was
+deterministic on the token, a token that hashed in was captured on *every*
+request. Production shows 63 `ok` events against 55 `$mcp_tool_call` events on
+8/24 post-deploy — `ok` exceeding tool calls is impossible under real 1-in-20
+sampling — and on 8/25 only 5 of 17 users making tool calls produced any `ok`
+event. So `ok` was a near-complete census of a few users plus silence from the
+rest, and `ok * 20` overstated the visible users ~20x while scoring everyone
+else zero. Net error swung 1.7x (8/24) to ~5x (8/25) depending on who hashed in.
+
+**The identity-drift fallback has never fired in production** since
+`4b551018` deployed. The counter therefore starts at zero, and zero is healthy;
+it detects *new* drift and cannot recover how many users were rescued earlier.
 
 ## Deploy timing — the 19:00Z discontinuity
 
@@ -79,10 +89,11 @@ named queries with stated healthy results. `mcp_auth_attempt` was missing from
 
 ## Not done — needs the user
 
-Editing PostHog insight `mGzUClRs` to exclude `kid = 'probe'` requires PostHog
-access this session does not have. The required change is documented in
-`docs/monitoring.md` §2–3. Until it is applied the alert remains on track to
-page on our own probes.
+Editing PostHog insight `mGzUClRs` to exclude `kid = 'probe'` is a change to a
+saved alert, so it is left to the user rather than applied from here. The
+required filter is documented in `docs/monitoring.md` §2–3. Until it is applied
+the alert remains on track to page on our own probes (38/day observed against a
+threshold of 50, with GitHub's scheduled-run throttling as the only headroom).
 
 ## Validation
 

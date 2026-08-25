@@ -57,8 +57,27 @@ and several reports quoted such figures. Correct handling by era:
 | era | what `ok` means | how to get volume |
 | --- | --- | --- |
 | before 2026-08-24T18:10Z | nothing — no `ok` rows exist | use `$mcp_tool_call`, or `no_token` as an activity floor |
-| 2026-08-24T18:10Z – 2026-08-25 fix | a biased sample over whichever tokens hashed in; neither a rate nor a floor | use `$mcp_tool_call`; `ok * 20` is meaningless |
+| 2026-08-24T18:10Z – 2026-08-25 fix | a near-complete census of a few tokens, plus nothing at all from everyone else | use `$mcp_tool_call`; `ok * 20` overstates by ~20x for the tokens it saw |
 | after the 2026-08-25 fix | an unbiased 1-in-20 sample of successful requests | `ok * 20`, ±~2% at daily volumes |
+
+The middle row is the counter-intuitive one and is worth understanding before
+reading any report from that window. Because the gate was deterministic on the
+token, a token that hashed in was captured on **every single request** — not
+one in twenty. So `ok` was not a thinned sample of all traffic; it was an
+essentially complete count of a handful of users' requests, and silence from
+everyone else. Two measurements from production confirm this:
+
+- **2026-08-24, post-deploy**: 63 `ok` events against 55 `$mcp_tool_call`
+  events. `ok` *exceeding* tool calls is impossible under real 1-in-20
+  sampling, and is exactly what full capture of a subset predicts.
+- **2026-08-25**: only **5 of 17** users who made tool calls produced any `ok`
+  event. The other 12 were invisible regardless of how much they called.
+
+Hence `ok * 20` inflated the visible users' traffic roughly twentyfold while
+scoring the rest at zero, and the net error swung with who happened to hash in
+— about 1.7x too high on 8/24 (63 x 20 = 1,260 against 763 tool calls) and
+about 5x on 8/25 (61 x 20 = 1,220 against 247). Treat any number from this
+window as unusable rather than merely imprecise.
 
 `strategy_used` and `memo_hit` carry the same era caveat: they were only ever
 recorded on whichever tokens the old gate happened to admit, so mixes read
@@ -78,15 +97,25 @@ are the trustworthy series for any historical question.
 `invalid_token` event carrying `kid = 'probe'` comes from
 `scripts/mcp-auth-probe.ts`, whose garbage token is minted with
 `kid: 'probe'` / `client_id: 'auth-probe'` — see the constant in that file.
-`.github/workflows/auth-probe.yml` runs it every 15 min (up to 96/day), so
-without the filter the alert pages on its own monitoring: observed probe
-invalid_token counts were 7 (8/23), 37 (8/24) and 17 (8/25), already trending
-at the threshold of 50.
+`.github/workflows/auth-probe.yml` schedules it every 15 min (96/day nominal;
+GitHub throttles scheduled runs, so observed volume is lower). Measured
+2026-08-25, probe share of `invalid_token`:
 
-The documented "0–5/day baseline" predates the probes and was never a
-user-traffic figure. **Real user invalid-token volume is 0/day**, so with the
-probe filter applied a threshold of 50/day is very loose; treat any sustained
-non-probe invalid_token traffic as worth investigating well below it.
+| day | invalid_token | of which `kid='probe'` |
+| --- | --- | --- |
+| 8/23 | 10 | 10 |
+| 8/24 | 39 | 38 |
+| 8/25 (partial) | 18 | 18 |
+
+Without the filter the alert pages on its own monitoring — 38/day against a
+threshold of 50, with the only headroom being GitHub's throttling.
+
+**Real user invalid-token volume is 0/day.** The single non-probe event in
+three days (8/24 13:00Z) carried `kid='ins_fake'` — a manual test during the
+PR #81 work, not a user. The documented "0–5/day baseline" predates the probes
+and was never a user-traffic figure. With the probe filter applied a threshold
+of 50/day is therefore very loose: treat any sustained non-probe
+invalid_token traffic as worth investigating well below it.
 
 Caveat, deliberately recorded: `kid` and `client_id` are read from the
 **unverified** token header/payload, so the exclusion filter is spoofable — a
@@ -214,8 +243,17 @@ WHERE event = 'google_token_identity_fallback' AND timestamp > now() - INTERVAL 
 GROUP BY day ORDER BY day
 ```
 
-Healthy: `users` trends to 0 as affected users' next dashboard visit re-syncs
-`users.email` to their Clerk primary address. A **rising** count means drift is
-still being created — that would be a regression in `clerkPrimaryEmail` /
-`resolveDbUser`, not a self-heal. The event is unsampled and independent of
-`$mcp_tool_call`, so these counts are exact.
+Healthy: **zero**, which is where it starts. Measured 2026-08-25: the fallback
+branch has not fired once in production since `4b551018` deployed — the
+`google_token_identity_fallback` tool-call property appears on 0 calls and is
+absent from the project taxonomy entirely, and `google_token_fetch_failed` went
+7 events / 2 identities on 8/24 to 0 on 8/25. The drifted population appears to
+have already self-healed through the dashboard re-sync path.
+
+So this counter is **forward-looking, not retrospective**. It cannot recover how
+many users the fallback rescued before it existed; that window has closed. What
+it does is make new drift visible: a **rising** count means drift is being
+created again, which would be a regression in `clerkPrimaryEmail` /
+`resolveDbUser` rather than a self-heal, and is worth investigating at the first
+non-zero day. The event is unsampled and independent of `$mcp_tool_call`, so
+these counts are exact.
