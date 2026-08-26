@@ -16,6 +16,14 @@
 > carry NO link. Sheets approvals run picker-first when Google lacks a grant
 > for the sheet — see capability 17; grant repair is capability 18 (google
 > reconnect).
+>
+> **⚠ Transitional (2026-08-25):** this spec describes the post-redesign
+> behaviour. Until the deterministic-URL change ships, production still mints
+> a unique expiring token per denial, so **A12 and A13 fail by design** and
+> A9/A10 still describe the outgoing JWT-based link. Do not treat those as
+> regressions before that PR lands: record A12/A13 as `skip` with
+> `reason: "pending deterministic-URL redesign"` (the results schema accepts
+> pass | fail | skip only). Remove this paragraph in the same PR.
 
 ## Assertions
 
@@ -95,3 +103,35 @@
   "Send to Anyone" rule (pattern `*`) is assigned to the profile;
   `gmail_send` to arbitrary addresses succeeds; and the grant is removable
   from the dashboard rules
+
+### A12: Repeating a denial re-emits the same URL
+- Trigger the identical denial three times in a row (e.g. call
+  `sheets_read_range` on the same unexposed spreadsheet, from the same
+  profile, three times); capture the approval URL from each response
+- **Expected**: All three URLs are **byte-identical**. A retrying agent
+  re-emits one link instead of minting a fresh one per attempt, so the user
+  sees one thing to click and `approval_link_minted` counts attempts against
+  a single stable `request_id`
+- **Regression**: 2026-08 launch cohort — every denial minted a new signed
+  token, so one access request produced ~1.45 distinct URLs on average
+  (worst observed: 17). Analytics counted those as separate unopened
+  requests, reporting a 31% approval rate for a funnel actually converting
+  near 58%
+
+### A13: Links do not expire
+- Approve a link minted well beyond the retired TTL window (>30 minutes old;
+  an hours-old or day-old link is a stronger check)
+- **Expected**: The link still resolves and approves normally. No "Link
+  expired" card renders in any path, and no denial text, approve-page footer,
+  or `request_access` response promises an expiry window
+
+### A14: Re-opening an approved link is idempotent
+- Open and approve a link, then open the very same URL again while the grant
+  is still active; then click Approve a second time
+- **Expected**: Both the re-open and the second approve render "Already
+  approved" (success tone, no destructive action) and write nothing — no
+  duplicate rule, no second grant. The state is resolved at page LOAD from
+  live grant state, not after clicking Approve
+- **Note**: This is the one property retained from the retired A4. Re-approval
+  after the grant has been **revoked** is deliberately permitted (the URL is
+  permanent by design) and is intentionally not asserted here
