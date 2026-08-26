@@ -301,7 +301,17 @@ async function getGoogleToken(targetEmail: string, keyOwner: { id: string; email
       // Not a delegation — the address is the key owner's own mailbox under a
       // drifted `users.email`. Use their token and record that the fallback
       // fired so analytics can watch the drift population shrink.
+      //
+      // Two signals, deliberately: the tool-call property attributes the
+      // fallback to the individual call, while the standalone event is the
+      // countable one — it is unsampled and does not depend on the enclosing
+      // $mcp_tool_call, so `uniq(person)` over it is the size of the drifted
+      // population still being rescued. The monitoring runbook watches this
+      // count fall to zero as the population self-heals (docs/monitoring.md).
       addToolCallProps({ google_token_identity_fallback: true });
+      captureServerEvent(keyOwner.clerkUserId, 'google_token_identity_fallback', {
+        via: 'mcp',
+      });
       tokenOwnerClerkId = keyOwner.clerkUserId;
     } else {
       return null;
@@ -1875,18 +1885,26 @@ function strategyMemoSet(clientId: string, strategy: 'clerk' | 'direct'): void {
 /**
  * client_id from the UNVERIFIED token payload — used only to look up the
  * strategy memo and label auth metrics, never to authorize.
+ *
+ * Both claims are caller-controlled on a failed auth (anyone can mint an
+ * unsigned JWT with any header/payload), and both now travel into analytics on
+ * `mcp_auth_attempt`. Truncate them: a real Clerk client_id/kid is well under
+ * this, while an unbounded value would let an unauthenticated caller inflate
+ * every event it triggers — and would grow strategy-memo keys without limit
+ * even though the memo caps entry *count*.
  */
+const MAX_CLAIM_LEN = 128;
+
 function unverifiedTokenClaims(token?: string): { clientId?: string; kid?: string } {
   if (!token) return {};
+  const claim = (v: unknown): string | undefined =>
+    typeof v === 'string' && v.length > 0 ? v.slice(0, MAX_CLAIM_LEN) : undefined;
   try {
     const [headerB64, payloadB64] = token.split('.');
     if (!payloadB64) return {};
     const payload = JSON.parse(Buffer.from(payloadB64, 'base64url').toString());
     const header = JSON.parse(Buffer.from(headerB64, 'base64url').toString());
-    return {
-      clientId: typeof payload.client_id === 'string' ? payload.client_id : undefined,
-      kid: typeof header.kid === 'string' ? header.kid : undefined,
-    };
+    return { clientId: claim(payload.client_id), kid: claim(header.kid) };
   } catch {
     return {};
   }
@@ -1929,10 +1947,10 @@ async function verifyClerkJwtDirect(token: string) {
   }
 }
 
-// Success events are sampled 1-in-20 (deterministic per token); failures
-// always capture. Extracted to src/lib/authSampling.ts after the 2026-08-24
-// incident where a prefix-only hash sampled 0% of successes — see the module
-// header there and scripts/test-auth-sampling.ts.
+// Success events are sampled 1-in-20 PER REQUEST; failures always capture.
+// Lives in src/lib/authSampling.ts — read its header before touching the gate:
+// two prior versions keyed the draw off the token itself, which is not a
+// sample of requests and made `ok` counts unusable for volume estimation.
 
 const verifyMcpAuth = async (req: Request, bearerToken?: string) => {
   let authInfo: ReturnType<typeof verifyClerkToken> | Awaited<ReturnType<typeof verifyClerkJwtDirect>> | undefined;
@@ -1990,12 +2008,13 @@ const verifyMcpAuth = async (req: Request, bearerToken?: string) => {
   // regression shows up here (and as vanishing $mcp_tool_call volume) long
   // before anyone reads function logs.
   const outcome = authInfo ? 'ok' : bearerToken ? 'invalid_token' : 'no_token';
-  if (outcome !== 'ok' || inSuccessSample(bearerToken)) {
+  if (outcome !== 'ok' || inSuccessSample()) {
     captureServerEvent(
       (authInfo?.extra?.userId as string | undefined) ?? 'anonymous-mcp',
       'mcp_auth_attempt',
       {
         outcome,
+        client_id: (authInfo as { clientId?: string } | undefined)?.clientId ?? clientIdHint,
         strategy_used: strategyUsed,
         memo_hit: memoStrategy !== undefined,
         optimizations_enabled: authOptimizationsEnabled(),
