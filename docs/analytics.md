@@ -80,6 +80,14 @@ Two further cautions when reading this funnel:
   capture artifact and says nothing about human involvement — do not filter on
   it. (Control: client-side `$pageview` splits Regular/AI Agent normally.)
 
+**HogQL gotcha:** `properties.status` silently returns NULL on the `events`
+table — `status` is shadowed by a table field, so dot access resolves to the
+wrong thing. The property IS ingested; read it as
+`JSONExtractString(properties, 'status')`. Verified 2026-08-25 after the
+dot-access form made a correctly-emitted property look missing on both
+production and development events. `action`, `request_id`, `agent_driven` and
+`user_agent` are unaffected and work with dot access.
+
 `approval_requests` (Postgres) mirrors this in SQL — one row per request with
 `mint_count`, `opened_at`, and `approved_at` — so the same questions are
 answerable without the analytics pipeline.
