@@ -2,63 +2,56 @@
  * Sampling gate for `mcp_auth_attempt` success telemetry.
  *
  * Success events are sampled 1-in-N to keep event volume inside the PostHog
- * free tier (~220k MCP requests/mo); failures always capture. The decision is
- * deterministic on the token, so a retry of the *same* request is consistently
- * in or out and never double-counts.
+ * free tier (~220k MCP requests/mo); failures always capture.
  *
- * Note this samples per TOKEN, not per session: Clerk access tokens are
- * short-lived and refreshed constantly, so one user's requests spread across
- * many tokens and land in the sample at roughly the nominal rate.
+ * The draw is made per REQUEST and is independent of the bearer token, the
+ * user, and the client. That independence is the whole point: it is what makes
+ * `count(outcome='ok') * AUTH_SUCCESS_SAMPLE` an unbiased estimate of true
+ * success volume. Any gate that is a pure function of the token is NOT a
+ * 1-in-N sample of requests — see the history below before changing this.
  *
- * History — why this hashes the signature: the original implementation hashed
- * the first 64 characters of the bearer token. For a Clerk JWT the header
- * segment alone is ~143 chars, so those 64 characters are entirely inside the
- * per-instance-constant header ({"alg","cat","kid","typ"}). Every token minted
- * by one Clerk instance produced the *same* hash, turning the sample into an
- * all-or-nothing gate — which on production resolved to "never". Between
- * 2026-08-23 and this fix, zero `outcome='ok'` rows were recorded against
- * ~900 successful tool calls. The signature segment is the part that actually
- * varies per token.
+ * History — two implementations shipped, both biased in the same direction:
+ *
+ * 1. 2026-08-23 (launch): hashed the first 64 chars of the bearer token. For a
+ *    Clerk JWT the header segment alone is ~143 chars, so those 64 chars sit
+ *    entirely inside the per-instance-constant header. Every production token
+ *    hashed identically, and the modulus resolved to "never": zero `ok` rows
+ *    against ~900 successful tool calls.
+ *
+ * 2. 2026-08-24 (PR #81, f9406e2): hashed the token's *signature* segment
+ *    instead. This fixed the constant-hash defect but kept the gate a pure
+ *    function of the token, so the decision was still made ONCE PER TOKEN
+ *    rather than once per request. Consequences observed in production:
+ *      - A given token was always sampled or never sampled, for its whole
+ *        life. A heavy client whose token hashed non-zero contributed zero
+ *        `ok` events no matter how many thousands of calls it made.
+ *      - With ~50 active users the token population is small, so the result
+ *        was a biased sample over a handful of tokens, not a 1-in-20 sample of
+ *        requests. `ok` counts were unusable for volume estimation and the
+ *        documented "multiply by 20" was wrong.
+ *      - The tell was clumping: 13 consecutive hours with zero `ok` on
+ *        2026-08-24 (06:00-18:00Z) across a day of continuous traffic, then 40
+ *        in a single hour, while unsampled `no_token` fired every hour
+ *        throughout.
+ *
+ * Retries: a retried request now draws again, so a retry can be counted twice
+ * (or zero times). That is correct for a volume estimator — each attempt IS a
+ * separate auth attempt — and it is the price of unbiasedness. The previous
+ * "stable across retries" property is what produced the bias.
  */
 
 export const AUTH_SUCCESS_SAMPLE = 20;
 
 /**
- * The highest-entropy slice of a bearer token: an RS256 JWT signature (~342
- * base64url chars, unique per token). Opaque, non-JWT tokens have no `.`, so
- * `lastIndexOf` yields -1 and the whole token is used — which is correct for
- * them. A suspiciously short trailing segment also falls back to the whole
- * token rather than sampling on a handful of characters.
- */
-function entropySlice(token: string): string {
-  const sig = token.slice(token.lastIndexOf('.') + 1);
-  return sig.length >= 16 ? sig : token;
-}
-
-/**
- * Whether this token's success event should be captured.
+ * Whether this request's success event should be captured.
  *
- * FNV-1a followed by the murmur3 finalizer: FNV alone leaves the low bits
- * dominated by the last few characters, and `% rate` reads exactly those bits.
- * The avalanche step is what makes the modulus uniform over a base64url
- * alphabet. Unsigned (`>>> 0`) rather than `Math.abs`, which folds two
- * residues onto one and skews the buckets.
+ * `Math.random()` is uniform on [0, 1), so `Math.random() * rate < 1` selects
+ * with probability exactly 1/rate. Stateless by design: a counter would need
+ * per-instance state, and on serverless every cold start would restart the
+ * cycle at its sampled position and over-represent first-requests-after-boot
+ * (production runs a ~6.7% cold-start rate).
  */
-export function inSuccessSample(token?: string, rate: number = AUTH_SUCCESS_SAMPLE): boolean {
-  if (!token) return true;
+export function inSuccessSample(rate: number = AUTH_SUCCESS_SAMPLE): boolean {
   if (rate <= 1) return true;
-
-  const basis = entropySlice(token);
-  let h = 0x811c9dc5;
-  for (let i = 0; i < basis.length; i++) {
-    h ^= basis.charCodeAt(i);
-    h = Math.imul(h, 0x01000193);
-  }
-  h ^= h >>> 16;
-  h = Math.imul(h, 0x85ebca6b);
-  h ^= h >>> 13;
-  h = Math.imul(h, 0xc2b2ae35);
-  h ^= h >>> 16;
-
-  return (h >>> 0) % rate === 0;
+  return Math.random() * rate < 1;
 }

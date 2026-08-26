@@ -48,8 +48,10 @@ Two UI defects compounded the confusion:
    whether the target address is one of the key owner's own verified Clerk
    addresses (or their Google external account) and uses the owner's token —
    self-healing for rows that drifted before the fix. Fires
-   `google_token_identity_fallback: true` on the tool-call event for
-   observability.
+   `google_token_identity_fallback: true` on the tool-call event, and (from
+   2026-08-25) a standalone `google_token_identity_fallback` event so the
+   drifted population is countable independently of tool-call volume —
+   docs/monitoring.md 7.4 is the watch item.
 4. Accounts page: shows the **actual** connected Google external account, and
    renders an explicit mismatch warning when it differs from the account
    email.
