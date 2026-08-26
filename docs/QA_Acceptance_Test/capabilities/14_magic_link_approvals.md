@@ -16,14 +16,6 @@
 > carry NO link. Sheets approvals run picker-first when Google lacks a grant
 > for the sheet — see capability 17; grant repair is capability 18 (google
 > reconnect).
->
-> **⚠ Transitional (2026-08-25):** this spec describes the post-redesign
-> behaviour. Until the deterministic-URL change ships, production still mints
-> a unique expiring token per denial, so **A12 and A13 fail by design** and
-> A9/A10 still describe the outgoing JWT-based link. Do not treat those as
-> regressions before that PR lands: record A12/A13 as `skip` with
-> `reason: "pending deterministic-URL redesign"` (the results schema accepts
-> pass | fail | skip only). Remove this paragraph in the same PR.
 
 ## Assertions
 
@@ -73,25 +65,27 @@
   (c) `request_access`'s structured `approvalUrl` field
 - **Expected**: Each URL contains no whitespace or newline characters
   anywhere in the string, and parses to the FGAC origin with path
-  `/dashboard/approve` and a non-empty `token` query parameter
+  `/dashboard/approve` carrying a non-empty `a` (action) and `s` (signature)
+  parameter, plus `k` (proxy key) and — for every action except `send_all` —
+  `r` (target). No user id appears anywhere in the URL
 - **Regression**: 2026-08-15 tester finding — a trailing newline in the env
   base URL shipped links as `https://fgac.ai\n/dashboard/...`, breaking the
   entire approval loop
 
-### A10: Denial-minted tokens match the access level the operation needs
-- Decode the JWT payload (base64url, no verification needed) of the approval
-  link from each denied call in this matrix:
-  | Denied operation | Sheet state | Required token action |
+### A10: Denial-minted links match the access level the operation needs
+- Read the `a` (action) query parameter of the approval link from each denied
+  call in this matrix:
+  | Denied operation | Sheet state | Required `a` value |
   |---|---|---|
   | `sheets_read_range` | unexposed | `sheets_expose` |
   | `sheets_update_range` | unexposed | `sheets_write` |
   | `sheets_append_rows` | unexposed | `sheets_write` |
   | `sheets_update_range` | exposed Read Only | `sheets_write` |
   | `google_api_modify` (Sheets PUT) | unexposed | `sheets_write` |
-- **Expected**: The token's `action` claim equals the required action in
-  every row — a write denial must never mint a read-level (`sheets_expose`)
-  token, which would send the user through an approval that cannot satisfy
-  the retried operation
+- **Expected**: The link's `a` parameter equals the required action in every
+  row — a write denial must never mint a read-level (`sheets_expose`) link,
+  which would send the user through an approval that cannot satisfy the
+  retried operation
 - **Regression**: 2026-08-15 tester finding — write denials minted
   `sheets_expose`, creating an approve→retry→fail loop with no signal
 
