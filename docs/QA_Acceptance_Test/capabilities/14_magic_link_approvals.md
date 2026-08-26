@@ -2,15 +2,19 @@
 
 > Phase C of `connector-growth_v1.md`. Send and Sheets denials carry a signed
 > deep link that pre-fills the fix; the owning user approves in one click at
-> the moment of need. Links are signed, expire (15 min; sheets links 30 min —
-> their approval can include a Picker pick + first-time drive.file consent
-> round-trip), and require the owning user's session — an agent can mint the
-> request, only the human can approve. Consumption is idempotent, not
-> single-use (2026-08-19): re-opening a used link whose grant is still active
-> is a success ("Already approved"); only a used link whose grant was revoked
-> refuses, and never re-grants. Read-block denials deliberately carry NO
-> link. Sheets approvals run picker-first when Google lacks a grant for the
-> sheet — see capability 17; grant repair is capability 18 (google
+> the moment of need. Links are **signed and deterministic**: the same request
+> always produces the same URL, so a retrying agent re-emits one link rather
+> than minting a new one each time. Links **do not expire and are not
+> single-use** (2026-08-25 change). Authorization is the owning user's Clerk
+> session plus a live proxy-key ownership check — an agent can mint the
+> request, only the human can approve; the HMAC exists to prevent forgery, not
+> to authorize. Re-opening a link whose grant is still active is a success
+> ("Already approved"). Re-approving after the grant was revoked is
+> **permitted** — the URL is permanent by design, and re-granting requires the
+> owner's session plus an explicit click on a page naming the grant, the same
+> bar as re-adding the rule in the dashboard. Read-block denials deliberately
+> carry NO link. Sheets approvals run picker-first when Google lacks a grant
+> for the sheet — see capability 17; grant repair is capability 18 (google
 > reconnect).
 
 ## Assertions
@@ -37,19 +41,6 @@
   already grants the sheet, approval is one click; when it does not, the
   Picker pick comes first (capability 17 A2/A4). After approving Read-only,
   the retried read succeeds and a write still fails
-
-### A4: Used links are idempotent while granted, refused once revoked; links expire
-- Reuse the already-approved A2 link; then revoke the granted rule from the
-  dashboard and open the same link again; separately, open a link older than
-  its expiry window
-- **Expected**: While the grant is active, both opening and re-approving the
-  used link render "Already approved" (success tone, no button, nothing
-  written — idempotent re-use, 2026-08-19 change). After the grant is revoked,
-  the used link renders "Link already used" and never re-grants (replaying an
-  old link must not resurrect revoked permissions). The expired link is
-  rejected with a clear message. The approve page shows these states at page
-  LOAD, not after clicking Approve, and `approval_link_opened` records
-  status already_granted / used_inactive / expired accordingly
 
 ### A5: Another user's session cannot approve
 - Open a USER_A denial link in a browser session signed in as USER_B
@@ -102,5 +93,5 @@
 - **Expected**: The confirmation UI states sending to ANY recipient from
   every mailbox on the profile is being granted; after approval a
   "Send to Anyone" rule (pattern `*`) is assigned to the profile;
-  `gmail_send` to arbitrary addresses succeeds; the link is single-use and
-  the grant is removable from the dashboard rules
+  `gmail_send` to arbitrary addresses succeeds; and the grant is removable
+  from the dashboard rules
