@@ -8,9 +8,19 @@
 - Send an email to an address on the send whitelist (e.g., `USER_B_EMAIL` or `allowed@example.com`)
 - **Expected**: Proxy passes the request, email sent successfully
 
-### A2: Send to blocked address returns 403
+### A2: Send to blocked address is refused with an actionable denial
 - Send an email to an address NOT on the send whitelist (e.g., `blocked@untrusted.com`)
-- **Expected**: Proxy blocks with clear error: *"Unauthorized email address. Please ask your user to add 'blocked@untrusted.com' to the sending whitelist."*
+- **Expected**: Nothing is sent, and the denial names the offending recipient and
+  the reason. Assert on **substance, not an exact string** — the two live shapes are
+  `🚫 Unauthorized recipient. '<addr>' is not in the send whitelist.` (a whitelist
+  exists, this address is not on it) and `🚫 Sending is disabled on this profile
+  (no send whitelist configured). This is the safe default.` (no rules at all).
+  Both carry the recipient-scoped and send-to-anyone approval links (A1)
+- **Note**: this assertion previously quoted *"Unauthorized email address. Please ask
+  your user to add … to the sending whitelist."*, which predates magic-link denials
+  and no longer exists in the code. A QA run failed on the literal text while the
+  behavior was correct — assert the recipient, the refusal, and the link, not the
+  wording
 
 ### A3: get_my_permissions shows send whitelist rules
 - Query the agent's permissions

@@ -1,25 +1,51 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { headers } from "next/headers";
 import { auth } from "@clerk/nextjs/server";
-import { verifyApprovalToken, describeApproval, approvalLinkMinutes, peekApprovalToken } from "@/lib/approvalLinks";
+import { describeApproval, peekApprovalParams, APPROVAL_PARAMS, type ApprovalSearchParams } from "@/lib/approvalLinks";
+import { markApprovalRequestOpened } from "@/lib/approvalRequests";
 import { captureServerEvent } from "@/lib/posthogServer";
-import { approveMagicLink, approvalLinkStatus } from "../actions";
+import { approveMagicLink, resolveApprovalLink } from "../actions";
 import { ApproveSubmitButton } from "./ApproveSubmitButton";
 import { FileApprovalFlow } from "./FileApprovalFlow";
 import { ApprovedSettling } from "./ApprovedSettling";
 
 /* ─── Magic-link approval page (connector-growth Phase C) ────────────────
-   Reached from a signed, single-use link embedded in an agent's denial (or
-   minted by the request_access tool). Shows exactly one grant and applies it
-   only on explicit confirmation by the owning, signed-in user. The dashboard
+   Reached from a signed deep link embedded in an agent's denial (or minted
+   by the request_access tool). Shows exactly one grant and applies it only
+   on explicit confirmation by the owning, signed-in user. The dashboard
    route group is Clerk-protected, so a signed-out visitor signs in first.
 
-   Sheets grants run picker-first (SheetsApprovalFlow): the page verifies the
-   Google-side drive.file grant on load, and when it's missing the user picks
-   the sheet in Google's Picker BEFORE anything is approved — the pick is
-   what registers Google access and confirms the file's identity. Approving a
-   raw, unverifiable id is how users ended up with rules for sheets Google
-   couldn't serve. */
+   Links are DETERMINISTIC and PERMANENT (2026-08-25): the same request
+   always produces the same URL, so a retrying agent re-emits one link
+   instead of minting a new one per attempt. There is no expiry and no
+   single-use — both only ever produced dead ends, and neither protected
+   anything the Clerk session + live proxy-key ownership check does not.
+   Replay safety is grant-level: an already-active grant writes nothing.
+
+   Sheets/docs grants run picker-first (FileApprovalFlow): the page verifies
+   the Google-side drive.file grant on load, and when it's missing the user
+   picks the file in Google's Picker BEFORE anything is approved — the pick
+   is what registers Google access and confirms the file's identity. */
+
+/** Coarse client classification for the open event.
+ *
+ * `approval_link_opened` is captured server-side, so it carries no browser
+ * user agent and every open looked identical in analytics. Measured against
+ * client-side pageviews, ~23% of approve-page loads were an AI agent rather
+ * than a person — which meant "opened" systematically overstated human
+ * reach. Stamping the request's own UA here makes that split visible without
+ * a second client-side event. */
+const AGENT_UA = /claude|anthropic|electron|node-fetch|python-requests|axios|curl|wget|bot\b|crawler|spider|headless/i;
+
+async function clientClassification(): Promise<{ agent_driven: boolean; user_agent: string }> {
+  try {
+    const ua = (await headers()).get("user-agent") ?? "";
+    return { agent_driven: AGENT_UA.test(ua), user_agent: ua.slice(0, 160) };
+  } catch {
+    return { agent_driven: false, user_agent: "" };
+  }
+}
 
 function Card({ children }: { children: React.ReactNode }) {
   return (
@@ -34,12 +60,27 @@ function Card({ children }: { children: React.ReactNode }) {
   );
 }
 
+/** Rebuild the link's own query string, so every redirect can return to the
+ *  LIVE approve URL rather than a parameter-less dead end. */
+function linkQuery(params: ApprovalSearchParams): string {
+  const q = new URLSearchParams();
+  if (params.a) q.set(APPROVAL_PARAMS.action, params.a);
+  if (params.k) q.set(APPROVAL_PARAMS.key, params.k);
+  if (params.r) q.set(APPROVAL_PARAMS.target, params.r);
+  if (params.s) q.set(APPROVAL_PARAMS.signature, params.s);
+  return q.toString();
+}
+
 export default async function ApprovePage({
   searchParams,
 }: {
-  searchParams: Promise<{ token?: string; result?: string; message?: string; sid?: string; did?: string; notice?: string }>;
+  searchParams: Promise<{
+    a?: string; k?: string; r?: string; s?: string;
+    result?: string; message?: string; sid?: string; did?: string; notice?: string;
+  }>;
 }) {
   const params = await searchParams;
+  const link: ApprovalSearchParams = { a: params.a, k: params.k, r: params.r, s: params.s };
 
   if (params.result === "ok") {
     // Per-file (sheets/docs) approvals settle asynchronously on Google's
@@ -68,13 +109,14 @@ export default async function ApprovePage({
     );
   }
   if (params.result === "error") {
+    const q = linkQuery(link);
     return (
       <Card>
         <h1 className="mb-2 text-xl font-bold text-foreground">Approval failed</h1>
         <p className="text-sm text-muted-foreground">{params.message || "The link could not be processed."}</p>
-        {params.token && (
+        {q && (
           <Link
-            href={`/dashboard/approve?token=${encodeURIComponent(params.token)}`}
+            href={`/dashboard/approve?${q}`}
             className="mt-4 inline-block rounded-sm bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground hover:opacity-90"
           >
             Try again with this link
@@ -84,8 +126,7 @@ export default async function ApprovePage({
     );
   }
 
-  const token = params.token;
-  if (!token) {
+  if (!link.a || !link.s) {
     return (
       <Card>
         <h1 className="mb-2 text-xl font-bold text-foreground">Missing link</h1>
@@ -94,43 +135,41 @@ export default async function ApprovePage({
     );
   }
 
-  const verified = await verifyApprovalToken(token);
-  // Truth-at-load: a used link renders its real state up front instead of
-  // letting the user click Approve into an "already used" surprise.
-  const linkState = verified.ok ? await approvalLinkStatus(token) : "invalid";
+  const resolved = await resolveApprovalLink(link);
 
-  // Link-funnel instrumentation: joins minted → opened → approved by link_id
-  // (the token jti). The 2026-08 launch cohort's biggest approval leak was
-  // links never opened at all — this event is what makes that measurable.
+  // Link-funnel instrumentation. request_id is DETERMINISTIC, so repeated
+  // opens of the same request join to one row — retries no longer look like
+  // fresh unopened demand, which is what made this funnel read as 31% when
+  // it converts near 58%.
   const { userId: clerkUserId } = await auth();
-  const peek = verified.ok
-    ? { jti: verified.payload.jti, action: verified.payload.action }
-    : peekApprovalToken(token);
+  const client = await clientClassification();
   captureServerEvent(clerkUserId ?? "anonymous-approve", "approval_link_opened", {
-    status: verified.ok ? linkState : verified.reason,
-    link_id: peek.jti,
-    action: peek.action,
+    status: resolved.status,
+    request_id: resolved.status === "invalid" ? undefined : resolved.payload.requestId,
+    action: resolved.status === "invalid" ? peekApprovalParams(link).action : resolved.payload.action,
+    ...client,
   });
+  if (resolved.status !== "invalid") {
+    await markApprovalRequestOpened(resolved.payload.requestId);
+  }
 
-  if (!verified.ok) {
+  if (resolved.status === "invalid") {
     return (
       <Card>
-        <h1 className="mb-2 text-xl font-bold text-foreground">
-          {verified.reason === "expired" ? "Link expired" : "Invalid link"}
-        </h1>
+        <h1 className="mb-2 text-xl font-bold text-foreground">Invalid link</h1>
         <p className="text-sm text-muted-foreground">
-          {verified.reason === "expired"
-            ? "This approval link has expired (links last 15–30 minutes). Ask the agent to request access again."
-            : "This link is not valid. If an agent gave it to you, ask it to request access again."}
+          This link is not valid for your account. If an agent gave it to you,
+          check that you are signed in as the account the agent is connected
+          to — approval links only work for their own owner. Otherwise ask the
+          agent to request access again.
         </p>
       </Card>
     );
   }
 
-  const p = verified.payload;
-  const linkMinutes = approvalLinkMinutes(p.action);
+  const p = resolved.payload;
 
-  if (linkState === "already_granted") {
+  if (resolved.status === "already_granted") {
     return (
       <Card>
         <h1 className="mb-2 text-xl font-bold text-success-foreground">✓ Already approved</h1>
@@ -142,23 +181,16 @@ export default async function ApprovePage({
       </Card>
     );
   }
-  if (linkState === "used_inactive") {
-    return (
-      <Card>
-        <h1 className="mb-2 text-xl font-bold text-foreground">Link already used</h1>
-        <p className="text-sm text-muted-foreground">
-          This link was used, and the permission it described is not active
-          anymore — it may have been revoked, or granted under a different
-          sheet picked in Google. Nothing was changed just now. If the agent
-          still needs access, ask it to request access again for a fresh link.
-        </p>
-      </Card>
-    );
-  }
 
   async function approve(formData: FormData) {
     "use server";
     const rw = formData.get("permission") === "read_write";
+    const submitted: ApprovalSearchParams = {
+      a: (formData.get("a") as string) || undefined,
+      k: (formData.get("k") as string) || undefined,
+      r: (formData.get("r") as string) || undefined,
+      s: (formData.get("s") as string) || undefined,
+    };
     let picked: { id: string; name?: string }[] | undefined;
     const rawPicked = formData.get("picked");
     if (typeof rawPicked === "string" && rawPicked) {
@@ -167,19 +199,20 @@ export default async function ApprovePage({
         if (Array.isArray(parsed)) picked = parsed as { id: string; name?: string }[];
       } catch { /* malformed picked payload → treated as no pick info */ }
     }
-    const result = await approveMagicLink(formData.get("token") as string, rw, picked);
+    const q = linkQuery(submitted);
+    const result = await approveMagicLink(submitted, rw, picked);
     if (result.ok) {
       if (result.needsSheetsGrant) {
         // Fallback only (verification was inconclusive at page load): the
         // rule exists but Google can't reach the sheet — finish in recovery.
-        const q = new URLSearchParams({ sid: result.needsSheetsGrant.spreadsheetId, from: "approval" });
-        if (result.needsSheetsGrant.resourceName) q.set("name", result.needsSheetsGrant.resourceName);
-        redirect(`/dashboard/sheets-setup?${q.toString()}`);
+        const s = new URLSearchParams({ sid: result.needsSheetsGrant.spreadsheetId, from: "approval" });
+        if (result.needsSheetsGrant.resourceName) s.set("name", result.needsSheetsGrant.resourceName);
+        redirect(`/dashboard/sheets-setup?${s.toString()}`);
       }
       if (result.needsDocsGrant) {
-        const q = new URLSearchParams({ did: result.needsDocsGrant.documentId, from: "approval" });
-        if (result.needsDocsGrant.resourceName) q.set("name", result.needsDocsGrant.resourceName);
-        redirect(`/dashboard/docs-setup?${q.toString()}`);
+        const s = new URLSearchParams({ did: result.needsDocsGrant.documentId, from: "approval" });
+        if (result.needsDocsGrant.resourceName) s.set("name", result.needsDocsGrant.resourceName);
+        redirect(`/dashboard/docs-setup?${s.toString()}`);
       }
       const settle = result.grantedSpreadsheetId
         ? `&sid=${encodeURIComponent(result.grantedSpreadsheetId)}`
@@ -189,14 +222,13 @@ export default async function ApprovePage({
       redirect(`/dashboard/approve?result=ok&message=${encodeURIComponent(result.description)}${settle}`);
     }
     if (result.retryable) {
-      // The link was not consumed — return to the LIVE approve page (token
-      // intact) with an inline notice, never to the token-less error card.
-      redirect(`/dashboard/approve?token=${encodeURIComponent(formData.get("token") as string)}&notice=${encodeURIComponent(result.reason)}`);
+      // Nothing was written — return to the LIVE approve page (link intact)
+      // with an inline notice, never to a parameter-less error card.
+      redirect(`/dashboard/approve?${q}&notice=${encodeURIComponent(result.reason)}`);
     }
-    // Even terminal-looking failures carry the token so the error card can
-    // offer "Try again" — re-opening re-verifies and renders the true state
-    // (fresh / already approved / used / expired), so it is always safe.
-    redirect(`/dashboard/approve?result=error&message=${encodeURIComponent(result.reason)}&token=${encodeURIComponent(formData.get("token") as string)}`);
+    // Even terminal-looking failures carry the link so the error card can
+    // offer "Try again" — re-opening re-verifies and renders the true state.
+    redirect(`/dashboard/approve?result=error&message=${encodeURIComponent(result.reason)}&${q}`);
   }
 
   const isSheets = (p.action === "sheets_expose" || p.action === "sheets_write") && p.spreadsheetId;
@@ -218,7 +250,7 @@ export default async function ApprovePage({
       )}
       {isSheets || isDocs ? (
         <FileApprovalFlow
-          token={token}
+          link={link}
           kind={isSheets ? "sheet" : "doc"}
           fileId={(isSheets ? p.spreadsheetId : p.documentId)!}
           resourceName={p.resourceName || null}
@@ -227,13 +259,17 @@ export default async function ApprovePage({
         />
       ) : (
         <form action={approve} className="flex flex-col gap-4">
-          <input type="hidden" name="token" value={token} />
+          <input type="hidden" name="a" value={link.a} />
+          <input type="hidden" name="k" value={link.k ?? ""} />
+          <input type="hidden" name="r" value={link.r ?? ""} />
+          <input type="hidden" name="s" value={link.s} />
           <ApproveSubmitButton />
         </form>
       )}
       <p className="mt-4 text-xs text-subtle">
-        Single-use link · expires {linkMinutes} minutes after it was created · grants
-        only what is shown above, scoped to the requesting agent&apos;s profile.
+        This link grants only what is shown above, scoped to the requesting
+        agent&apos;s profile. It stays valid until you approve — you can review
+        or remove the grant any time from your dashboard rules.
       </p>
     </Card>
   );

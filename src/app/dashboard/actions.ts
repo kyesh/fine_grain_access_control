@@ -8,9 +8,28 @@ import { syncDefaultProfileDelegatedAccess } from "@/db/defaultProfile";
 import { currentUser } from "@clerk/nextjs/server";
 import { revalidatePath } from "next/cache";
 import { validateRulePattern, patternKind, assertStorablePattern } from "@/lib/rulePatterns";
+import type { ApprovalSearchParams, ApprovalPayload } from "@/lib/approvalLinks";
 import * as jose from "jose";
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
+
+/**
+ * getDbUser() throws for two reasons a PUBLIC-facing page must not 500 on:
+ * signed out ("Unauthorized"), and Clerk-authenticated but with no users row
+ * yet ("User not found in DB" — a bystander who has a Clerk session but has
+ * never visited the dashboard, which is what auto-provisions the row).
+ *
+ * Approval links are shareable by nature, so both cases are reachable by
+ * anyone who receives a leaked link. QA 2026-08-26 caught the second one as an
+ * unhandled 500 on /dashboard/approve.
+ */
+async function tryGetDbUser() {
+  try {
+    return await getDbUser();
+  } catch {
+    return null;
+  }
+}
 
 async function getDbUser() {
   const user = await currentUser();
@@ -756,10 +775,10 @@ export type MagicApprovalResult =
   | {
       ok: false;
       reason: string;
-      /** The link was NOT consumed and the user can retry from the same
-       * page (e.g. drive.file propagation lag on a just-picked sheet). The
-       * approve page must return to the live token URL with this notice —
-       * never to the token-less "Approval failed" dead end (a user hit
+      /** Nothing was written and the user can retry from the same page
+       * (e.g. drive.file propagation lag on a just-picked sheet). The
+       * approve page must return to the live link URL with this notice —
+       * never to a parameter-less "Approval failed" dead end (a user hit
        * exactly that on 2026-08-19: "the link is still valid" on a page
        * that had lost the link). */
       retryable?: boolean;
@@ -767,11 +786,13 @@ export type MagicApprovalResult =
 
 /**
  * Is the grant a magic-link payload describes currently active for its key?
- * Powers idempotent link re-use: a consumed link whose grant still stands is
- * a success, not an error (rage-click evidence, 2026-08-17: a user hit the
- * hard single-use wall seconds after approving a sibling link and churned).
- * A consumed link whose grant is gone stays refused — silently re-granting
- * revoked permissions is the replay attack single-use exists to prevent.
+ *
+ * Since single-use was retired (2026-08-25) this is the ONLY replay guard:
+ * re-approving an already-active grant writes nothing and reports success,
+ * so a double submit cannot duplicate a rule. Re-approving after the grant
+ * was REVOKED deliberately re-grants — the URL is permanent by design, and
+ * doing so requires the owner's session plus an explicit click on a page
+ * naming the grant, the same bar as re-adding the rule in the dashboard.
  */
 async function grantActiveForApproval(
   p: { action: string; userId: string; recipient?: string; spreadsheetId?: string; documentId?: string },
@@ -833,22 +854,28 @@ async function grantActiveForApproval(
 
 /**
  * Pre-flight state of an approval link, so the approve page can render the
- * truth at load time instead of letting the user click into an error:
- * fresh | already_granted (used, grant still active) | used_inactive (used,
- * grant revoked or never written) | expired | invalid.
+ * truth at load time instead of letting the user click into an error.
+ *
+ * Collapsed from five states to three on 2026-08-25. With links no longer
+ * single-use or expiring, "used" is neither knowable nor meaningful — the
+ * only question that matters is whether the grant it describes is ALREADY
+ * ACTIVE. `used_inactive` and `expired` are gone, and with them both dead
+ * ends the launch cohort rage-clicked.
  */
-export async function approvalLinkStatus(token: string): Promise<
-  "fresh" | "already_granted" | "used_inactive" | "expired" | "invalid"
+export async function resolveApprovalLink(params: ApprovalSearchParams): Promise<
+  | { status: "invalid" }
+  | { status: "fresh" | "already_granted"; payload: ApprovalPayload }
 > {
-  const { verifyApprovalToken } = await import("@/lib/approvalLinks");
-  const { approvalConsumptions } = await import("@/db/schema");
-  const verified = await verifyApprovalToken(token);
-  if (!verified.ok) return verified.reason;
+  const { verifyApprovalParams } = await import("@/lib/approvalLinks");
+  // A visitor with no FGAC account (or none yet) is not the owner of any link,
+  // so this is exactly the "invalid" case — never a 500.
+  const dbUser = await tryGetDbUser();
+  if (!dbUser) return { status: "invalid" };
+  const verified = await verifyApprovalParams(dbUser.id, params);
+  if (!verified.ok) return { status: "invalid" };
   const p = verified.payload;
-  const used = await db.select().from(approvalConsumptions)
-    .where(eq(approvalConsumptions.jti, p.jti)).limit(1);
-  if (used.length === 0) return "fresh";
-  return (await grantActiveForApproval(p, p.proxyKeyId)) ? "already_granted" : "used_inactive";
+  const active = await grantActiveForApproval(p, p.proxyKeyId);
+  return { status: active ? "already_granted" : "fresh", payload: p };
 }
 
 /**
@@ -870,17 +897,16 @@ async function applyFileGrantApproval(opts: {
   kind: "sheet" | "doc";
   dbUser: { id: string; clerkUserId: string };
   key: { id: string };
-  p: { jti: string; action: string; resourceName?: string };
+  p: { requestId: string; action: string; resourceName?: string };
   fileId: string;
   readWrite: boolean;
   picked?: { id: string; name?: string }[];
-  consume: () => Promise<boolean>;
-  alreadyUsed: () => Promise<MagicApprovalResult>;
   describe: () => string;
 }): Promise<MagicApprovalResult> {
-  const { kind, dbUser, key, p, fileId, readWrite, picked, consume, alreadyUsed, describe } = opts;
+  const { kind, dbUser, key, p, fileId, readWrite, picked, describe } = opts;
   const { DRIVE_FILE_KINDS } = await import("@/lib/driveFileKinds");
   const { verifyFileGrant, getOwnerGoogleToken } = await import("@/lib/driveFileGrantCheck");
+  const { markApprovalRequestApproved } = await import("@/lib/approvalRequests");
   const { captureServerEvent } = await import("@/lib/posthogServer");
   const d = DRIVE_FILE_KINDS[kind];
   // Kind-specific analytics/copy: sheets keeps its historical event and prop
@@ -934,15 +960,15 @@ async function applyFileGrantApproval(opts: {
         reason: `Google hasn't finished sharing the picked ${short}(s) with FGAC yet. Wait a few seconds and pick again — this link is still valid.`,
       };
     }
-    if (!(await consume())) return await alreadyUsed();
     for (const v of verified) await insertFileRule(v.id, v.name);
 
     const substituted = !verified.some(v => v.id === fileId);
     captureServerEvent(dbUser.clerkUserId, verificationEvent, {
-      result: "ok", via: "magic_link", [idProp]: verified[0].id, link_id: p.jti,
+      result: "ok", via: "magic_link", [idProp]: verified[0].id, request_id: p.requestId,
     });
+    await markApprovalRequestApproved(p.requestId);
     captureServerEvent(dbUser.clerkUserId, "approval_link_approved", {
-      action: p.action, substituted, granted_count: verified.length, link_id: p.jti,
+      action: p.action, substituted, granted_count: verified.length, request_id: p.requestId,
     });
     revalidatePath("/dashboard");
     const names = verified.map(v => v.name || v.id).join(", ");
@@ -960,7 +986,6 @@ async function applyFileGrantApproval(opts: {
   // the Google half, and route to the recovery page when it's missing —
   // never claim "retry now" for a file Google can't reach (the
   // approve→retry→404 dead end the 2026-08 launch cohort churned on).
-  if (!(await consume())) return await alreadyUsed();
   await insertFileRule(fileId, p.resourceName || null);
   const grant = googleToken
     ? await verifyFileGrant(kind, googleToken, fileId)
@@ -969,10 +994,11 @@ async function applyFileGrantApproval(opts: {
     result: grant.state,
     via: "magic_link",
     [idProp]: fileId,
-    link_id: p.jti,
+    request_id: p.requestId,
   });
   if (grant.state === "missing") {
-    captureServerEvent(dbUser.clerkUserId, "approval_link_approved", { action: p.action, link_id: p.jti });
+    await markApprovalRequestApproved(p.requestId);
+    captureServerEvent(dbUser.clerkUserId, "approval_link_approved", { action: p.action, request_id: p.requestId });
     revalidatePath("/dashboard");
     return {
       ok: true,
@@ -982,46 +1008,61 @@ async function applyFileGrantApproval(opts: {
         : { needsDocsGrant: { documentId: fileId, resourceName: p.resourceName || undefined } }),
     };
   }
-  captureServerEvent(dbUser.clerkUserId, "approval_link_approved", { action: p.action, link_id: p.jti });
+  await markApprovalRequestApproved(p.requestId);
+  captureServerEvent(dbUser.clerkUserId, "approval_link_approved", { action: p.action, request_id: p.requestId });
   revalidatePath("/dashboard");
   return grantedResult(fileId, describe());
 }
 
 /**
- * Consume a signed approval link and apply exactly the grant it describes.
- * Security gates, in order: valid signature + not expired; the SIGNED-IN user
- * is the user the token was minted for; the key belongs to them and is live;
- * single-use (jti recorded in approval_consumptions — the PK makes replays
- * impossible even under race).
+ * Verify a deterministic approval link and apply exactly the grant it
+ * describes.
+ *
+ * Security gates, in order:
+ *   1. HMAC recomputed with the SIGNED-IN user — a link authored for anyone
+ *      else fails to verify, which is what binds the owner without putting a
+ *      user id in the URL.
+ *   2. The proxy key is looked up LIVE, scoped to that user and not revoked.
+ *      This is the real authorization; the signature only proves FGAC
+ *      authored the URL.
+ *
+ * There is no expiry gate and no single-use gate (both retired 2026-08-25).
+ * Replay safety now comes from grant-level idempotency below: if the grant is
+ * already active, nothing is written and success is reported. Re-approving
+ * after a REVOCATION deliberately re-grants — the URL is permanent by design,
+ * and doing so needs the owner's session plus an explicit click.
  */
 export async function approveMagicLink(
-  token: string,
+  params: ApprovalSearchParams,
   sheetsWriteChoice?: boolean,
   /** Sheets the user just picked in the Google Picker (picker-first flow).
    * Client-supplied and therefore untrusted: rules are created only for
    * picked ids that verify against Google with the owner's token. */
   pickedSheets?: { id: string; name?: string }[],
 ): Promise<MagicApprovalResult> {
-  const { verifyApprovalToken, describeApproval } = await import("@/lib/approvalLinks");
-  const { approvalConsumptions } = await import("@/db/schema");
+  const { verifyApprovalParams, describeApproval } = await import("@/lib/approvalLinks");
+  const { markApprovalRequestApproved } = await import("@/lib/approvalRequests");
   const { captureServerEvent } = await import("@/lib/posthogServer");
 
-  const dbUser = await getDbUser();
+  // Must RESOLVE, not throw: a rejected server action leaves the submit button
+  // stuck on "Approving…" with no error (QA 2026-08-26, session expired
+  // while the page was open).
+  const dbUser = await tryGetDbUser();
+  if (!dbUser) {
+    return {
+      ok: false,
+      reason: "Your session has expired or this account has no FGAC profile. Sign in as the account the agent is connected to, then open the link again — it stays valid.",
+    };
+  }
 
-  const verified = await verifyApprovalToken(token);
+  const verified = await verifyApprovalParams(dbUser.id, params);
   if (!verified.ok) {
     return {
       ok: false,
-      reason: verified.reason === "expired"
-        ? "This approval link has expired (links last 15 minutes). Ask the agent to request access again."
-        : "This approval link is invalid.",
+      reason: "This approval link is not valid for your account. If an agent gave it to you, make sure you are signed in as the account the agent is connected to.",
     };
   }
   const p = verified.payload;
-
-  if (p.userId !== dbUser.id) {
-    return { ok: false, reason: "This approval link belongs to a different account." };
-  }
 
   const key = await db.select().from(proxyKeys)
     .where(and(eq(proxyKeys.id, p.proxyKeyId), eq(proxyKeys.userId, dbUser.id), isNull(proxyKeys.revokedAt)))
@@ -1030,34 +1071,24 @@ export async function approveMagicLink(
     return { ok: false, reason: "The agent profile this link targets no longer exists or was revoked." };
   }
 
-  // Single-use: the PK on jti turns a replay into a unique violation.
-  // Consumption is deferred per-branch so read-only pre-checks (Google grant
-  // verification in the picker-first sheets path) can fail WITHOUT burning
-  // the link — only a branch that is about to write rules consumes it.
-  const consume = async (): Promise<boolean> => {
-    try {
-      await db.insert(approvalConsumptions).values({ jti: p.jti, userId: dbUser.id });
-      return true;
-    } catch {
-      return false;
-    }
-  };
-  // Idempotent re-use: a replayed link whose grant still stands reports
-  // success (the agent's retry will work); only a link whose grant is gone —
-  // revoked, or never written — refuses, and says how to recover.
-  const alreadyUsed = async (): Promise<MagicApprovalResult> =>
-    (await grantActiveForApproval(p, key.id))
-      ? {
-          ok: true,
-          description: `${describeApproval(p)} — this was already approved earlier, so nothing changed. The agent can retry its request now.`,
-        }
-      : {
-          ok: false,
-          reason: "This approval link was already used, and the permission it described is not active anymore (it may have been revoked, or granted under a different sheet picked in Google). Ask the agent to request access again for a fresh link.",
-        };
+  // Grant-level idempotency, replacing single-use. Re-approving a grant that
+  // is already active writes nothing and reports success, so a double submit
+  // cannot create a duplicate rule. The effective action accounts for the
+  // read→write upgrade choice, so upgrading an existing read grant is NOT
+  // short-circuited as "already approved".
+  const wantsWrite = sheetsWriteChoice === true;
+  const effectiveAction =
+    p.action === "sheets_expose" && wantsWrite ? "sheets_write"
+      : p.action === "docs_expose" && wantsWrite ? "docs_write"
+        : p.action;
+  if (!pickedSheets?.length && await grantActiveForApproval({ ...p, action: effectiveAction }, key.id)) {
+    return {
+      ok: true,
+      description: `${describeApproval(p)} — this was already approved, so nothing changed. The agent can retry its request now.`,
+    };
+  }
 
   if (p.action === "send_whitelist" && p.recipient) {
-    if (!(await consume())) return await alreadyUsed();
     const escaped = p.recipient.replace(/[.+?^${}()|[\]\\]/g, "\\$&");
     const [rule] = await db.insert(accessRules).values({
       userId: dbUser.id,
@@ -1068,9 +1099,6 @@ export async function approveMagicLink(
     }).returning();
     await db.insert(keyRuleAssignments).values({ proxyKeyId: key.id, accessRuleId: rule.id });
   } else if (p.action === "send_all") {
-    if (!(await consume())) return await alreadyUsed();
-    // Idempotent: an already-granted key still consumes the token and reports
-    // success — the agent's retry will work either way.
     await grantSendToAnyone(dbUser.id, key.id);
   } else if ((p.action === "sheets_expose" || p.action === "sheets_write") && p.spreadsheetId) {
     return applyFileGrantApproval({
@@ -1079,7 +1107,6 @@ export async function approveMagicLink(
       fileId: p.spreadsheetId,
       readWrite: p.action === "sheets_write" || sheetsWriteChoice === true,
       picked: pickedSheets,
-      consume, alreadyUsed,
       describe: () => describeApproval(p),
     });
   } else if ((p.action === "docs_expose" || p.action === "docs_write") && p.documentId) {
@@ -1089,14 +1116,14 @@ export async function approveMagicLink(
       fileId: p.documentId,
       readWrite: p.action === "docs_write" || sheetsWriteChoice === true,
       picked: pickedSheets,
-      consume, alreadyUsed,
       describe: () => describeApproval(p),
     });
   } else {
     return { ok: false, reason: "This approval link is malformed." };
   }
 
-  captureServerEvent(dbUser.clerkUserId, "approval_link_approved", { action: p.action, link_id: p.jti });
+  await markApprovalRequestApproved(p.requestId);
+  captureServerEvent(dbUser.clerkUserId, "approval_link_approved", { action: p.action, request_id: p.requestId });
   revalidatePath("/dashboard");
   return { ok: true, description: describeApproval(p) };
 }
