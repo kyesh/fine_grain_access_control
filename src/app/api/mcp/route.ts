@@ -498,9 +498,16 @@ const RATE_LIMIT_REASONS = new Set([
   'quotaExceeded', 'sharingRateLimitExceeded',
 ]);
 
+/**
+ * 403s that genuinely mean the grant is wrong. Deliberately NOT including
+ * Google's generic `forbidden`: it appears for several unrelated conditions,
+ * so claiming "retrying will NOT fix it" for it would repeat the
+ * over-confident assertion this branching exists to remove. It falls through
+ * to the hedged default instead.
+ */
 const SCOPE_REASONS = new Set([
   'insufficientPermissions', 'ACCESS_TOKEN_SCOPE_INSUFFICIENT',
-  'insufficientFilePermissions', 'forbidden',
+  'insufficientFilePermissions',
 ]);
 
 function describe403(detail: string, targetEmail: string, r: GoogleErrorReason): string {
