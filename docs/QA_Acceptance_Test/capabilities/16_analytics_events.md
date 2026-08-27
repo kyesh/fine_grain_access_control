@@ -69,6 +69,39 @@ attributable to it.
   `spreadsheets`, `documents`, or the passthrough family); denied events
   carry `denial_code` instead.
 
+### A10: Google failure reason and account-resolution reason are recorded
+- Inspect `$mcp_tool_call` events from this run whose `outcome` is `error` or
+  `failed`.
+- **Expected**:
+  - Every `outcome=error` event carries `error_status`. Events whose Google
+    response body included an error reason additionally carry `error_reason`
+    (Google's `error.errors[0].reason`, e.g. `rateLimitExceeded`,
+    `insufficientPermissions`, `domainPolicy`) and, when present,
+    `error_domain` (e.g. `usageLimits`). Absent reasons are legitimate — some
+    Google errors carry no `errors[]` — so assert "present when the body had
+    one", not "always present".
+  - No `error_reason` / `error_domain` value contains an email, message id,
+    spreadsheet id, or any other identifier: these must only ever be Google's
+    enum strings.
+  - Every `outcome=failed` event produced by account/token resolution carries
+    `failure_reason`, one of `no_proxy_key`, `no_accessible_accounts`,
+    `account_not_permitted`, `google_token_unavailable`. Capability 03
+    (multi-email scoping) and 07 (key lifecycle) generate the
+    `account_not_permitted` and `no_proxy_key` cases respectively.
+  - `outcome=failed` events must still have `$mcp_is_error = false`. These
+    are deliberately `textResult`, not `errorResult` — promoting them would
+    move them into the error field Anthropic's Connector Directory reads. A
+    run where `$mcp_is_error` is true for a `failed` outcome is a regression,
+    not a pass.
+  - A `gmail_get_attachment` or `gmail_read` event with `error_status = 404`
+    carries `gmail_404_site` (`message` or `attachment`). `attachment` means
+    the parent message read succeeded and only the attachment id was stale.
+
+> **Currently blocked**: like every assertion in this capability, A10 needs
+> `POSTHOG_PERSONAL_API_KEY` (`phx_…`, Query:Read). As of 2026-08-26 it is
+> unprovisioned in every path — `npm run env:check` reports the gap and the
+> remediation. Record A10 as `blocked`, not `pass`, until the key exists.
+
 ### A1: Canonical tool-call events arrive with tool names
 - Run: `npx tsx scripts/qa-posthog-events.ts --event '$mcp_tool_call' --since <run window> --environment <tier>`
 - **Expected**: `row_count` ≥ the number of MCP tool calls this run made;
