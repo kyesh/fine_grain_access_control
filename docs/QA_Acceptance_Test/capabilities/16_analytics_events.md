@@ -200,3 +200,43 @@ attributable to it.
 - **Expected**: ≥ 1 row whose `video_id` matches the embed and whose `page`
   is `/` (or the use-case page); exactly one event per video per page load
   regardless of subsequent pause/resume. Headless environments `skip`.
+
+### A10: The approval funnel joins on a deterministic request_id
+- Trigger the same denial three times (capability 14 A12), then approve the
+  link once. Query the three approval events for the affected user:
+  `SELECT event, properties.request_id, properties.action, count() FROM events
+   WHERE event LIKE 'approval_link_%' AND timestamp >= now() - INTERVAL 1 HOUR
+   GROUP BY 1,2,3`
+- **Expected**: All three mint attempts carry the **same** `request_id`, and
+  the `approval_link_opened` / `approval_link_approved` rows carry that same
+  id — a single request joins across all three stages. `uniq(request_id)` = 1
+  while `count()` on minted = 3
+- **Regression**: before 2026-08-25 `link_id` was a per-mint JWT `jti`, so
+  retries were indistinguishable from fresh demand. That is what made a funnel
+  converting near 58% report as 31%
+
+### A11: Mint events count attempts, not requests
+- From the same three denials, inspect `mint_count` on the minted events and
+  the `approval_requests` row
+- **Expected**: `approval_link_minted` fires **once per attempt** (3 events),
+  and the `approval_requests` row for that `request_id` has `mint_count` = 3
+  with one `first_minted_at`. Demand (rows) stays separable from retry
+  pressure (`mint_count`) — a funnel that collapses retries into one event
+  would lose the retry signal entirely
+
+### A12: Approval events carry no raw customer identifiers
+- Inspect the properties of every `approval_link_*` event from the run
+- **Expected**: `target_hash` is present for targeted actions and is a hash —
+  it must NOT equal, contain, or reveal the spreadsheet id, document id, or
+  recipient address. No raw file id, recipient address, or FGAC user id
+  appears in any approval-event property, and none appears in the approval URL
+
+### A13: Approve-page opens distinguish agents from people
+- Open an approval link in the browser, then fetch the same URL with a
+  non-browser user agent (an authenticated agent-style client)
+- **Expected**: Both produce `approval_link_opened`; the browser open has
+  `agent_driven: false` and the agent-style fetch has `agent_driven: true`
+- **Why**: the event is captured server-side and carries no browser UA of its
+  own, so every open previously looked identical. ~23% of production
+  approve-page loads were an AI agent rather than a person, which meant
+  "opened" systematically overstated human reach. Report approvals, not opens

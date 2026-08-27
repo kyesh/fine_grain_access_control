@@ -32,14 +32,44 @@ export const proxyKeys = pgTable('proxy_keys', {
   createdAt: timestamp('created_at').defaultNow().notNull(),
 });
 
-// ─── Approval Link Consumptions ─────────────────────────────────────────────
-// Single-use enforcement for signed magic approval links (connector-growth
-// Phase C). Links are stateless JWTs; consuming one records its jti here, and
-// the primary key makes a second consumption impossible.
+// ─── Approval Link Consumptions (DEPRECATED) ────────────────────────────────
+// Single-use enforcement for the retired JWT approval links. Nothing reads or
+// writes this table since 2026-08-25 (links became deterministic and are no
+// longer single-use), but it is deliberately NOT dropped in the same change
+// that stops using it: a rollback of that deploy would need it to exist.
+// Drop it in a follow-up migration once the redesign is confirmed in
+// production. Kept in the schema so drizzle does not generate a drop.
 export const approvalConsumptions = pgTable('approval_consumptions', {
   jti: text('jti').primaryKey(),
   userId: uuid('user_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
   consumedAt: timestamp('consumed_at').defaultNow().notNull(),
+});
+
+// ─── Approval Requests ──────────────────────────────────────────────────────
+// One row per approval REQUEST, keyed by the deterministic request_id from
+// approvalLinks.ts. Replaced approval_consumptions (single-use jti tracking)
+// on 2026-08-25 when links became deterministic and permanent.
+//
+// This table is the unit of analysis the old telemetry lacked. Because
+// request_id is stable across retries, `mintCount` separates DEMAND (one row)
+// from RETRY PRESSURE (mintCount), which link-level counting conflated —
+// that conflation is what made a funnel converting near 58% report as 31%.
+// `openedAt` makes "minted but never opened" answerable in SQL without
+// depending on the analytics pipeline.
+//
+// targetHash is hashed, never the raw id: spreadsheet ids, document ids, and
+// recipient addresses are customer data.
+export const approvalRequests = pgTable('approval_requests', {
+  requestId: text('request_id').primaryKey(),
+  userId: uuid('user_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
+  proxyKeyId: uuid('proxy_key_id').references(() => proxyKeys.id, { onDelete: 'cascade' }).notNull(),
+  action: text('action').notNull(),
+  targetHash: text('target_hash'),
+  mintCount: integer('mint_count').notNull().default(1),
+  firstMintedAt: timestamp('first_minted_at').defaultNow().notNull(),
+  lastMintedAt: timestamp('last_minted_at').defaultNow().notNull(),
+  openedAt: timestamp('opened_at'),
+  approvedAt: timestamp('approved_at'),
 });
 
 // ─── Email Delegations ───────────────────────────────────────────────────────

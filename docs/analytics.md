@@ -29,12 +29,14 @@ keep internal/QA traffic out of the numbers.
 | `sign_up_started` | client (`SignUpCta.tsx`, all sign-up CTAs) | `cta_location`: nav / hero / bottom_cta |
 | `sign_up_completed` | server (Clerk webhook, `user.created`) | `$set.email` |
 | `video_played` | client (`TrackedVideoEmbed.tsx`, all Descript demo embeds) | `video_id`, `video_title`, `page` |
-| `$mcp_tool_call` | server (`/api/mcp`, every tool) | `$mcp_tool_name`, `$mcp_duration_ms`, `$mcp_is_error`, `client_id`, `client_name`, `outcome`, `account_email`, `account_delegated`; raw tools add `raw_api_kind`, `raw_api_family`, `raw_api_endpoint`, `raw_api_mutating`; failures add `error_status`, `error_reason`, `error_domain`, `failure_reason`, `gmail_404_site` |
+| `$mcp_tool_call` | server (`/api/mcp`, every tool) | `$mcp_tool_name`, `$mcp_duration_ms`, `$mcp_is_error`, `client_id`, `client_name`, `outcome`, `account_email`, `account_delegated`; raw tools add `raw_api_kind`, `raw_api_family`, `raw_api_endpoint`, `raw_api_mutating`; denials add `denial_code`, and denials carrying an approval link add `approval_request_id` (joins to the approval funnel); failures add `error_status`, `error_reason`, `error_domain`, `failure_reason`, `gmail_404_site` |
 | `proxy_request` | server (`/api/proxy/[...path]`) | `service` (gmail/sheets/drive), `method`, `status`, `outcome`, `duration_ms`, `proxy_key_id`, `account_email`, `account_delegated` |
 | `mcp_connection_created` | server (`/api/mcp` auth layer) | `connection_id`, `client_id`, `auto_attached`, `account_age_seconds` |
 | `delegation_created` | server (dashboard action) | `delegate_email`, `reactivated` |
 | `account_linked` | server (dashboard action) | `target_email`, `delegated`, `via` |
-| `approval_link_minted` | server (`/api/mcp`) | `action` |
+| `approval_link_minted` | server (`/api/mcp` — policy denial, send denial, `request_access`) | `action`, `request_id`, `target_hash`, `mint_count`, `via` (`send_denial`/`request_access`; absent for policy denials). **Fires once per mint ATTEMPT**, so `uniq(request_id)` is demand and `count()` is retry pressure |
+| `approval_link_opened` | server (approve-page load, `/dashboard/approve`) | `status` (`fresh`/`already_granted`/`invalid`), `request_id`, `action`, `agent_driven`, `user_agent` |
+| `approval_link_approved` | server (`actions.ts`, all approval paths) | `action`, `request_id`; per-file grants add `substituted` and `granted_count` |
 | `read_restriction_enforced` | server (`/api/mcp`) | `via` (tool name), `restriction` |
 | `sheets_grant_verification` | server (approve-page load via `/api/rules/verify-sheets-access`, and approval in `actions.ts`) | `result` (`ok`/`missing`/`unknown`), `via` (`link_open`/`magic_link`/`post_approval`), `spreadsheet_id` |
 | `sheets_grant_recovered` | server (`/api/rules/verify-sheets-access`) | `spreadsheet_id` |
@@ -44,6 +46,53 @@ keep internal/QA traffic out of the numbers.
 | `mcp_auth_attempt` | server (`/api/mcp` `verifyMcpAuth`) | `outcome` (`ok`/`invalid_token`/`no_token`), `client_id`, `strategy_used` (`clerk`/`direct`/`none`), `memo_hit`, `optimizations_enabled`, `success_sample_rate`, `error_class`, `kid` (on `invalid_token` only), `method`. Auth-health substrate for the JWKS/strategy optimizations. **Failures are unsampled; successes are a 1-in-20 per-request sample** — multiply `ok` by 20 for volume, valid only from the 2026-08-25 fix onward (two earlier versions sampled per-token and were biased; see docs/monitoring.md 1). `kid = 'probe'` marks our own synthetic probes, not users |
 | `agent_doc_created` | server (`/api/mcp`, raw `POST v1/documents`) | `document_id`, `auto_granted` (docs twin of `agent_sheet_created`) |
 | `connector_install_started` | server (`.well-known` OAuth discovery routes, `/api/mcp` auth layer) | `touchpoint` (`oauth_discovery`/`mcp_401`), `endpoint`, `reason` (`no_token`/`invalid_token`), `method`, `user_agent` |
+
+### The approval funnel: count REQUESTS, not links
+
+**An approval request is one `request_id`. Mint events per `request_id` are
+retries, not demand.**
+
+`request_id` is a deterministic HMAC of (user, proxy key, action, target), so
+denying the same operation repeatedly re-emits the SAME id and the same URL.
+Join `approval_link_minted` → `approval_link_opened` → `approval_link_approved`
+on it, and count `uniq(request_id)` at every stage.
+
+This is the definition the funnel lacked before 2026-08-25, and its absence was
+expensive. The old `link_id` was a per-mint JWT `jti`, so every agent retry
+produced a new id and looked like fresh unopened demand. The same 14-day window
+read as **31% approved** counted per link and **~58%** counted per request;
+`sheets_expose`, reported as the worst-converting action at 30.7%, was actually
+the best established one at 83.3% because it simply had the most retries
+(2.93 links per request). Four separate analyses produced four different
+numbers — 26%, 31%, 68%, 58% — purely from choosing different groupings.
+
+Two further cautions when reading this funnel:
+
+- **Report approvals, not opens.** `approval_link_approved` requires a form
+  submit on a page naming the grant; it is the only stage that proves a
+  deliberate human act. `approval_link_opened` only proves an authenticated
+  session rendered the page — measured against client-side pageviews, ~23% of
+  approve-page loads were an AI agent rather than a person, which is why
+  `agent_driven` now rides on the event.
+- **Send denials mint TWO requests** (`send_whitelist` and `send_all`), of
+  which a human can only ever open one. Send actions therefore carry roughly
+  double the request count of a single-option denial.
+- **Server-side events carry no browser user agent**, so PostHog labels every
+  `posthog-node` event `Automation` / `$virt_is_bot: true`. That label is a
+  capture artifact and says nothing about human involvement — do not filter on
+  it. (Control: client-side `$pageview` splits Regular/AI Agent normally.)
+
+**HogQL gotcha:** `properties.status` silently returns NULL on the `events`
+table — `status` is shadowed by a table field, so dot access resolves to the
+wrong thing. The property IS ingested; read it as
+`JSONExtractString(properties, 'status')`. Verified 2026-08-25 after the
+dot-access form made a correctly-emitted property look missing on both
+production and development events. `action`, `request_id`, `agent_driven` and
+`user_agent` are unaffected and work with dot access.
+
+`approval_requests` (Postgres) mirrors this in SQL — one row per request with
+`mint_count`, `opened_at`, and `approved_at` — so the same questions are
+answerable without the analytics pipeline.
 
 The two `sheets_grant_*` events instrument the **picker-first sheets
 approval funnel**: opening a sheets approval link verifies the Google-side

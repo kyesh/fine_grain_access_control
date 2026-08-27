@@ -2,15 +2,19 @@
 
 > Phase C of `connector-growth_v1.md`. Send and Sheets denials carry a signed
 > deep link that pre-fills the fix; the owning user approves in one click at
-> the moment of need. Links are signed, expire (15 min; sheets links 30 min —
-> their approval can include a Picker pick + first-time drive.file consent
-> round-trip), and require the owning user's session — an agent can mint the
-> request, only the human can approve. Consumption is idempotent, not
-> single-use (2026-08-19): re-opening a used link whose grant is still active
-> is a success ("Already approved"); only a used link whose grant was revoked
-> refuses, and never re-grants. Read-block denials deliberately carry NO
-> link. Sheets approvals run picker-first when Google lacks a grant for the
-> sheet — see capability 17; grant repair is capability 18 (google
+> the moment of need. Links are **signed and deterministic**: the same request
+> always produces the same URL, so a retrying agent re-emits one link rather
+> than minting a new one each time. Links **do not expire and are not
+> single-use** (2026-08-25 change). Authorization is the owning user's Clerk
+> session plus a live proxy-key ownership check — an agent can mint the
+> request, only the human can approve; the HMAC exists to prevent forgery, not
+> to authorize. Re-opening a link whose grant is still active is a success
+> ("Already approved"). Re-approving after the grant was revoked is
+> **permitted** — the URL is permanent by design, and re-granting requires the
+> owner's session plus an explicit click on a page naming the grant, the same
+> bar as re-adding the rule in the dashboard. Read-block denials deliberately
+> carry NO link. Sheets approvals run picker-first when Google lacks a grant
+> for the sheet — see capability 17; grant repair is capability 18 (google
 > reconnect).
 
 ## Assertions
@@ -38,19 +42,6 @@
   Picker pick comes first (capability 17 A2/A4). After approving Read-only,
   the retried read succeeds and a write still fails
 
-### A4: Used links are idempotent while granted, refused once revoked; links expire
-- Reuse the already-approved A2 link; then revoke the granted rule from the
-  dashboard and open the same link again; separately, open a link older than
-  its expiry window
-- **Expected**: While the grant is active, both opening and re-approving the
-  used link render "Already approved" (success tone, no button, nothing
-  written — idempotent re-use, 2026-08-19 change). After the grant is revoked,
-  the used link renders "Link already used" and never re-grants (replaying an
-  old link must not resurrect revoked permissions). The expired link is
-  rejected with a clear message. The approve page shows these states at page
-  LOAD, not after clicking Approve, and `approval_link_opened` records
-  status already_granted / used_inactive / expired accordingly
-
 ### A5: Another user's session cannot approve
 - Open a USER_A denial link in a browser session signed in as USER_B
 - **Expected**: Rejected — no rule is created on either account
@@ -74,25 +65,27 @@
   (c) `request_access`'s structured `approvalUrl` field
 - **Expected**: Each URL contains no whitespace or newline characters
   anywhere in the string, and parses to the FGAC origin with path
-  `/dashboard/approve` and a non-empty `token` query parameter
+  `/dashboard/approve` carrying a non-empty `a` (action) and `s` (signature)
+  parameter, plus `k` (proxy key) and — for every action except `send_all` —
+  `r` (target). No user id appears anywhere in the URL
 - **Regression**: 2026-08-15 tester finding — a trailing newline in the env
   base URL shipped links as `https://fgac.ai\n/dashboard/...`, breaking the
   entire approval loop
 
-### A10: Denial-minted tokens match the access level the operation needs
-- Decode the JWT payload (base64url, no verification needed) of the approval
-  link from each denied call in this matrix:
-  | Denied operation | Sheet state | Required token action |
+### A10: Denial-minted links match the access level the operation needs
+- Read the `a` (action) query parameter of the approval link from each denied
+  call in this matrix:
+  | Denied operation | Sheet state | Required `a` value |
   |---|---|---|
   | `sheets_read_range` | unexposed | `sheets_expose` |
   | `sheets_update_range` | unexposed | `sheets_write` |
   | `sheets_append_rows` | unexposed | `sheets_write` |
   | `sheets_update_range` | exposed Read Only | `sheets_write` |
   | `google_api_modify` (Sheets PUT) | unexposed | `sheets_write` |
-- **Expected**: The token's `action` claim equals the required action in
-  every row — a write denial must never mint a read-level (`sheets_expose`)
-  token, which would send the user through an approval that cannot satisfy
-  the retried operation
+- **Expected**: The link's `a` parameter equals the required action in every
+  row — a write denial must never mint a read-level (`sheets_expose`) link,
+  which would send the user through an approval that cannot satisfy the
+  retried operation
 - **Regression**: 2026-08-15 tester finding — write denials minted
   `sheets_expose`, creating an approve→retry→fail loop with no signal
 
@@ -102,5 +95,37 @@
 - **Expected**: The confirmation UI states sending to ANY recipient from
   every mailbox on the profile is being granted; after approval a
   "Send to Anyone" rule (pattern `*`) is assigned to the profile;
-  `gmail_send` to arbitrary addresses succeeds; the link is single-use and
-  the grant is removable from the dashboard rules
+  `gmail_send` to arbitrary addresses succeeds; and the grant is removable
+  from the dashboard rules
+
+### A12: Repeating a denial re-emits the same URL
+- Trigger the identical denial three times in a row (e.g. call
+  `sheets_read_range` on the same unexposed spreadsheet, from the same
+  profile, three times); capture the approval URL from each response
+- **Expected**: All three URLs are **byte-identical**. A retrying agent
+  re-emits one link instead of minting a fresh one per attempt, so the user
+  sees one thing to click and `approval_link_minted` counts attempts against
+  a single stable `request_id`
+- **Regression**: 2026-08 launch cohort — every denial minted a new signed
+  token, so one access request produced ~1.45 distinct URLs on average
+  (worst observed: 17). Analytics counted those as separate unopened
+  requests, reporting a 31% approval rate for a funnel actually converting
+  near 58%
+
+### A13: Links do not expire
+- Approve a link minted well beyond the retired TTL window (>30 minutes old;
+  an hours-old or day-old link is a stronger check)
+- **Expected**: The link still resolves and approves normally. No "Link
+  expired" card renders in any path, and no denial text, approve-page footer,
+  or `request_access` response promises an expiry window
+
+### A14: Re-opening an approved link is idempotent
+- Open and approve a link, then open the very same URL again while the grant
+  is still active; then click Approve a second time
+- **Expected**: Both the re-open and the second approve render "Already
+  approved" (success tone, no destructive action) and write nothing — no
+  duplicate rule, no second grant. The state is resolved at page LOAD from
+  live grant state, not after clicking Approve
+- **Note**: This is the one property retained from the retired A4. Re-approval
+  after the grant has been **revoked** is deliberately permitted (the URL is
+  permanent by design) and is intentionally not asserted here

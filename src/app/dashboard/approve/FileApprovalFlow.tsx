@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useGooglePicker, PickedFile } from "../useGooglePicker";
 import { TrackedVideoEmbed } from "@/components/TrackedVideoEmbed";
 import { DRIVE_FILE_KINDS, type DriveFileKind } from "@/lib/driveFileKinds";
+import type { ApprovalSearchParams } from "@/lib/approvalLinks";
 
 const SHEETS_DEMO_EMBED = "https://share.descript.com/embed/Fv9pwXugLUa";
 
@@ -29,14 +30,14 @@ type FlowState =
  * what the user actually picked, never the unverifiable id.
  */
 export function FileApprovalFlow({
-  token,
+  link,
   kind,
   fileId,
   resourceName,
   level,
   approveAction,
 }: {
-  token: string;
+  link: ApprovalSearchParams;
   kind: DriveFileKind;
   fileId: string;
   resourceName: string | null;
@@ -149,7 +150,10 @@ export function FileApprovalFlow({
 
   return (
     <form action={approveAction} className="flex flex-col gap-4" data-testid={`${testPrefix}-flow-confirm`}>
-      <input type="hidden" name="token" value={token} />
+      <input type="hidden" name="a" value={link.a ?? ""} />
+      <input type="hidden" name="k" value={link.k ?? ""} />
+      <input type="hidden" name="r" value={link.r ?? ""} />
+      <input type="hidden" name="s" value={link.s ?? ""} />
       {picked && <input type="hidden" name="picked" value={JSON.stringify(picked)} />}
 
       {substituting && (

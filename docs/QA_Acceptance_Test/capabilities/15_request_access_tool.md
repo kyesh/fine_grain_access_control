@@ -36,8 +36,8 @@
 ### A7: Docs access via request_access mirrors the sheets flows
 - `request_access` with `type=docs_read` and a `documentId` (and again with
   `type=docs_write` on a Read-only doc)
-- **Expected**: Mints a single-use `docs_expose` / `docs_write` link naming
-  the document (30-minute TTL); nothing is granted until the owner approves;
+- **Expected**: Mints a `docs_expose` / `docs_write` link naming
+  the document; nothing is granted until the owner approves;
   after approval the corresponding docs call succeeds. Omitting `documentId`
   is refused with the requestable-permissions explanation.
 
@@ -48,7 +48,8 @@
   approval link is minted
 
 ### A6: request_access links obey magic-link security
-- Repeat capability 14's A4 (single-use + expiry) and A5 (wrong user) checks
+- Repeat capability 14's A5 (wrong user) and A7 (tampered link) checks
   against a link minted by `request_access`
-- **Expected**: Identical behavior — same signing, expiry, single-use, and
-  owner-session requirements
+- **Expected**: Identical behavior — same signing and owner-session
+  requirements. A link minted for one user is never approvable by another,
+  and altering any parameter invalidates the signature
