@@ -97,10 +97,21 @@ attributable to it.
     carries `gmail_404_site` (`message` or `attachment`). `attachment` means
     the parent message read succeeded and only the attachment id was stale.
 
-> **Currently blocked**: like every assertion in this capability, A10 needs
-> `POSTHOG_PERSONAL_API_KEY` (`phx_…`, Query:Read). As of 2026-08-26 it is
-> unprovisioned in every path — `npm run env:check` reports the gap and the
-> remediation. Record A10 as `blocked`, not `pass`, until the key exists.
+> **Runnable via the PostHog MCP connector** (load with `ToolSearch "posthog
+> exec"`), which is how the 2026-08-26 baseline below was measured. The
+> `scripts/qa-posthog-events.ts` path still needs `POSTHOG_PERSONAL_API_KEY`
+> (`phx_…`, Query:Read) in `.env.local`, and the `.mcp.json` server still
+> needs it in the shell env — `npm run env:check` reports both gaps. Use the
+> connector when the script path is unprovisioned; record `blocked` only if
+> neither is available.
+>
+> A10 cannot pass until the change that introduces these properties is
+> deployed — `error_reason`, `failure_reason`, and `gmail_404_site` do not
+> exist in events captured before it. Verified 2026-08-26 pre-deploy baseline
+> to compare against: Gmail failures are 68 404s (38 `gmail_get_attachment`,
+> 30 `gmail_read`), 19 403s, and 39 statusless `failed` calls. After deploy,
+> those 404s must carry `gmail_404_site` and those statusless calls must
+> carry `failure_reason`; if they do not, the instrumentation regressed.
 
 ### A1: Canonical tool-call events arrive with tool names
 - Run: `npx tsx scripts/qa-posthog-events.ts --event '$mcp_tool_call' --since <run window> --environment <tier>`
