@@ -67,9 +67,23 @@ Practical consequences:
 - **Google gets `computer` clicks, never JS clicks.** A JS click on a Google surface
   silently does nothing — that is the "the button did nothing" symptom, not a bug.
 - `computer` needs a prior `computer {action:'screenshot'}` to cache dimensions, and its
-  coordinates are in the **screenshot frame**, which is scaled from `window.innerWidth`.
-  Compute the factor (`screenshotWidth / window.innerWidth`) before converting a
-  `getBoundingClientRect()` centre into click coordinates.
+  coordinates are in the **screenshot frame**. Do NOT derive the scale as
+  `screenshotWidth / window.innerWidth` — the pane **letterboxes** the page, so the
+  canvas is larger than the rendered page and that formula over-estimates.
+  Measured 2026-08-27: viewport 1280x900, screenshot 800x562, page rendered into only
+  ~683x480 of it (grey margins right and bottom). Real scale **0.5333**, not the 0.625
+  the formula predicts — a `getBoundingClientRect()` centre converted with 0.625 lands
+  ~60px off and silently misses the target. That is the "the button did nothing"
+  symptom on Google surfaces, and it cost a whole QA pass to a needless hand-off.
+  **Calibrate instead of computing.** One click probe settles it exactly:
+
+  ```js
+  window.__probe=[]; window.addEventListener('click',
+    e => window.__probe.push({x:e.clientX, y:e.clientY, trusted:e.isTrusted}), true);
+  ```
+  then `computer {action:'left_click', coordinate:[400,300]}` and read back
+  `400/__probe[0].x`. It also re-confirms `isTrusted: true` on the spot. Or skip the
+  maths entirely and click where the target visibly is in the screenshot.
 - The Picker renders in a **cross-origin iframe**: DOM queries into it return nothing,
   so it can only be driven by coordinate via `computer`. If tiles ignore a correctly
   scaled trusted click, that is a harness regression worth reporting — fall back to
