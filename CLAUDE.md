@@ -20,7 +20,60 @@
    - the session is unattended (scheduled task / remote dispatch): `preview_start {name}` is blocked there, and a hidden pane reports 0×0 / black screenshots — DOM tools still work, but input-gesture flows need Path B;
    - any flow that silently ignores clicks in the embedded pane (Google surfaces requiring trusted gestures).
 
-   A QA pass that leaves a flow untested because the built-in browser couldn't drive it is incomplete — run it via Path B before reporting, and say which path each flow used. **Hard stop that overrides the fallback**: never push automation through a flow whose failure/retry branch mutates *shared* auth state (e.g. `useGooglePicker`'s non-verified branch destroys and recreates the Clerk Google external account on the shared dev instance). Report those and hand the single manual step to the user instead.
+   A QA pass that leaves a flow untested because the built-in browser couldn't drive it is incomplete — run it via Path B before reporting, and say which path each flow used.
+
+### Google surfaces: TRY FIRST — the hard stop is narrower than "the Picker"
+
+**Default to attempting Google flows yourself.** Handing the user a click they did not
+need to make is a failure mode too, and the automation succeeds more often than not.
+Only ONE branch is genuinely off-limits, and you can tell in advance which branch you
+are in.
+
+Decision procedure before driving a Picker/consent flow:
+
+1. **Check the scope first** — `GET /api/auth/google-picker-token` returns
+   `hasDriveFileScope`.
+   - `true` → `useGooglePicker` goes straight to step 3 and opens the Picker. No
+     reconnect, nothing shared is mutated. **Automate it.**
+   - `false` → the click enters the reconnect branch (`useGooglePicker.ts`, the
+     `!tokenData.hasDriveFileScope` case). Go to 2.
+2. **In the reconnect branch, `googleReconnect.ts` forks on the Clerk external
+   account's `verification.status`:**
+   - `'verified'` → `reauthorize()` in place. Recoverable; attempting is fine.
+   - anything else → `destroy()` then `createExternalAccount()`. **This is the only
+     hard stop.** An abandoned pass leaves the Google grant broken on the *shared* dev
+     Clerk instance for every other session on the machine — a failed attempt does not
+     merely fail, it breaks the environment.
+3. So hand off to the user **only** when `hasDriveFileScope` is false AND the external
+   account is not `verified`. Say which check produced the hand-off.
+
+### What Google counts as a real click (measured 2026-08-26)
+
+Google's surfaces gate on `event.isTrusted`. Measured against a probe element in the
+built-in browser:
+
+| how you click | `isTrusted` | coords reported | use it for |
+| --- | --- | --- | --- |
+| `computer {action:'left_click'}` (CDP `Input.dispatchMouseEvent`) | **`true`** | real | **Google surfaces** — verified working on the account chooser AND the OAuth consent "Allow" button |
+| `element.click()` | `false` | `0,0` | FGAC's own UI only |
+| `element.dispatchEvent(new MouseEvent('click'))` | `false` | as supplied | FGAC's own UI only |
+
+Practical consequences:
+
+- **Our React app accepts all three** (React does not check `isTrusted`), so a JS click
+  is the right tool for FGAC UI — especially when the pane reports 0×0 and `computer`
+  cannot see anything. Native `confirm()` is inert in the embedded pane: override
+  `window.confirm = () => true` before clicking confirm-gated controls.
+- **Google gets `computer` clicks, never JS clicks.** A JS click on a Google surface
+  silently does nothing — that is the "the button did nothing" symptom, not a bug.
+- `computer` needs a prior `computer {action:'screenshot'}` to cache dimensions, and its
+  coordinates are in the **screenshot frame**, which is scaled from `window.innerWidth`.
+  Compute the factor (`screenshotWidth / window.innerWidth`) before converting a
+  `getBoundingClientRect()` centre into click coordinates.
+- The Picker renders in a **cross-origin iframe**: DOM queries into it return nothing,
+  so it can only be driven by coordinate via `computer`. If tiles ignore a correctly
+  scaled trusted click, that is a harness regression worth reporting — fall back to
+  Path B before handing the step to the user.
 
 ## QA Subagent Architecture
 
@@ -92,11 +145,34 @@ Notes:
      QA run, or for any other account, sign-in remains the user's job.
 6. `bash scripts/qa-secrets.sh` pulls the 1Password *test account emails* only — it does
    not populate app secrets. Do not confuse the two.
-7. **Every git worktree bootstraps separately.** `.env.local`, `.qa_test_emails.json`,
-   `node_modules`, and `.vercel/` are gitignored and do NOT carry over from the main
-   clone or other worktrees. A fresh worktree needs the full bootstrap above, and a key
-   "fixed" in another worktree has not fixed it here. `npm run env:check` is the first
-   move whenever auth or DB behaves unexpectedly.
+
+   **Missing `.qa_test_emails.json` is NOT a blocker — copy it before asking.** It holds
+   only the two QA account addresses, it is identical for every checkout on this machine,
+   and it carries no database pointer or credential. So when it is absent, copy it from
+   the main clone yourself and carry on:
+
+   ```bash
+   cp ~/GitRepos/fine_grain_access_control/.qa_test_emails.json .
+   ```
+
+   Only if the main clone does not have it either does `qa-secrets.sh` (and its
+   1Password prompt, which needs the user) come into play. Stopping a QA run to ask the
+   user to run the script, when the file was sitting in the main clone the whole time,
+   has cost a full session before — check first, ask second.
+7. **Every git worktree bootstraps separately, but not everything must be re-derived.**
+   `.env.local`, `.qa_test_emails.json`, `node_modules`, and `.vercel/` are gitignored
+   and do NOT carry over automatically from the main clone or other worktrees. A fresh
+   worktree needs the full bootstrap above, and a key "fixed" in another worktree has
+   not fixed it here. `npm run env:check` is the first move whenever auth or DB behaves
+   unexpectedly.
+
+   The distinction that matters when a file is missing:
+
+   | file | copy from another checkout? |
+   | --- | --- |
+   | `.qa_test_emails.json` | **Yes** — machine-level, no DB pointer (rule 6) |
+   | `.env.local` | **Never** — carries that checkout's `neon__POSTGRES_URL`, so copying it silently points you at someone else's database branch (rule 4). Re-pull it, then `npm run db:branch` |
+   | `node_modules`, `.vercel/` | Regenerate — `npm install`, `npx vercel link` |
 8. **Paste env values into Vercel WITHOUT quotes.** A value stored as `"sk_test_…"`
    (quotes included) survives `vercel env pull` and dotenv parsing looking superficially
    fine, but the runtime value starts with a literal `"` and auth fails as if the key

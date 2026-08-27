@@ -32,7 +32,8 @@ import { captureServerEvent } from '@/lib/posthogServer';
 import { runWithToolCallProps, addToolCallProps, getToolCallProps } from '@/lib/toolCallContext';
 import { inSuccessSample, AUTH_SUCCESS_SAMPLE } from '@/lib/authSampling';
 import { ensureDefaultProfile } from '@/db/defaultProfile';
-import { mintApprovalLink, approvalLinkMinutes, type ApprovalAction } from '@/lib/approvalLinks';
+import { mintApprovalLink, type ApprovalAction } from '@/lib/approvalLinks';
+import { recordApprovalMint } from '@/lib/approvalRequests';
 import { TOOL_DEFS, toolAnnotations, type FgacToolDef } from './toolDefs';
 import {
   classifyGoogleApiCall, extractSendRecipients, sheetsApprovalAction, docsApprovalAction,
@@ -391,9 +392,11 @@ function checkSendWhitelist(rules: ApplicableRules, recipients: string[] | null)
 
 /**
  * Magic-link denial (connector-growth Phase C): policy denials that a user
- * would plausibly want to approve carry a signed, single-use, short-lived
- * link that pre-fills exactly that grant (15 min; sheets 30 — the approval
- * can include a Picker pick + consent round-trip). Explicit blocks and read
+ * would plausibly want to approve carry a signed link that pre-fills exactly
+ * that grant. The link is DETERMINISTIC — denying the same operation again
+ * re-emits the same URL rather than minting a new one — and does not expire.
+ * Every attempt is still recorded, so demand (rows in approval_requests) stays
+ * separable from retry pressure (mintCount). Explicit blocks and read
  * restrictions never get links — weakening those stays a deliberate
  * dashboard act.
  */
@@ -405,11 +408,16 @@ async function policyDenialWithLink(
 ) {
   if (!action) return textResult(message);
   try {
-    const { url, jti } = await mintApprovalLink(DASHBOARD_URL, conn.user.id, proxyKeyId, action);
-    captureServerEvent(conn.user.clerkUserId, 'approval_link_minted', { action: action.action, link_id: jti });
-    addToolCallProps({ approval_link_id: jti });
+    const { url, requestId, targetHash } = await mintApprovalLink(DASHBOARD_URL, conn.user.id, proxyKeyId, action);
+    const mintCount = await recordApprovalMint({
+      requestId, userId: conn.user.id, proxyKeyId, action: action.action, targetHash,
+    });
+    captureServerEvent(conn.user.clerkUserId, 'approval_link_minted', {
+      action: action.action, request_id: requestId, target_hash: targetHash, mint_count: mintCount,
+    });
+    addToolCallProps({ approval_request_id: requestId });
     return textResult(
-      `${message}\n👉 Share this link with the user to approve it in one click (single-use, expires in ${approvalLinkMinutes(action.action)} minutes): ${url}\n` +
+      `${message}\n👉 Share this link with the user to approve it in one click: ${url}\n` +
       AGENT_APPROVAL_PROTOCOL,
     );
   } catch (err) {
@@ -419,21 +427,27 @@ async function policyDenialWithLink(
 }
 
 /**
- * Appended to every denial that carries an approval link. Timeline analysis of
- * the 2026-08 launch cohort showed most minted links were never opened: agents
- * paraphrased the denial (dropping the URL) and retried the denied call in a
- * loop, re-minting links the user never saw. Say the quiet part out loud.
+ * Appended to every denial that carries an approval link.
+ *
+ * Originally added 2026-08-19 on the theory that agents were dropping the URL
+ * when paraphrasing. Measured afterwards, that theory did not hold: most users
+ * DO open their links, and the apparent shortfall was retry-inflated counting
+ * (see approvalLinks.ts). What the data does show is that retrying is pure
+ * waste — the same request re-emits the same URL — so the protocol now says
+ * to stop and ask the user rather than to expect a fresh link.
  */
 const AGENT_APPROVAL_PROTOCOL =
   'IMPORTANT — how to handle this: (1) Show the link above to the user VERBATIM as a clickable URL; only they can open it, and it is the only way to get access. ' +
-  '(2) Do NOT retry the denied call until the user says they approved — retrying just fails again. ' +
-  '(3) If the link expires before they open it, call request_access to mint a fresh one.';
+  '(2) Do NOT retry the denied call until the user says they approved — retrying just fails again, and re-requesting returns the SAME link. ' +
+  '(3) The link does not expire — if the user has not opened it yet, ask them directly rather than retrying.';
 
 /**
  * Send denials offer BOTH one-click options: approve just this recipient, or
  * flip the profile to "Send to Anyone" — the escape hatch for users who find
- * per-recipient whitelisting confusing. Each is its own signed single-use
- * link; only the human choosing one applies anything.
+ * per-recipient whitelisting confusing. Each is its own signed deterministic
+ * link; only the human choosing one applies anything. Note this mints TWO
+ * requests per denial, so send actions carry roughly double the request count
+ * of a single-option denial — a known accounting quirk, not duplicate demand.
  */
 async function sendDenialWithLinks(
   conn: ConnectionApproved,
@@ -447,12 +461,23 @@ async function sendDenialWithLinks(
       const one = await mintApprovalLink(DASHBOARD_URL, conn.user.id, proxyKeyId, {
         action: 'send_whitelist', recipient: denial.deniedRecipient,
       });
-      lines.push(`👉 Allow sending to '${denial.deniedRecipient}' only — share this one-click link with the user (single-use, expires in 15 minutes): ${one.url}`);
-      captureServerEvent(conn.user.clerkUserId, 'approval_link_minted', { action: 'send_whitelist', link_id: one.jti, via: 'send_denial' });
+      lines.push(`👉 Allow sending to '${denial.deniedRecipient}' only — share this one-click link with the user: ${one.url}`);
+      await recordApprovalMint({
+        requestId: one.requestId, userId: conn.user.id, proxyKeyId,
+        action: 'send_whitelist', targetHash: one.targetHash,
+      });
+      captureServerEvent(conn.user.clerkUserId, 'approval_link_minted', {
+        action: 'send_whitelist', request_id: one.requestId, target_hash: one.targetHash, via: 'send_denial',
+      });
     }
     const all = await mintApprovalLink(DASHBOARD_URL, conn.user.id, proxyKeyId, { action: 'send_all' });
-    lines.push(`👉 Or allow sending to ANY recipient from this profile — share this one-click link with the user instead (single-use, expires in 15 minutes): ${all.url}`);
-    captureServerEvent(conn.user.clerkUserId, 'approval_link_minted', { action: 'send_all', link_id: all.jti, via: 'send_denial' });
+    lines.push(`👉 Or allow sending to ANY recipient from this profile — share this one-click link with the user instead: ${all.url}`);
+    await recordApprovalMint({
+      requestId: all.requestId, userId: conn.user.id, proxyKeyId, action: 'send_all',
+    });
+    captureServerEvent(conn.user.clerkUserId, 'approval_link_minted', {
+      action: 'send_all', request_id: all.requestId, via: 'send_denial',
+    });
     lines.push('Present both options and let the user pick; "any recipient" is the convenient choice if they expect to send freely, and it stays revocable from the dashboard rules.');
     lines.push(AGENT_APPROVAL_PROTOCOL);
   } catch (err) {
@@ -1669,9 +1694,14 @@ const handler = createMcpHandler(
             : { action: 'sheets_write', spreadsheetId };
         }
 
-        const { url, jti } = await mintApprovalLink(DASHBOARD_URL, conn.user.id, conn.proxyKeyId, action);
-        captureServerEvent(conn.user.clerkUserId, 'approval_link_minted', { action: action.action, via: 'request_access', link_id: jti });
-        addToolCallProps({ approval_link_id: jti });
+        const { url, requestId, targetHash } = await mintApprovalLink(DASHBOARD_URL, conn.user.id, conn.proxyKeyId, action);
+        await recordApprovalMint({
+          requestId, userId: conn.user.id, proxyKeyId: conn.proxyKeyId, action: action.action, targetHash,
+        });
+        captureServerEvent(conn.user.clerkUserId, 'approval_link_minted', {
+          action: action.action, via: 'request_access', request_id: requestId, target_hash: targetHash,
+        });
+        addToolCallProps({ approval_request_id: requestId });
         return jsonResult({
           status: 'approval_required',
           summary: action.action === 'send_whitelist'
@@ -1680,7 +1710,7 @@ const handler = createMcpHandler(
               ? `Requesting ${type === 'docs_read' ? 'read-only' : 'read & write'} access to document ${documentId}`
               : `Requesting ${type === 'sheets_read' ? 'read-only' : 'read & write'} access to spreadsheet ${spreadsheetId}`,
           approvalUrl: url,
-          note: `Nothing has been granted. Show the approval link to the user VERBATIM as a clickable URL — it is single-use, expires in ${approvalLinkMinutes(action.action)} minutes, and only they can approve it. Do not retry the original operation until they confirm; if the link expires unused, call request_access again.`,
+          note: 'Nothing has been granted. Show the approval link to the user VERBATIM as a clickable URL — only they can approve it. The link does not expire and stays valid, so re-requesting produces the same URL rather than a new one. Do not retry the original operation until they confirm.',
         });
       }
     );

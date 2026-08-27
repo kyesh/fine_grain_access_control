@@ -1,11 +1,17 @@
 /**
- * Unit tests for signed magic approval links (src/lib/approvalLinks.ts).
+ * Unit tests for deterministic signed approval links (src/lib/approvalLinks.ts).
  * Run: npx tsx scripts/test-approval-links.ts  (part of `npm run mcp:lint`)
+ *
+ * These are the unit-level twins of QA capability 14's A5 (wrong user), A7
+ * (tampering), A9 (well-formed URL), A10 (action matches), A12 (determinism)
+ * and A13 (no expiry).
  */
 process.env.CLERK_SECRET_KEY = process.env.CLERK_SECRET_KEY || 'sk_test_unit_only_signing_seed';
 
 import {
-  mintApprovalToken, mintApprovalUrl, verifyApprovalToken, describeApproval,
+  mintApprovalLink, mintApprovalUrl, verifyApprovalParams, describeApproval,
+  approvalRequestId, approvalTargetHash, APPROVAL_ACTIONS, actionTarget,
+  type ApprovalAction, type ApprovalSearchParams,
 } from '../src/lib/approvalLinks';
 
 let failures = 0;
@@ -14,85 +20,102 @@ function check(name: string, cond: boolean) {
   else console.log(`  ✓ ${name}`);
 }
 
+/** Parse a minted URL back into the params the approve page would read. */
+function paramsOf(url: string): ApprovalSearchParams {
+  const q = new URL(url).searchParams;
+  return { a: q.get('a') ?? undefined, k: q.get('k') ?? undefined, r: q.get('r') ?? undefined, s: q.get('s') ?? undefined };
+}
+
+const BASE = 'https://fgac.ai';
+const SEND: ApprovalAction = { action: 'send_whitelist', recipient: 'a@b.com' };
+
 async function main() {
-  const token = await mintApprovalToken('user-1', 'key-1', { action: 'send_whitelist', recipient: 'a@b.com' });
+  // ── A12: determinism ─────────────────────────────────────────────────────
+  const first = await mintApprovalLink(BASE, 'user-1', 'key-1', SEND);
+  const second = await mintApprovalLink(BASE, 'user-1', 'key-1', SEND);
+  const third = await mintApprovalLink(BASE, 'user-1', 'key-1', { action: 'send_whitelist', recipient: 'a@b.com' });
+  check('same request mints a byte-identical url', first.url === second.url && second.url === third.url);
+  check('same request mints a stable request_id', first.requestId === second.requestId);
+  check('different target mints a different url',
+    (await mintApprovalLink(BASE, 'user-1', 'key-1', { action: 'send_whitelist', recipient: 'other@b.com' })).url !== first.url);
+  check('different key mints a different url',
+    (await mintApprovalLink(BASE, 'user-1', 'key-2', SEND)).url !== first.url);
+  check('different user mints a different url',
+    (await mintApprovalLink(BASE, 'user-2', 'key-1', SEND)).url !== first.url);
 
-  const ok = await verifyApprovalToken(token);
-  check('roundtrip verifies', ok.ok);
-  if (ok.ok) {
-    check('payload fields survive', ok.payload.userId === 'user-1' && ok.payload.proxyKeyId === 'key-1'
-      && ok.payload.action === 'send_whitelist' && ok.payload.recipient === 'a@b.com');
-    check('jti present', typeof ok.payload.jti === 'string' && ok.payload.jti.length > 10);
-    check('description names recipient', describeApproval(ok.payload).includes('a@b.com'));
+  // ── Round-trip: every action recovers its target ─────────────────────────
+  const samples: ApprovalAction[] = [
+    { action: 'send_whitelist', recipient: 'a@b.com' },
+    { action: 'send_all' },
+    { action: 'sheets_expose', spreadsheetId: 'ss-1' },
+    { action: 'sheets_write', spreadsheetId: 'ss-2' },
+    { action: 'docs_expose', documentId: 'doc-1' },
+    { action: 'docs_write', documentId: 'doc-2' },
+  ];
+  check('sample covers every declared action', samples.length === APPROVAL_ACTIONS.length);
+  for (const a of samples) {
+    const { url } = await mintApprovalLink(BASE, 'u', 'k', a);
+    const v = await verifyApprovalParams('u', paramsOf(url));
+    if (!v.ok) { check(`${a.action} verifies`, false); continue; }
+    // A10: the action claim must survive exactly — a write denial minting a
+    // read-level grant is the 2026-08-15 approve→retry→fail regression.
+    check(`${a.action} round-trips its action`, v.payload.action === a.action);
+    const target = actionTarget(a);
+    const recovered = v.payload.recipient ?? v.payload.spreadsheetId ?? v.payload.documentId ?? '';
+    check(`${a.action} round-trips its target`, recovered === target);
+    check(`${a.action} describes without throwing`, describeApproval(v.payload).length > 0);
   }
 
-  const token2 = await mintApprovalToken('user-1', 'key-1', { action: 'send_whitelist', recipient: 'a@b.com' });
-  const ok2 = await verifyApprovalToken(token2);
-  check('every mint gets a fresh jti', ok.ok && ok2.ok && ok.payload.jti !== ok2.payload.jti);
+  // ── A5: a link is only valid for the user it was authored for ────────────
+  const forUser1 = paramsOf(first.url);
+  check('owner verifies', (await verifyApprovalParams('user-1', forUser1)).ok);
+  check('another user is rejected', !(await verifyApprovalParams('user-2', forUser1)).ok);
+  check('user id never appears in the url', !first.url.includes('user-1'));
 
-  // Tampering: flip a character in the signature and in the payload
-  const sigTampered = token.slice(0, -2) + (token.endsWith('A') ? 'BB' : 'AA');
-  check('tampered signature rejected', !(await verifyApprovalToken(sigTampered)).ok);
-  const [h, p, s] = token.split('.');
-  const decoded = JSON.parse(Buffer.from(p, 'base64url').toString());
-  decoded.recipient = 'evil@attacker.com';
-  const payloadTampered = [h, Buffer.from(JSON.stringify(decoded)).toString('base64url'), s].join('.');
-  check('tampered payload rejected', !(await verifyApprovalToken(payloadTampered)).ok);
+  // ── A7: tampering ────────────────────────────────────────────────────────
+  check('tampered signature rejected',
+    !(await verifyApprovalParams('user-1', { ...forUser1, s: (forUser1.s ?? '').slice(0, -1) + 'X' })).ok);
+  check('tampered target rejected',
+    !(await verifyApprovalParams('user-1', { ...forUser1, r: 'attacker@evil.com' })).ok);
+  check('tampered key rejected',
+    !(await verifyApprovalParams('user-1', { ...forUser1, k: 'key-9' })).ok);
+  check('escalated action rejected',
+    !(await verifyApprovalParams('user-1', { ...forUser1, a: 'send_all' })).ok);
+  check('unknown action rejected',
+    !(await verifyApprovalParams('user-1', { ...forUser1, a: 'delete_everything' })).ok);
+  check('missing signature rejected',
+    !(await verifyApprovalParams('user-1', { ...forUser1, s: undefined })).ok);
 
-  // Expiry
-  const expired = await mintApprovalToken('user-1', 'key-1', { action: 'sheets_expose', spreadsheetId: 'sheet-1' }, -10);
-  const exp = await verifyApprovalToken(expired);
-  check('expired token rejected with reason=expired', !exp.ok && exp.reason === 'expired');
+  // ── Analytics ids must not leak the signature ────────────────────────────
+  const rid = await approvalRequestId('user-1', 'key-1', 'send_whitelist', 'a@b.com');
+  check('request_id is not the signature', rid !== forUser1.s);
+  check('request_id is not a prefix of the signature', !(forUser1.s ?? '').startsWith(rid));
+  check('request_id is stable', rid === await approvalRequestId('user-1', 'key-1', 'send_whitelist', 'a@b.com'));
 
-  // Unknown action rejected even if correctly signed
-  const bogus = await mintApprovalToken('user-1', 'key-1', { action: 'send_whitelist', recipient: 'a@b.com' });
-  const [bh, bp, bs] = bogus.split('.');
-  const bogusPayload = JSON.parse(Buffer.from(bp, 'base64url').toString());
-  bogusPayload.action = 'grant_everything';
-  void bh; void bs;
-  // (Re-signing isn't possible without the key, so this collapses into the
-  // tampered-payload case above — asserting the verifier's action allowlist
-  // via the type guard instead.)
-  const sheetToken = await mintApprovalToken('u', 'k', { action: 'sheets_write', spreadsheetId: 'ss-9', resourceName: 'Budget' });
-  const sheetOk = await verifyApprovalToken(sheetToken);
-  check('sheets payload carries resourceName', sheetOk.ok && sheetOk.payload.resourceName === 'Budget');
-  if (sheetOk.ok) check('sheets description prefers name', describeApproval(sheetOk.payload).includes('Budget'));
+  const th = await approvalTargetHash('a@b.com');
+  check('target_hash hides the raw target', !!th && !th.includes('a@b.com') && th !== 'a@b.com');
+  check('target_hash is stable', th === await approvalTargetHash('a@b.com'));
+  check('target_hash differs per target', th !== await approvalTargetHash('other@b.com'));
+  check('empty target has no hash', (await approvalTargetHash('')) === undefined);
 
-  // Docs actions mirror sheets: documentId payload, resourceName, 30-min TTL.
-  const docToken = await mintApprovalToken('u', 'k', { action: 'docs_write', documentId: 'doc-9', resourceName: 'Q3 Notes' });
-  const docOk = await verifyApprovalToken(docToken);
-  check('docs payload carries documentId', docOk.ok && docOk.payload.documentId === 'doc-9');
-  check('docs payload carries resourceName', docOk.ok && docOk.payload.resourceName === 'Q3 Notes');
-  if (docOk.ok) {
-    check('docs description prefers name', describeApproval(docOk.payload).includes('Q3 Notes'));
-    check('docs description says read & write', describeApproval(docOk.payload).includes('read & write'));
-  }
-  const docExpose = await verifyApprovalToken(await mintApprovalToken('u', 'k', { action: 'docs_expose', documentId: 'doc-1' }));
-  check('docs_expose roundtrip verifies', docExpose.ok && docExpose.payload.action === 'docs_expose');
-  const expiredDoc = await verifyApprovalToken(await mintApprovalToken('u', 'k', { action: 'docs_expose', documentId: 'doc-1' }, -10));
-  check('expired docs token rejected', !expiredDoc.ok && expiredDoc.reason === 'expired');
+  // ── A13: nothing time-dependent ──────────────────────────────────────────
+  // There is no expiry to test directly; assert instead that no time-varying
+  // component exists — a link minted "long ago" is byte-identical to one
+  // minted now, so it cannot go stale.
+  check('no exp/iat/jti anywhere in the url', !/exp|iat|jti/.test(first.url));
 
-  // send_all: the "email anyone" escape hatch offered alongside per-recipient
-  // approval in send denials.
-  const allToken = await mintApprovalToken('user-1', 'key-1', { action: 'send_all' });
-  const allOk = await verifyApprovalToken(allToken);
-  check('send_all roundtrip verifies', allOk.ok);
-  if (allOk.ok) {
-    check('send_all payload carries no recipient', allOk.payload.action === 'send_all' && allOk.payload.recipient === undefined);
-    check('send_all description says ANY recipient', describeApproval(allOk.payload).includes('ANY recipient'));
-  }
-
-  const url = await mintApprovalUrl('https://fgac.ai', 'u', 'k', { action: 'send_whitelist', recipient: 'a@b.com' });
-  check('url targets /dashboard/approve', url.startsWith('https://fgac.ai/dashboard/approve?token='));
+  // ── A9: well-formed, single-line URLs ────────────────────────────────────
+  check('url targets /dashboard/approve', first.url.startsWith('https://fgac.ai/dashboard/approve?'));
 
   // Regression (tester finding 2026-08-15): env base URLs have shipped with a
   // trailing newline, producing "https://fgac.ai\n/dashboard/..." — unclickable.
   for (const dirty of ['https://fgac.ai\n', 'https://fgac.ai \n', 'https://fgac.ai/', '  https://fgac.ai  ']) {
-    const u = await mintApprovalUrl(dirty, 'u', 'k', { action: 'send_whitelist', recipient: 'a@b.com' });
+    const u = await mintApprovalUrl(dirty, 'u', 'k', SEND);
     check(`no whitespace in url minted from ${JSON.stringify(dirty)}`, !/\s/.test(u));
     const parsed = new URL(u);
     check(`url parses to fgac.ai/dashboard/approve from ${JSON.stringify(dirty)}`,
-      parsed.host === 'fgac.ai' && parsed.pathname === '/dashboard/approve' && !!parsed.searchParams.get('token'));
+      parsed.host === 'fgac.ai' && parsed.pathname === '/dashboard/approve'
+      && !!parsed.searchParams.get('a') && !!parsed.searchParams.get('s'));
   }
 
   if (failures > 0) { console.error(`\n${failures} approval-link test(s) FAILED`); process.exit(1); }

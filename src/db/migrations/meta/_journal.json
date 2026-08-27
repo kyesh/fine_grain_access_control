@@ -57,6 +57,13 @@
       "when": 1786078724634,
       "tag": "0007_lush_deathbird",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1787713297323,
+      "tag": "0010_approval_requests",
+      "breakpoints": true
     }
   ]
 }
