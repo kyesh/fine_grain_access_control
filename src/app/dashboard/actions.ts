@@ -13,6 +13,24 @@ import * as jose from "jose";
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
+/**
+ * getDbUser() throws for two reasons a PUBLIC-facing page must not 500 on:
+ * signed out ("Unauthorized"), and Clerk-authenticated but with no users row
+ * yet ("User not found in DB" — a bystander who has a Clerk session but has
+ * never visited the dashboard, which is what auto-provisions the row).
+ *
+ * Approval links are shareable by nature, so both cases are reachable by
+ * anyone who receives a leaked link. QA 2026-08-26 caught the second one as an
+ * unhandled 500 on /dashboard/approve.
+ */
+async function tryGetDbUser() {
+  try {
+    return await getDbUser();
+  } catch {
+    return null;
+  }
+}
+
 async function getDbUser() {
   const user = await currentUser();
   if (!user) throw new Error("Unauthorized");
@@ -849,7 +867,10 @@ export async function resolveApprovalLink(params: ApprovalSearchParams): Promise
   | { status: "fresh" | "already_granted"; payload: ApprovalPayload }
 > {
   const { verifyApprovalParams } = await import("@/lib/approvalLinks");
-  const dbUser = await getDbUser();
+  // A visitor with no FGAC account (or none yet) is not the owner of any link,
+  // so this is exactly the "invalid" case — never a 500.
+  const dbUser = await tryGetDbUser();
+  if (!dbUser) return { status: "invalid" };
   const verified = await verifyApprovalParams(dbUser.id, params);
   if (!verified.ok) return { status: "invalid" };
   const p = verified.payload;
@@ -1023,7 +1044,16 @@ export async function approveMagicLink(
   const { markApprovalRequestApproved } = await import("@/lib/approvalRequests");
   const { captureServerEvent } = await import("@/lib/posthogServer");
 
-  const dbUser = await getDbUser();
+  // Must RESOLVE, not throw: a rejected server action leaves the submit button
+  // stuck on "Approving…" with no error (QA 2026-08-26, session expired
+  // while the page was open).
+  const dbUser = await tryGetDbUser();
+  if (!dbUser) {
+    return {
+      ok: false,
+      reason: "Your session has expired or this account has no FGAC profile. Sign in as the account the agent is connected to, then open the link again — it stays valid.",
+    };
+  }
 
   const verified = await verifyApprovalParams(dbUser.id, params);
   if (!verified.ok) {
