@@ -69,6 +69,86 @@ attributable to it.
   `spreadsheets`, `documents`, or the passthrough family); denied events
   carry `denial_code` instead.
 
+### A10: Google failure reason and account-resolution reason are recorded
+- Inspect `$mcp_tool_call` events from this run whose `outcome` is `error` or
+  `failed`.
+- **Expected**:
+  - Every `outcome=error` event carries `error_status`. Events whose Google
+    response body included an error reason additionally carry `error_reason`
+    (Google's `error.errors[0].reason`, e.g. `rateLimitExceeded`,
+    `insufficientPermissions`, `domainPolicy`) and, when present,
+    `error_domain` (e.g. `usageLimits`). Absent reasons are legitimate — some
+    Google errors carry no `errors[]` — so assert "present when the body had
+    one", not "always present".
+  - No `error_reason` / `error_domain` value contains an email, message id,
+    spreadsheet id, or any other identifier: these must only ever be Google's
+    enum strings.
+  - Every `outcome=failed` event produced by account/token resolution carries
+    `failure_reason`, one of `no_proxy_key`, `no_accessible_accounts`,
+    `account_not_permitted`, `google_token_unavailable`. Capability 03
+    (multi-email scoping) and 07 (key lifecycle) generate the
+    `account_not_permitted` and `no_proxy_key` cases respectively.
+  - `outcome=failed` events must still have `$mcp_is_error = false`. These
+    are deliberately `textResult`, not `errorResult` — promoting them would
+    move them into the error field Anthropic's Connector Directory reads. A
+    run where `$mcp_is_error` is true for a `failed` outcome is a regression,
+    not a pass.
+  - A `gmail_get_attachment` or `gmail_read` event with `error_status = 404`
+    carries `gmail_404_site` (`message` or `attachment`). `attachment` means
+    the parent message read succeeded and only the attachment id was stale.
+
+> **Runnable via the PostHog MCP connector** (load with `ToolSearch "posthog
+> exec"`), which is how the 2026-08-26 baseline below was measured. The
+> `scripts/qa-posthog-events.ts` path still needs `POSTHOG_PERSONAL_API_KEY`
+> (`phx_…`, Query:Read) in `.env.local`, and the `.mcp.json` server still
+> needs it in the shell env — `npm run env:check` reports both gaps. Use the
+> connector when the script path is unprovisioned; record `blocked` only if
+> neither is available.
+>
+> A10 does NOT require a production deploy. `captureServerEvent` tags
+> `environment: process.env.VERCEL_ENV ?? 'development'`, so a local
+> `npm run dev:qa` run emits these events under `environment='development'`
+> and a preview deploy under `'preview'`. Run it per tier.
+>
+> **Executed locally 2026-08-27** against a real Clerk OAuth MCP session
+> (`scripts/qa-dcr-setup.ts` → consent as USER_A → bearer token → `tools/call`).
+> Confirmed present on `environment='development'` events:
+>
+> | property | observed value | on |
+> | --- | --- | --- |
+> | `error_reason` / `error_domain` | `notFound` / `global` | 404s |
+> | `error_reason` / `error_domain` | `invalidArgument` / `global` | 400s |
+> | `gmail_404_site` | `message` | `gmail_read` and `gmail_get_attachment` |
+> | `failure_reason` | `account_not_permitted` | `gmail_list` |
+> | `failure_reason` | `google_token_unavailable` | `gmail_list` |
+>
+> Both `failed` rows carried `$mcp_is_error = false`, confirming the
+> textResult/errorResult decision holds at runtime. No property value
+> contained an identifier.
+>
+> **NOT covered by that run, and still open:**
+> - `gmail_404_site = 'attachment'` could not be produced synthetically (see
+>   the Gmail 400-vs-404 note below).
+> - `error_reason` on a 403 — no 403 could be induced on demand.
+> - `failure_reason` of `no_proxy_key` / `no_accessible_accounts` — these need
+>   capability 07 / 03 setup states.
+>
+> **Gmail returns 400, not 404, for a malformed id** (verified 2026-08-27):
+> a non-hex `messageId` gives `400 Invalid id value`, and a tampered
+> `attachmentId` gives `400 Invalid attachment token` — attachment ids are
+> signed tokens, so corruption fails validation rather than lookup. A valid
+> attachment token also still resolved when passed with a *different*
+> `messageId`. Consequence for triage: the production
+> `gmail_get_attachment` 404s cannot be fabricated or corrupted ids — they
+> must be well-formed, previously-valid ids that no longer resolve, which is
+> exactly the stale-id case the `attachment` remediation targets.
+>
+> Pre-deploy production baseline to compare against (2026-08-26): Gmail
+> failures are 68 404s (38 `gmail_get_attachment`, 30 `gmail_read`), 19 403s,
+> and 39 statusless `failed` calls. After deploy those 404s must carry
+> `gmail_404_site` and those statusless calls must carry `failure_reason`; if
+> they do not, the instrumentation regressed.
+
 ### A1: Canonical tool-call events arrive with tool names
 - Run: `npx tsx scripts/qa-posthog-events.ts --event '$mcp_tool_call' --since <run window> --environment <tier>`
 - **Expected**: `row_count` ≥ the number of MCP tool calls this run made;
@@ -121,7 +201,7 @@ attributable to it.
   is `/` (or the use-case page); exactly one event per video per page load
   regardless of subsequent pause/resume. Headless environments `skip`.
 
-### A10: The approval funnel joins on a deterministic request_id
+### A14: The approval funnel joins on a deterministic request_id
 - Trigger the same denial three times (capability 14 A12), then approve the
   link once. Query the three approval events for the affected user:
   `SELECT event, properties.request_id, properties.action, count() FROM events

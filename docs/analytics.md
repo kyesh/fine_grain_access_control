@@ -29,7 +29,7 @@ keep internal/QA traffic out of the numbers.
 | `sign_up_started` | client (`SignUpCta.tsx`, all sign-up CTAs) | `cta_location`: nav / hero / bottom_cta |
 | `sign_up_completed` | server (Clerk webhook, `user.created`) | `$set.email` |
 | `video_played` | client (`TrackedVideoEmbed.tsx`, all Descript demo embeds) | `video_id`, `video_title`, `page` |
-| `$mcp_tool_call` | server (`/api/mcp`, every tool) | `$mcp_tool_name`, `$mcp_duration_ms`, `$mcp_is_error`, `client_id`, `client_name`, `outcome`, `account_email`, `account_delegated`; raw tools add `raw_api_kind`, `raw_api_family`, `raw_api_endpoint`, `raw_api_mutating`; denials add `denial_code`, and denials carrying an approval link add `approval_request_id` (joins to the approval funnel) |
+| `$mcp_tool_call` | server (`/api/mcp`, every tool) | `$mcp_tool_name`, `$mcp_duration_ms`, `$mcp_is_error`, `client_id`, `client_name`, `outcome`, `account_email`, `account_delegated`; raw tools add `raw_api_kind`, `raw_api_family`, `raw_api_endpoint`, `raw_api_mutating`; denials add `denial_code`, and denials carrying an approval link add `approval_request_id` (joins to the approval funnel); failures add `error_status`, `error_reason`, `error_domain`, `failure_reason`, `gmail_404_site` |
 | `proxy_request` | server (`/api/proxy/[...path]`) | `service` (gmail/sheets/drive), `method`, `status`, `outcome`, `duration_ms`, `proxy_key_id`, `account_email`, `account_delegated` |
 | `mcp_connection_created` | server (`/api/mcp` auth layer) | `connection_id`, `client_id`, `auto_attached`, `account_age_seconds` |
 | `delegation_created` | server (dashboard action) | `delegate_email`, `reactivated` |
@@ -113,7 +113,7 @@ FGAC story is in the custom `outcome` property: `success`, `denied_by_policy`
 (🚫 FGAC rule), `pending_approval` (⏳ connection not yet approved),
 `size_capped` (⚠️ deliberate refusal to return an oversized payload — the tool
 worked; before 2026-08-24 this classified as `failed` and inflated
-`gmail_get_attachment` error-rate readings), `failed` (❌ auth/input problems),
+`gmail_get_attachment` error-rate readings), `failed` (❌ auth/input problems — these carry `failure_reason`, see below),
 `error` (upstream Google failure), `exception`.
 Unauthenticated calls attribute to the `anonymous-mcp` / `anonymous-proxy` persons.
 
@@ -133,6 +133,47 @@ Sheets failures whose matching FGAC rule is fresh also carry
 the direct measure of how often the drive.file propagation race would have
 surfaced an error to an agent. Google Docs calls carry the same trio under
 `docs_grant_age_seconds` / `docs_grace_retries` / `docs_grace_recovered`.
+
+**Google failure reason (gmail-failure-path-telemetry plan, 2026-08-26):**
+`error_status` records only the HTTP status, which Google multiplexes across
+unrelated conditions — most consequentially 403, which covers both a
+missing/revoked OAuth scope and plain throttling. Every non-OK response now
+also stamps `error_reason` (Google's `error.errors[0].reason`, e.g.
+`rateLimitExceeded`, `insufficientPermissions`, `domainPolicy`) and
+`error_domain` (`error.errors[0].domain`, e.g. `usageLimits`) when present.
+These are Google-defined enum strings, never customer data. `describeGoogleError`
+branches its 403 remediation on them: before this, the 403 text asserted the
+scope cause unconditionally and told rate-limited callers to reconnect a
+working Google account — advice that is wrong for the whole `usageLimits`
+class and that suppressed the retry which would have succeeded. **The
+`insufficientPermissions` vs `usageLimits` split in production was unmeasured
+when this shipped** (no PostHog query access at the time); `error_reason` is
+what makes it measurable.
+
+`gmail_get_attachment` issues two requests — the parent message read, then the
+attachment read — and both used to return the same generic "check the ID"
+404. `gmail_404_site` (`message` | `attachment`) records which one failed.
+`attachment` is the informative value: it means the parent read *succeeded*,
+so the `messageId` is valid and the `attachmentId` is stale — the recoverable
+case, since Gmail re-issues attachment ids when a message is re-indexed. This
+property is the direct measure of open question "what is behind the
+gmail_get_attachment 404s".
+
+**Account-resolution failures (`failure_reason`):** `resolveAccountAndToken`'s
+four failure branches (`no_proxy_key`, `no_accessible_accounts`,
+`account_not_permitted`, `google_token_unavailable`) return ❌ text without
+ever reaching Google, so they carry no `error_status` and which branch fired
+used to be unrecoverable — the `outcome='failed'` blind class.
+`failure_reason` names the branch.
+
+> **Do not "tidy" these into `errorResult`.** They stay `textResult` on
+> purpose. `classifyToolOutcome` maps them to `failed`, and `$mcp_is_error` is
+> true only for `error`/`exception` — so today they are *not* counted as
+> errors by the field Anthropic's Connector Directory reads. Promoting them
+> would import them into our published error rate purely to gain internal
+> visibility that `failure_reason` already provides for free. `failure_reason`
+> is also deliberately separate from `error_status`, which means "Google
+> returned this HTTP status"; overloading it would corrupt that series.
 
 **Response-size monitoring (google-docs-support plan v5, D7 — monitoring
 only, no caps):** every `$mcp_tool_call` event carries `response_chars` and

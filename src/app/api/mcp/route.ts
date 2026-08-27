@@ -41,6 +41,7 @@ import {
 } from './googleApiPolicy';
 import { DRIVE_FILE_KINDS, ACTIVE_DRIVE_FILE_KINDS, type DriveFileKind } from '@/lib/driveFileKinds';
 import { clerkPrimaryEmail } from '@/lib/clerkPrimaryEmail';
+import { logAndSanitize, describeErrorForLog, toolErrorResult } from '@/lib/serverErrors';
 
 /** Env URL values have shipped with trailing whitespace/newlines (pasted
  * Vercel vars); a whitespace-only value must also not win the fallback chain.
@@ -98,7 +99,7 @@ async function resolveConnection(userId: string, clientId: string | undefined): 
       user = await resolveDbUser(userId, email);
       console.log(`[MCP] Auto-created DB user for ${email}`);
     } catch (err) {
-      console.error('[MCP] Failed to auto-create user:', err);
+      console.error('[MCP] Failed to auto-create user:', describeErrorForLog(err));
       return { authorized: false, reason: 'user_not_found' };
     }
   }
@@ -492,17 +493,94 @@ type GoogleFetchResult =
   | { ok: true; data: unknown }
   | { ok: false; error: string; status?: number };
 
+/**
+ * Google's error body carries the only field that distinguishes the several
+ * unrelated conditions it multiplexes onto one HTTP status — most importantly
+ * 403, which covers both "your OAuth grant is missing a scope" and "you are
+ * being rate limited". Only the numeric status used to survive, so the 403
+ * remediation asserted the scope cause unconditionally and told rate-limited
+ * callers to tear down a working Google connection.
+ *
+ * `reason`/`domain` are Google-defined enum strings (`rateLimitExceeded`,
+ * `usageLimits`, …) and `status` is its canonical code (`PERMISSION_DENIED`)
+ * — none of them are customer data, so they are safe to put on events.
+ */
+type GoogleErrorReason = { reason?: string; domain?: string; status?: string };
+
+function extractGoogleErrorReason(data: unknown): GoogleErrorReason {
+  const err = (data as { error?: { errors?: Array<{ reason?: string; domain?: string }>; status?: string } })?.error;
+  if (!err || typeof err !== 'object') return {};
+  const first = Array.isArray(err.errors) ? err.errors[0] : undefined;
+  return {
+    reason: typeof first?.reason === 'string' ? first.reason : undefined,
+    domain: typeof first?.domain === 'string' ? first.domain : undefined,
+    status: typeof err.status === 'string' ? err.status : undefined,
+  };
+}
+
+/** 403s Google raises for throttling rather than for a missing/revoked grant. */
+const RATE_LIMIT_REASONS = new Set([
+  'rateLimitExceeded', 'userRateLimitExceeded', 'dailyLimitExceeded',
+  'quotaExceeded', 'sharingRateLimitExceeded',
+]);
+
+/**
+ * 403s that genuinely mean the grant is wrong. Deliberately NOT including
+ * Google's generic `forbidden`: it appears for several unrelated conditions,
+ * so claiming "retrying will NOT fix it" for it would repeat the
+ * over-confident assertion this branching exists to remove. It falls through
+ * to the hedged default instead.
+ */
+const SCOPE_REASONS = new Set([
+  'insufficientPermissions', 'ACCESS_TOKEN_SCOPE_INSUFFICIENT',
+  'insufficientFilePermissions',
+]);
+
+function describe403(detail: string, targetEmail: string, r: GoogleErrorReason): string {
+  const reconnect = `Ask the user to reconnect the account here: ${DASHBOARD_URL}/dashboard/accounts — then retry once after they confirm.`;
+
+  // Throttling. Reconnecting the account does nothing here, and the retry the
+  // old text suppressed is exactly the right move.
+  if ((r.reason && RATE_LIMIT_REASONS.has(r.reason)) || r.domain === 'usageLimits' || r.status === 'RESOURCE_EXHAUSTED') {
+    return `❌ Google is rate limiting this account (403 ${r.reason || 'usageLimits'})${detail ? `: ${detail}` : ''}. ` +
+      `This is temporary and NOT a permissions problem — do not ask the user to reconnect. ` +
+      `Wait a few seconds and retry; if several retries fail, slow down the rate of calls and tell the user Google is throttling.`;
+  }
+
+  // Workspace admin policy. A reconnect re-grants the same scopes and fails
+  // identically — only an admin can change this.
+  if (r.reason === 'domainPolicy') {
+    return `❌ A Google Workspace admin policy blocks this operation for '${targetEmail}' (403 domainPolicy)${detail ? `: ${detail}` : ''}. ` +
+      `STOP — do not retry and do not ask the user to reconnect; reconnecting grants the same scopes and will fail the same way. ` +
+      `Only a Workspace administrator can allow this.`;
+  }
+
+  // Genuinely a missing/revoked scope — the original text, now only on the
+  // branch where it is actually true.
+  if (r.reason && SCOPE_REASONS.has(r.reason)) {
+    return `❌ Google denied the request (403 ${r.reason})${detail ? `: ${detail}` : ''}. ` +
+      `Google's grant for '${targetEmail}' is missing a scope or was revoked — retrying will NOT fix it. ${reconnect}`;
+  }
+
+  // Reason absent or unrecognised: state both plausible causes and allow one
+  // retry, rather than asserting the scope cause the way the old text did.
+  return `❌ Google denied the request (403${r.reason ? ` ${r.reason}` : ''})${detail ? `: ${detail}` : ''}. ` +
+    `This is usually either temporary throttling or a missing/revoked OAuth scope for '${targetEmail}'. ` +
+    `Retry ONCE after a short pause — if it fails again it is the grant, not throttling, and reconnecting is the fix: ${DASHBOARD_URL}/dashboard/accounts`;
+}
+
 function describeGoogleError(status: number, data: unknown, targetEmail: string): string {
-  const detail = (data as { error?: { message?: string } })?.error?.message
-    || (typeof data === 'string' ? data.slice(0, 300) : '');
+  // Google's `message` usually ends in a period and every call site appends
+  // its own, producing "…scopes.." in agent-facing text.
+  const detail = ((data as { error?: { message?: string } })?.error?.message
+    || (typeof data === 'string' ? data.slice(0, 300) : '')).replace(/\s*\.\s*$/, '');
+  const r = extractGoogleErrorReason(data);
   switch (status) {
     case 401:
       return `❌ Google authorization expired for '${targetEmail}'. STOP — do not retry; it will keep failing. ` +
         `Ask the user to reconnect this Google account here: ${DASHBOARD_URL}/dashboard/accounts — then retry once after they confirm.`;
     case 403:
-      return `❌ Google denied the request (403): ${detail || 'insufficient permissions or missing OAuth scope for this operation'}. ` +
-        `This means Google's grant for '${targetEmail}' is missing a scope or was revoked — retrying will NOT fix it. ` +
-        `Ask the user to reconnect the account here: ${DASHBOARD_URL}/dashboard/accounts — then retry once after they confirm.`;
+      return describe403(detail, targetEmail, r);
     case 404:
       return `❌ Google resource not found (404)${detail ? `: ${detail}` : ''}. Check the ID and try again.`;
     case 429:
@@ -535,7 +613,16 @@ async function googleFetch(
   try { data = text ? JSON.parse(text) : {}; } catch { /* non-JSON body: keep text */ }
 
   if (!res.ok) {
-    addToolCallProps({ error_status: res.status });
+    // reason/domain are what make the 403 branching (and any later analysis of
+    // the 403 mix) possible at all; status alone cannot separate throttling
+    // from a revoked grant. See extractGoogleErrorReason for why these are
+    // safe to put on an event.
+    const r = extractGoogleErrorReason(data);
+    addToolCallProps({
+      error_status: res.status,
+      ...(r.reason ? { error_reason: r.reason } : {}),
+      ...(r.domain ? { error_domain: r.domain } : {}),
+    });
     return { ok: false, error: describeGoogleError(res.status, data, targetEmail), status: res.status };
   }
   return { ok: true, data };
@@ -565,6 +652,54 @@ function fileGrantErrorResult(kind: DriveFileKind, result: { error: string; stat
     );
   }
   return errorResult(result.error);
+}
+
+/**
+ * Post-policy Gmail 404. There is no drive.file grant to fix here — a 404
+ * means one of the two ids is stale, and WHICH one is knowable from the call
+ * site, because gmail_get_attachment issues two separate requests:
+ * the parent message read, then the attachment read. The generic
+ * "check the ID and try again" text could not say which id to check, so
+ * agents retried the same (messageId, attachmentId) pair unchanged — one
+ * production user did so 9 times in a single day.
+ *
+ * When the parent read SUCCEEDED and the attachment read 404s, the messageId
+ * is provably valid and the attachmentId is the bad one. Attachment ids are
+ * message-scoped (they are a path segment under the message) and Gmail
+ * re-issues them when a message is re-indexed, so an id cached from an
+ * earlier gmail_read can go stale while the message stays valid. That is
+ * recoverable — but only by re-reading the message, never by retrying the
+ * same pair. The reverse advice would be wrong for a bad messageId, which is
+ * why the two sites must not share one string.
+ *
+ * Each branch states a stop condition. The repeat-count signature says the
+ * missing piece was the stop, not the explanation.
+ */
+function gmailNotFoundResult(
+  site: 'message' | 'attachment',
+  result: { error: string; status?: number },
+  messageId: string,
+) {
+  if (result.status !== 404) return errorResult(result.error);
+  addToolCallProps({ gmail_404_site: site });
+
+  if (site === 'message') {
+    return errorResult(
+      `❌ Gmail has no message with id '${messageId}' for this account (404). ` +
+      `The id is wrong, belongs to a different account, or the message was deleted. ` +
+      `STOP — do not retry this id; it will keep failing. ` +
+      `Re-run gmail_list to get current message ids, or confirm with the user which account the message is in.`,
+    );
+  }
+
+  return errorResult(
+    `❌ The message exists, but Gmail has no attachment with that attachmentId on it (404). ` +
+    `Attachment ids belong to one specific message and Gmail re-issues them when the message is re-indexed, ` +
+    `so an id from an earlier gmail_read (or from a different message) goes stale even though the message is still fine. ` +
+    `Do NOT retry the same messageId + attachmentId pair — that is guaranteed to fail again. ` +
+    `Fix: re-run gmail_read with messageId '${messageId}', take the attachmentId from the \`attachments\` array in that fresh response, and retry ONCE with it. ` +
+    `If that also 404s, stop and tell the user the attachment is no longer retrievable.`,
+  );
 }
 
 const sheetsErrorResult = (result: { error: string; status?: number }, spreadsheetId: string) =>
@@ -823,7 +958,9 @@ function parseGmailMessage(msg: Record<string, unknown>) {
 
 type AuthInfo = { extra?: { userId?: string }; clientId?: string };
 
-async function requireApproval(authInfo: AuthInfo | undefined): Promise<ConnectionApproved | { content: Array<{ type: 'text'; text: string }> }> {
+type ApprovalDenied = { content: Array<{ type: 'text'; text: string }>; isError?: boolean };
+
+async function requireApproval(authInfo: AuthInfo | undefined): Promise<ConnectionApproved | ApprovalDenied> {
   const userId = authInfo?.extra?.userId as string | undefined;
   const clientId = authInfo?.clientId;
 
@@ -831,7 +968,18 @@ async function requireApproval(authInfo: AuthInfo | undefined): Promise<Connecti
     return textResult('❌ Authentication failed.');
   }
 
-  const result = await resolveConnection(userId, clientId);
+  // resolveConnection is the first thing every tool does and it is entirely
+  // database work — the users lookup, the agent_connections read, the bound
+  // proxy-key check. A database failure here used to escape unwrapped, and
+  // the MCP SDK printed Drizzle's message (the full SQL plus the caller's
+  // Clerk user id) straight into the tool result. Keep the detail in the log.
+  let result: ConnectionResult;
+  try {
+    result = await resolveConnection(userId, clientId);
+  } catch (err) {
+    return errorResult(logAndSanitize('Connection resolution failed', err));
+  }
+
   if (!result.authorized) {
     return textResult(pendingMessage(result));
   }
@@ -910,7 +1058,11 @@ function withToolAnalytics<R extends ToolAnalyticsResult>(
       return result;
     } catch (err) {
       track('exception');
-      throw err;
+      // Catch-all so no unhandled throw from any tool reaches the MCP SDK,
+      // which turns `error.message` into the tool result verbatim. Every
+      // library in this path — Drizzle, Clerk, jose, fetch — writes messages
+      // for developers reading logs, not for an agent's transcript.
+      return toolErrorResult(`Unhandled exception in ${tool}`, err) as unknown as R;
     }
   });
 }
@@ -918,23 +1070,48 @@ function withToolAnalytics<R extends ToolAnalyticsResult>(
 type ResolvedAccount = { targetEmail: string; token: string; proxyKeyId: string };
 type ResolvedError = { error: string };
 
+/**
+ * Account/token resolution failures are the `outcome='failed'` class: they
+ * return ❌ text via textResult, so they never reached Google and carry no
+ * error_status. Which of the four branches fired was unrecoverable from
+ * analytics.
+ *
+ * `failure_reason` is deliberately a SEPARATE property from `error_status`
+ * (which means "Google returned this HTTP status" — these calls never got
+ * that far), and these stay `textResult`, NOT `errorResult`: classifyToolOutcome
+ * maps them to `failed`, and `$mcp_is_error` is true only for `error`/
+ * `exception`. Promoting them would move them into the error field that
+ * Anthropic's Connector Directory reads — worsening our published error rate
+ * purely to gain internal visibility we can get for free here.
+ */
+type ResolveFailureReason =
+  | 'no_proxy_key'
+  | 'no_accessible_accounts'
+  | 'account_not_permitted'
+  | 'google_token_unavailable';
+
+function resolveFailure(reason: ResolveFailureReason, error: string): ResolvedError {
+  addToolCallProps({ failure_reason: reason });
+  return { error };
+}
+
 async function resolveAccountAndToken(
   conn: ConnectionApproved,
   account?: string,
 ): Promise<ResolvedAccount | ResolvedError> {
   if (!conn.proxyKeyId) {
-    return { error: '❌ No proxy key assigned to this connection. Ask the user to update it in the dashboard.' };
+    return resolveFailure('no_proxy_key', '❌ No proxy key assigned to this connection. Ask the user to update it in the dashboard.');
   }
 
   const emails = await getAccessibleEmails(conn.proxyKeyId);
   if (emails.length === 0) {
-    return { error: '❌ No email accounts are accessible with this proxy key.' };
+    return resolveFailure('no_accessible_accounts', '❌ No email accounts are accessible with this proxy key.');
   }
 
   const targetEmail = account || conn.user.email;
   const access = await checkEmailAccess(conn.proxyKeyId, targetEmail);
   if (!access) {
-    return { error: `❌ This proxy key does not have access to '${targetEmail}'. Accessible: ${emails.map(e => e.targetEmail).join(', ')}` };
+    return resolveFailure('account_not_permitted', `❌ This proxy key does not have access to '${targetEmail}'. Accessible: ${emails.map(e => e.targetEmail).join(', ')}`);
   }
 
   // Delegation observability: record which account this call resolved to, so
@@ -947,7 +1124,7 @@ async function resolveAccountAndToken(
 
   const token = await getGoogleToken(targetEmail, conn.user);
   if (!token) {
-    return { error: `❌ Could not fetch Google token for '${targetEmail}'. The account owner may need to reconnect Google.` };
+    return resolveFailure('google_token_unavailable', `❌ Could not fetch Google token for '${targetEmail}'. The account owner may need to reconnect Google.`);
   }
 
   return { targetEmail, token, proxyKeyId: conn.proxyKeyId };
@@ -1239,7 +1416,7 @@ const handler = createMcpHandler(
         // Read-time enforcement: label blacklist/whitelist + content blacklist
         const rules = await loadApplicableRules(conn.user.id, resolved.proxyKeyId, resolved.targetEmail);
         const result = await gmailFetch(resolved.token, resolved.targetEmail, `messages/${messageId}?format=${format || 'full'}`);
-        if (!result.ok) return errorResult(result.error);
+        if (!result.ok) return gmailNotFoundResult('message', result, messageId);
 
         const restriction = checkReadRestrictions(rules, result.data);
         if (restriction) {
@@ -1261,7 +1438,7 @@ const handler = createMcpHandler(
       TOOL_DEFS.gmail_get_attachment.name,
       toolConfig(TOOL_DEFS.gmail_get_attachment, {
         messageId: z.string().describe('Gmail message ID containing the attachment'),
-        attachmentId: z.string().describe('Attachment ID (from gmail_read attachments list)'),
+        attachmentId: z.string().describe('Attachment ID, taken from the `attachments` array of a gmail_read on THIS messageId. Ids are message-scoped and are re-issued when the message is re-indexed — do not reuse one saved from an earlier session; re-read the message first.'),
         account: z.string().optional().describe('Email account to use.'),
       }),
       async ({ messageId, attachmentId, account }, { authInfo }) => {
@@ -1275,7 +1452,7 @@ const handler = createMcpHandler(
         // an attachment is only as readable as the email that carries it
         const rules = await loadApplicableRules(conn.user.id, resolved.proxyKeyId, resolved.targetEmail);
         const parentResult = await gmailFetch(resolved.token, resolved.targetEmail, `messages/${messageId}?format=full`);
-        if (!parentResult.ok) return errorResult(parentResult.error);
+        if (!parentResult.ok) return gmailNotFoundResult('message', parentResult, messageId);
 
         const restriction = checkReadRestrictions(rules, parentResult.data);
         if (restriction) {
@@ -1307,7 +1484,9 @@ const handler = createMcpHandler(
           resolved.targetEmail,
           `messages/${messageId}/attachments/${attachmentId}`
         );
-        if (!attachmentResult.ok) return errorResult(attachmentResult.error);
+        // Reaching here means the parent read succeeded, so a 404 now is
+        // provably the attachmentId, not the messageId.
+        if (!attachmentResult.ok) return gmailNotFoundResult('attachment', attachmentResult, messageId);
 
         const attachment = attachmentResult.data as { size?: number; data?: string };
         // Size on EVERY outcome (port of 5aa23bd): the generic response_chars
@@ -2054,7 +2233,7 @@ const verifyMcpAuth = async (req: Request, bearerToken?: string) => {
       try {
         await resolveConnection(userId, clientId);
       } catch (err) {
-        console.error('[MCP] Eager connection creation failed:', err);
+        console.error('[MCP] Eager connection creation failed:', describeErrorForLog(err));
       }
     }
   }
