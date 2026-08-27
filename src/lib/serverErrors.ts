@@ -91,8 +91,13 @@ export function logAndSanitize(context: string, err: unknown): string {
   return clientErrorMessage();
 }
 
-/** The MCP CallToolResult shape for a sanitized server failure. */
+/** The MCP CallToolResult shape for a sanitized server failure.
+ *
+ * The index signature is what the SDK's `registerTool` callback type requires
+ * of any tool result (CallToolResult permits arbitrary extra keys); without it
+ * this type cannot be returned from a tool without a cast. */
 export interface SanitizedToolError {
+  [key: string]: unknown;
   content: Array<{ type: 'text'; text: string }>;
   isError: true;
 }
