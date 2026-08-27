@@ -537,8 +537,10 @@ function describe403(detail: string, targetEmail: string, r: GoogleErrorReason):
 }
 
 function describeGoogleError(status: number, data: unknown, targetEmail: string): string {
-  const detail = (data as { error?: { message?: string } })?.error?.message
-    || (typeof data === 'string' ? data.slice(0, 300) : '');
+  // Google's `message` usually ends in a period and every call site appends
+  // its own, producing "…scopes.." in agent-facing text.
+  const detail = ((data as { error?: { message?: string } })?.error?.message
+    || (typeof data === 'string' ? data.slice(0, 300) : '')).replace(/\s*\.\s*$/, '');
   const r = extractGoogleErrorReason(data);
   switch (status) {
     case 401:
