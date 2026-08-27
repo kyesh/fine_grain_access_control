@@ -105,13 +105,49 @@ attributable to it.
 > connector when the script path is unprovisioned; record `blocked` only if
 > neither is available.
 >
-> A10 cannot pass until the change that introduces these properties is
-> deployed — `error_reason`, `failure_reason`, and `gmail_404_site` do not
-> exist in events captured before it. Verified 2026-08-26 pre-deploy baseline
-> to compare against: Gmail failures are 68 404s (38 `gmail_get_attachment`,
-> 30 `gmail_read`), 19 403s, and 39 statusless `failed` calls. After deploy,
-> those 404s must carry `gmail_404_site` and those statusless calls must
-> carry `failure_reason`; if they do not, the instrumentation regressed.
+> A10 does NOT require a production deploy. `captureServerEvent` tags
+> `environment: process.env.VERCEL_ENV ?? 'development'`, so a local
+> `npm run dev:qa` run emits these events under `environment='development'`
+> and a preview deploy under `'preview'`. Run it per tier.
+>
+> **Executed locally 2026-08-27** against a real Clerk OAuth MCP session
+> (`scripts/qa-dcr-setup.ts` → consent as USER_A → bearer token → `tools/call`).
+> Confirmed present on `environment='development'` events:
+>
+> | property | observed value | on |
+> | --- | --- | --- |
+> | `error_reason` / `error_domain` | `notFound` / `global` | 404s |
+> | `error_reason` / `error_domain` | `invalidArgument` / `global` | 400s |
+> | `gmail_404_site` | `message` | `gmail_read` and `gmail_get_attachment` |
+> | `failure_reason` | `account_not_permitted` | `gmail_list` |
+> | `failure_reason` | `google_token_unavailable` | `gmail_list` |
+>
+> Both `failed` rows carried `$mcp_is_error = false`, confirming the
+> textResult/errorResult decision holds at runtime. No property value
+> contained an identifier.
+>
+> **NOT covered by that run, and still open:**
+> - `gmail_404_site = 'attachment'` could not be produced synthetically (see
+>   the Gmail 400-vs-404 note below).
+> - `error_reason` on a 403 — no 403 could be induced on demand.
+> - `failure_reason` of `no_proxy_key` / `no_accessible_accounts` — these need
+>   capability 07 / 03 setup states.
+>
+> **Gmail returns 400, not 404, for a malformed id** (verified 2026-08-27):
+> a non-hex `messageId` gives `400 Invalid id value`, and a tampered
+> `attachmentId` gives `400 Invalid attachment token` — attachment ids are
+> signed tokens, so corruption fails validation rather than lookup. A valid
+> attachment token also still resolved when passed with a *different*
+> `messageId`. Consequence for triage: the production
+> `gmail_get_attachment` 404s cannot be fabricated or corrupted ids — they
+> must be well-formed, previously-valid ids that no longer resolve, which is
+> exactly the stale-id case the `attachment` remediation targets.
+>
+> Pre-deploy production baseline to compare against (2026-08-26): Gmail
+> failures are 68 404s (38 `gmail_get_attachment`, 30 `gmail_read`), 19 403s,
+> and 39 statusless `failed` calls. After deploy those 404s must carry
+> `gmail_404_site` and those statusless calls must carry `failure_reason`; if
+> they do not, the instrumentation regressed.
 
 ### A1: Canonical tool-call events arrive with tool names
 - Run: `npx tsx scripts/qa-posthog-events.ts --event '$mcp_tool_call' --since <run window> --environment <tier>`
