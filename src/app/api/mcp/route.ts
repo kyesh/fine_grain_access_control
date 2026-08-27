@@ -40,6 +40,7 @@ import {
 } from './googleApiPolicy';
 import { DRIVE_FILE_KINDS, ACTIVE_DRIVE_FILE_KINDS, type DriveFileKind } from '@/lib/driveFileKinds';
 import { clerkPrimaryEmail } from '@/lib/clerkPrimaryEmail';
+import { logAndSanitize, describeErrorForLog, toolErrorResult } from '@/lib/serverErrors';
 
 /** Env URL values have shipped with trailing whitespace/newlines (pasted
  * Vercel vars); a whitespace-only value must also not win the fallback chain.
@@ -97,7 +98,7 @@ async function resolveConnection(userId: string, clientId: string | undefined): 
       user = await resolveDbUser(userId, email);
       console.log(`[MCP] Auto-created DB user for ${email}`);
     } catch (err) {
-      console.error('[MCP] Failed to auto-create user:', err);
+      console.error('[MCP] Failed to auto-create user:', describeErrorForLog(err));
       return { authorized: false, reason: 'user_not_found' };
     }
   }
@@ -798,7 +799,9 @@ function parseGmailMessage(msg: Record<string, unknown>) {
 
 type AuthInfo = { extra?: { userId?: string }; clientId?: string };
 
-async function requireApproval(authInfo: AuthInfo | undefined): Promise<ConnectionApproved | { content: Array<{ type: 'text'; text: string }> }> {
+type ApprovalDenied = { content: Array<{ type: 'text'; text: string }>; isError?: boolean };
+
+async function requireApproval(authInfo: AuthInfo | undefined): Promise<ConnectionApproved | ApprovalDenied> {
   const userId = authInfo?.extra?.userId as string | undefined;
   const clientId = authInfo?.clientId;
 
@@ -806,7 +809,18 @@ async function requireApproval(authInfo: AuthInfo | undefined): Promise<Connecti
     return textResult('❌ Authentication failed.');
   }
 
-  const result = await resolveConnection(userId, clientId);
+  // resolveConnection is the first thing every tool does and it is entirely
+  // database work — the users lookup, the agent_connections read, the bound
+  // proxy-key check. A database failure here used to escape unwrapped, and
+  // the MCP SDK printed Drizzle's message (the full SQL plus the caller's
+  // Clerk user id) straight into the tool result. Keep the detail in the log.
+  let result: ConnectionResult;
+  try {
+    result = await resolveConnection(userId, clientId);
+  } catch (err) {
+    return errorResult(logAndSanitize('Connection resolution failed', err));
+  }
+
   if (!result.authorized) {
     return textResult(pendingMessage(result));
   }
@@ -885,7 +899,11 @@ function withToolAnalytics<R extends ToolAnalyticsResult>(
       return result;
     } catch (err) {
       track('exception');
-      throw err;
+      // Catch-all so no unhandled throw from any tool reaches the MCP SDK,
+      // which turns `error.message` into the tool result verbatim. Every
+      // library in this path — Drizzle, Clerk, jose, fetch — writes messages
+      // for developers reading logs, not for an agent's transcript.
+      return toolErrorResult(`Unhandled exception in ${tool}`, err) as unknown as R;
     }
   });
 }
@@ -2024,7 +2042,7 @@ const verifyMcpAuth = async (req: Request, bearerToken?: string) => {
       try {
         await resolveConnection(userId, clientId);
       } catch (err) {
-        console.error('[MCP] Eager connection creation failed:', err);
+        console.error('[MCP] Eager connection creation failed:', describeErrorForLog(err));
       }
     }
   }
