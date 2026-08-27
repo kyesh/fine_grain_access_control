@@ -201,7 +201,7 @@ attributable to it.
   is `/` (or the use-case page); exactly one event per video per page load
   regardless of subsequent pause/resume. Headless environments `skip`.
 
-### A10: The approval funnel joins on a deterministic request_id
+### A14: The approval funnel joins on a deterministic request_id
 - Trigger the same denial three times (capability 14 A12), then approve the
   link once. Query the three approval events for the affected user:
   `SELECT event, properties.request_id, properties.action, count() FROM events
