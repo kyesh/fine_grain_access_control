@@ -13,18 +13,21 @@ import {
   metadataCorsOptionsRequestHandler,
 } from '@clerk/mcp-tools/next';
 import { captureServerEvent } from '@/lib/posthogServer';
+import { installFingerprint } from '@/lib/mcpClientSignals';
 
 const handler = authServerMetadataHandlerClerk();
 const corsHandler = metadataCorsOptionsRequestHandler();
 
 // Install-funnel measurement: fetched when a client begins the connector
-// OAuth handshake — pre-Clerk-account visibility. Anonymous rate metric
-// (recurs on reconnects). The Clerk helper handles the response itself.
+// OAuth handshake — pre-Clerk-account visibility. Rate metric per event
+// (recurs on reconnects); uniq(properties.install_fingerprint) is the
+// unique-installer count. The Clerk helper handles the response itself.
 const trackedGet = (req: Request) => {
   captureServerEvent('anonymous-mcp', 'connector_install_started', {
     touchpoint: 'oauth_discovery',
     endpoint: 'authorization-server',
     user_agent: req.headers.get('user-agent') ?? undefined,
+    install_fingerprint: installFingerprint(req),
   });
   return handler();
 };
