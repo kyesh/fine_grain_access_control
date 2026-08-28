@@ -16,7 +16,8 @@
     "prepare": "husky",
     "qa:secrets": "bash scripts/qa-secrets.sh",
     "env:check": "tsx scripts/env-check.ts",
-    "db:tombstone-orphans": "tsx scripts/tombstone-orphaned-users.ts"
+    "db:tombstone-orphans": "tsx scripts/tombstone-orphaned-users.ts",
+    "links": "tsx scripts/short-links.ts"
   },
   "dependencies": {
     "@clerk/mcp-tools": "^0.5.0",

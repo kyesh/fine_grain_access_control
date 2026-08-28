@@ -16,7 +16,7 @@ export function DirectoryCta({
   className,
   children,
 }: {
-  location: 'announcement_bar' | 'setup_step1' | 'docs_support'
+  location: 'announcement_bar' | 'setup_step1' | 'docs_support' | 'dashboard_connect'
   className: string
   children: React.ReactNode
 }) {

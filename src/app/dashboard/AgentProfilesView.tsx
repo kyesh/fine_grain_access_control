@@ -12,6 +12,7 @@ import { EditRuleButton } from './EditRuleButton';
 import { DeleteRuleButton } from './DeleteRuleButton';
 import { RuleControls } from './RuleControls';
 import { KeyControls, SecretKeyDisplay } from './KeyControls';
+import { DirectoryCta } from '../DirectoryCta';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -1277,6 +1278,16 @@ function McpConnectCard({ endpoint, proxyKey }: { endpoint: string; proxyKey: st
             {copied ? 'Copied' : 'Copy'}
           </span>
         </button>
+        <p className="text-xs leading-relaxed text-subtle">
+          Using claude.ai? Skip the endpoint and token — add FGAC.ai from the{' '}
+          <DirectoryCta
+            location="dashboard_connect"
+            className="text-primary underline underline-offset-2 hover:opacity-80"
+          >
+            Claude connectors directory
+          </DirectoryCta>{' '}
+          and it connects through the same sign-in.
+        </p>
       </div>
     </Card>
   );

@@ -245,3 +245,23 @@ export const webhookDeliveries = pgTable('webhook_deliveries', {
 }, (table) => [
   uniqueIndex('delivery_subscription_message_unique').on(table.subscriptionId, table.messageId),
 ]);
+
+// ─── Short Links (QR / flyer tracking) ──────────────────────────────────────
+// One row per printed QR / short URL variant: fgac.ai/go/<slug> 302s to
+// `destination` with UTM params appended, so PostHog can attribute downstream
+// conversion to the physical variant. Slugs are operator-managed via
+// scripts/short-links.ts (there is no UI); `destination` stays editable so a
+// printed QR can be re-pointed without reprinting. Per-scan detail lives in
+// the `flyer_scanned` PostHog event, not here — this table only keeps the
+// running counter, so no per-scan PII (IP/UA) is ever stored.
+export const shortLinks = pgTable('short_links', {
+  slug: text('slug').primaryKey(),
+  destination: text('destination').notNull(),      // absolute URL or site-relative path
+  campaign: text('campaign').notNull(),            // e.g. 'fall26'
+  variant: text('variant'),                        // e.g. headline 'u' / 's'
+  channel: text('channel'),                        // e.g. 'umich-kiosk', 'emu-boards'
+  notes: text('notes'),
+  scanCount: integer('scan_count').notNull().default(0),
+  lastScannedAt: timestamp('last_scanned_at'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+});
