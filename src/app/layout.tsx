@@ -11,6 +11,7 @@ import { PostHogProviderWrapper } from './providers';
 import SuspendedPostHogPageView from './PostHogPageView';
 import PostHogIdentify from './PostHogIdentify';
 import { SignUpCta } from './SignUpCta';
+import { DirectoryCta } from './DirectoryCta';
 import { NavLink } from './NavLink';
 
 const geist = Geist({
@@ -38,6 +39,20 @@ export default function RootLayout({
       <body className={`${geist.variable} ${jetbrainsMono.variable} font-sans h-full bg-background text-foreground antialiased`}>
         <ClerkProvider>
           <div className="min-h-full flex flex-col">
+            {/* Site-wide announcement bar — wording is deliberately
+                descriptive ("available in"): Anthropic's directory terms bar
+                partnership/endorsement claims, and there is no official badge
+                program to borrow assets from. */}
+            <DirectoryCta
+              location="announcement_bar"
+              className="block bg-primary px-4 py-2 text-center text-[13px] font-medium text-primary-foreground hover:opacity-90"
+            >
+              <span className="mr-2 rounded-full bg-primary-foreground/20 px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide">
+                New
+              </span>
+              FGAC.ai is now available in the Claude connectors directory{' '}
+              <span aria-hidden>&rarr;</span>
+            </DirectoryCta>
             <nav className="border-b border-border bg-card">
               <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
                 <div className="flex h-16 items-center justify-between gap-6">

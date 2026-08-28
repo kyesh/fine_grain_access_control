@@ -12,6 +12,7 @@ import { EditRuleButton } from './EditRuleButton';
 import { DeleteRuleButton } from './DeleteRuleButton';
 import { RuleControls } from './RuleControls';
 import { KeyControls, SecretKeyDisplay } from './KeyControls';
+import { DirectoryCta } from '../DirectoryCta';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -1277,6 +1278,16 @@ function McpConnectCard({ endpoint, proxyKey }: { endpoint: string; proxyKey: st
             {copied ? 'Copied' : 'Copy'}
           </span>
         </button>
+        <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1.5 pt-0.5">
+          <DirectoryCta
+            location="dashboard_connect"
+            className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border border-claude-border bg-claude-bg px-3 py-1 text-[12px] font-semibold text-claude hover:opacity-80"
+          >
+            <span className="h-[7px] w-[7px] rounded-full bg-claude" />
+            Connect in Claude.ai Directory
+          </DirectoryCta>
+          <span className="text-[11px] text-subtle">No endpoint or token needed.</span>
+        </div>
       </div>
     </Card>
   );
