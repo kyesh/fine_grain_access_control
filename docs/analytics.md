@@ -30,9 +30,10 @@ keep internal/QA traffic out of the numbers.
 | `directory_link_clicked` | client (`DirectoryCta.tsx`, all links to the Claude connectors directory listing) | `cta_location`: announcement_bar / setup_step1 / docs_support |
 | `sign_up_completed` | server (Clerk webhook, `user.created`) | `$set.email` |
 | `video_played` | client (`TrackedVideoEmbed.tsx`, all Descript demo embeds) | `video_id`, `video_title`, `page` |
-| `$mcp_tool_call` | server (`/api/mcp`, every tool) | `$mcp_tool_name`, `$mcp_duration_ms`, `$mcp_is_error`, `client_id`, `client_name`, `outcome`, `account_email`, `account_delegated`; raw tools add `raw_api_kind`, `raw_api_family`, `raw_api_endpoint`, `raw_api_mutating`; denials add `denial_code`, and denials carrying an approval link add `approval_request_id` (joins to the approval funnel); failures add `error_status`, `error_reason`, `error_domain`, `failure_reason`, `gmail_404_site` |
+| `$mcp_tool_call` | server (`/api/mcp`, every tool) | `$mcp_tool_name`, `$mcp_duration_ms`, `$mcp_is_error`, `client_id`, `client_name`, `user_agent`, `outcome`, `account_email`, `account_delegated`; raw tools add `raw_api_kind`, `raw_api_family`, `raw_api_endpoint`, `raw_api_mutating`; denials add `denial_code`, and denials carrying an approval link add `approval_request_id` (joins to the approval funnel); failures add `error_status`, `error_reason`, `error_domain`, `failure_reason`, `gmail_404_site` |
 | `proxy_request` | server (`/api/proxy/[...path]`) | `service` (gmail/sheets/drive), `method`, `status`, `outcome`, `duration_ms`, `proxy_key_id`, `account_email`, `account_delegated` |
-| `mcp_connection_created` | server (`/api/mcp` auth layer) | `connection_id`, `client_id`, `auto_attached`, `account_age_seconds` |
+| `mcp_connection_created` | server (`/api/mcp` auth layer) | `connection_id`, `client_id`, `client_name`/`client_version` (from MCP `initialize` clientInfo, when the creating request was one), `auto_attached`, `account_age_seconds` |
+| `mcp_client_initialize` | server (`/api/mcp` auth layer, every authenticated `initialize`) | `client_name`, `client_version` (the client's self-reported MCP clientInfo), `client_id`, `user_agent`. Once per MCP session — the substrate for the per-product split (Cowork / Claude Code / Claude.ai) |
 | `delegation_created` | server (dashboard action) | `delegate_email`, `reactivated` |
 | `account_linked` | server (dashboard action) | `target_email`, `delegated`, `via` |
 | `approval_link_minted` | server (`/api/mcp` — policy denial, send denial, `request_access`) | `action`, `request_id`, `target_hash`, `mint_count`, `via` (`send_denial`/`request_access`; absent for policy denials). **Fires once per mint ATTEMPT**, so `uniq(request_id)` is demand and `count()` is retry pressure |
@@ -46,7 +47,7 @@ keep internal/QA traffic out of the numbers.
 | `google_token_identity_fallback` | server (MCP `getGoogleToken`) | `via` (`mcp`). Fires when a key owner's own mailbox is reached through the identity-drift self-heal added in `4b551018` — the target address is not a delegation but IS one of the owner's verified Clerk addresses. Unsampled, and independent of `$mcp_tool_call`, so `uniq(person)` is exactly the drifted population still being rescued; the same call also carries `google_token_identity_fallback: true` on `$mcp_tool_call`. Expected to trend to zero as users self-heal — see docs/monitoring.md 7.4 |
 | `mcp_auth_attempt` | server (`/api/mcp` `verifyMcpAuth`) | `outcome` (`ok`/`invalid_token`/`no_token`), `client_id`, `strategy_used` (`clerk`/`direct`/`none`), `memo_hit`, `optimizations_enabled`, `success_sample_rate`, `error_class`, `kid` (on `invalid_token` only), `method`. Auth-health substrate for the JWKS/strategy optimizations. **Failures are unsampled; successes are a 1-in-20 per-request sample** — multiply `ok` by 20 for volume, valid only from the 2026-08-25 fix onward (two earlier versions sampled per-token and were biased; see docs/monitoring.md 1). `kid = 'probe'` marks our own synthetic probes, not users |
 | `agent_doc_created` | server (`/api/mcp`, raw `POST v1/documents`) | `document_id`, `auto_granted` (docs twin of `agent_sheet_created`) |
-| `connector_install_started` | server (`.well-known` OAuth discovery routes, `/api/mcp` auth layer) | `touchpoint` (`oauth_discovery`/`mcp_401`), `endpoint`, `reason` (`no_token`/`invalid_token`), `method`, `user_agent` |
+| `connector_install_started` | server (`.well-known` OAuth discovery routes, `/api/mcp` auth layer) | `touchpoint` (`oauth_discovery`/`mcp_401`), `endpoint`, `reason` (`no_token`/`invalid_token`), `method`, `user_agent`, `install_fingerprint` (salted sha256 of ip+user-agent — the uniqueness key; see funnel note below), `client_name`/`client_version` (mcp_401 only, when the unauthenticated request was an MCP `initialize`) |
 
 ### The approval funnel: count REQUESTS, not links
 
@@ -215,21 +216,37 @@ Passthrough calls additionally keep `raw_api_passthrough: true`. Raw paths
 were never captured before this change, so there is no backfill — coverage
 starts at the deploy.
 
-**`client_name` caveat:** the MCP auto-attach path stores
-`client_name = client_id` (opaque), so meaningful values currently arrive
-only from `cli-token` registrations. Capturing the DCR `client_name`
-metadata at OAuth registration is the follow-up that makes the
-per-product split (Cowork / Claude Code / Claude.ai) real.
+**`client_name`:** populated from the MCP `initialize` handshake's
+clientInfo — the auth layer parses it (the only request that carries it in
+stateless streamable HTTP; see `src/lib/mcpClientSignals.ts`), stores it on
+`agent_connections.client_name` at creation, and backfills rows still holding
+the opaque `client_id` placeholder on their next initialize. It then rides on
+every `$mcp_tool_call` (via `requireApproval`) alongside `user_agent`, and
+`mcp_client_initialize` records it once per session — this is what makes the
+per-product split (Cowork / Claude Code / Claude.ai) reproducible. Coverage
+starts at the deploy; rows for clients that never re-initialize stay opaque.
+Capturing DCR `client_name` at OAuth registration remains a possible
+supplement.
 
-**`connector_install_started` is a rate metric, not an identity metric.** It
-fires anonymously (distinct_id `anonymous-mcp`) from the only FGAC-owned
-touchpoints that exist before a Clerk account: the OAuth discovery endpoints
-(`touchpoint=oauth_discovery`, recurs on reconnects) and unauthenticated MCP
-requests (`touchpoint=mcp_401`; `reason=no_token` on POST ≈ fresh install
-attempts, `invalid_token` ≈ token-expiry noise from established clients).
-Estimate Clerk-step abandonment by comparing daily `mcp_401{no_token,POST}`
-volume against `mcp_connection_created`. Filter obvious crawlers by
-`user_agent`.
+**`connector_install_started`: count `uniq(install_fingerprint)`, never raw
+events.** It fires anonymously (distinct_id `anonymous-mcp`) from the only
+FGAC-owned touchpoints that exist before a Clerk account: the OAuth discovery
+endpoints (`touchpoint=oauth_discovery`, recurs on reconnects) and
+unauthenticated MCP requests (`touchpoint=mcp_401`). The mcp_401 emission is
+**per-request identical to `mcp_auth_attempt` failures by construction**
+(same `!authInfo` path in `verifyMcpAuth`; `reason` ≡ `outcome`), so raw
+event counts are 401/retry volume — an established client with an expired
+token can emit dozens of "installs" a day, which is exactly the artifact
+that made install→signup conversion look like it collapsed in late August
+2026. `install_fingerprint` (salted sha256 of ip+user-agent; salt =
+`ANALYTICS_FINGERPRINT_SALT`, falling back to `CLERK_SECRET_KEY`) is the
+uniqueness key: unique installers per day ≈
+`uniq(properties.install_fingerprint)` filtered to `reason='no_token'` and
+`method='POST'`, and Clerk-step abandonment compares that against
+`mcp_connection_created`. Coverage starts at the fingerprint deploy
+(2026-08-27); earlier data supports no unique-count reading at all. Filter
+obvious crawlers by `user_agent`. Rotating the salt resets fingerprint
+continuity — compare uniques only within one salt era.
 
 Payload capture is deliberately **off**: we never send `$mcp_parameters` or
 `$mcp_response` (they would carry customer mail/sheet content into PostHog).
