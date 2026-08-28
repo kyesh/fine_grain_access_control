@@ -1580,16 +1580,20 @@ const handler = createMcpHandler(
           resolved.targetEmail,
           `messages/${messageId}/attachments/${targetId}`
         );
-        // Reaching here means the parent read succeeded, so a 404 now is
-        // provably the attachmentId, not the messageId. When the caller
-        // supplied the id themselves, heal the staleness server-side instead
+        // Reaching here means the parent read succeeded, so a failure now is
+        // provably the attachmentId, not the messageId. Google's split
+        // (measured 2026-08-28 against production): a well-formed token it has
+        // invalidated (message re-indexed) → 404; a malformed/truncated token
+        // → 400 "Invalid attachment token". Both mean "this id will never
+        // work, the message is fine", and the recovery is identical — so when
+        // the caller supplied the id themselves, heal it server-side instead
         // of erroring: the fresh parent already says which ids are current.
-        if (!attachmentResult.ok && attachmentResult.status === 404 && attachmentId) {
+        if (!attachmentResult.ok && (attachmentResult.status === 404 || attachmentResult.status === 400) && attachmentId) {
           const suppliedIdIsCurrent = freshAttachments.some(a => a.attachmentId === attachmentId);
           if (freshAttachments.length === 0) {
             addToolCallProps({ attachment_selfheal: 'no_attachments' });
             return errorResult(
-              `❌ Message '${messageId}' has no attachments (404). The attachmentId may belong to a different message — ` +
+              `❌ Message '${messageId}' has no attachments (${attachmentResult.status}). The attachmentId may belong to a different message — ` +
               `STOP retrying this pair and re-check which message carries the attachment via gmail_read.`);
           }
           if (!suppliedIdIsCurrent && freshAttachments.length === 1) {
@@ -1610,7 +1614,7 @@ const handler = createMcpHandler(
           } else if (!suppliedIdIsCurrent) {
             addToolCallProps({ attachment_selfheal: 'ambiguous' });
             return errorResult(
-              `❌ That attachmentId is stale — Gmail re-issued the ids on message '${messageId}'. It currently has:\n${listFresh()}\n` +
+              `❌ Gmail rejected that attachmentId (${attachmentResult.status}) — it is stale or invalid; Gmail re-issues ids when a message is re-indexed. Message '${messageId}' currently has:\n${listFresh()}\n` +
               `Retry ONCE with the matching attachmentId above (or call again with the filename parameter instead). ` +
               `Do NOT retry the old id — it is guaranteed to fail again.`);
           }

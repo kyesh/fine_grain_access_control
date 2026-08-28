@@ -190,11 +190,13 @@ gmail_get_attachment 404s".
 
 Since the attachment-selfheal change (2026-08-28), the server recovers that
 case itself: the handler already holds a fresh parent read, so on an
-attachment 404 it re-resolves against the parent's current attachment list and
-retries once when the message has exactly one attachment.
+attachment 404 — or a 400 (`Invalid attachment token`, Google's response to a
+malformed/truncated id; measured against production 2026-08-28) — it
+re-resolves against the parent's current attachment list and retries once when
+the message has exactly one attachment.
 `attachment_selfheal` records the branch — `recovered` (stale id healed,
 outcome is success; the row still carries the first fetch's
-`error_status: 404`), `retry_failed` (fresh id also 404'd), `ambiguous`
+`error_status: 404` or `400`), `retry_failed` (fresh id also failed), `ambiguous`
 (several attachments; the error lists the current ids so recovery is one
 retry), `no_attachments` (the id belongs to some other message).
 `attachment_selector` (`id` | `filename`) says how the caller identified the
