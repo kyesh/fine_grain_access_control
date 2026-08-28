@@ -31,7 +31,7 @@ keep internal/QA traffic out of the numbers.
 | `flyer_scanned` | server (`/go/[slug]` QR redirect) | `slug`, `slug_known`, `campaign`, `variant`, `channel`, `destination`, `device`, `geo_city`/`geo_country` (from Vercel headers; `$geoip_disable` set so the server IP isn't resolved). **Bot-filtered** (link-preview crawlers get the redirect but no event) and captured with a random distinct id per scan — `count()` is scans, not people. Joins to the web funnel via `utm_content`/`ref` = slug on the landing `$pageview`. Links managed via `npm run links` (`scripts/short-links.ts`); per-slug running totals also live in the `short_links.scan_count` column |
 | `sign_up_completed` | server (Clerk webhook, `user.created`) | `$set.email` |
 | `video_played` | client (`TrackedVideoEmbed.tsx`, all Descript demo embeds) | `video_id`, `video_title`, `page` |
-| `$mcp_tool_call` | server (`/api/mcp`, every tool) | `$mcp_tool_name`, `$mcp_duration_ms`, `$mcp_is_error`, `client_id`, `client_name`, `user_agent`, `outcome`, `account_email`, `account_delegated`; raw tools add `raw_api_kind`, `raw_api_family`, `raw_api_endpoint`, `raw_api_mutating`; denials add `denial_code`, and denials carrying an approval link add `approval_request_id` (joins to the approval funnel); failures add `error_status`, `error_reason`, `error_domain`, `failure_reason`, `gmail_404_site`; calls that reach Google add `google_ms` (cumulative wall-clock inside `googleFetch`) and `token_ms` (Clerk token fetch) |
+| `$mcp_tool_call` | server (`/api/mcp`, every tool) | `$mcp_tool_name`, `$mcp_duration_ms`, `$mcp_is_error`, `client_id`, `client_name`, `user_agent`, `outcome`, `account_email`, `account_delegated`; raw tools add `raw_api_kind`, `raw_api_family`, `raw_api_endpoint`, `raw_api_mutating`; denials add `denial_code`, and denials carrying an approval link add `approval_request_id` (joins to the approval funnel); failures add `error_status`, `error_reason`, `error_domain`, `failure_reason`, `gmail_404_site`; `gmail_get_attachment` adds `attachment_selector` and, on 404 recovery paths, `attachment_selfheal`; calls that reach Google add `google_ms` (cumulative wall-clock inside `googleFetch`) and `token_ms` (Clerk token fetch) |
 | `proxy_request` | server (`/api/proxy/[...path]`) | `service` (gmail/sheets/drive), `method`, `status`, `outcome` (`success`/`auth_failed`/`denied`/`timeout`/`error`), `duration_ms`, `proxy_key_id`, `account_email`, `account_delegated`, `google_ms`, `token_ms`; upstream failures add `error_status` (`timeout`/`network`) |
 | `mcp_connection_created` | server (`/api/mcp` auth layer) | `connection_id`, `client_id`, `client_name`/`client_version` (from MCP `initialize` clientInfo, when the creating request was one), `auto_attached`, `account_age_seconds` |
 | `mcp_client_initialize` | server (`/api/mcp` auth layer, every authenticated `initialize`) | `client_name`, `client_version` (the client's self-reported MCP clientInfo), `client_id`, `user_agent`. Once per MCP session — the substrate for the per-product split (Cowork / Claude Code / Claude.ai) |
@@ -187,6 +187,23 @@ so the `messageId` is valid and the `attachmentId` is stale — the recoverable
 case, since Gmail re-issues attachment ids when a message is re-indexed. This
 property is the direct measure of open question "what is behind the
 gmail_get_attachment 404s".
+
+Since the attachment-selfheal change (2026-08-28), the server recovers that
+case itself: the handler already holds a fresh parent read, so on an
+attachment 404 it re-resolves against the parent's current attachment list and
+retries once when the message has exactly one attachment.
+`attachment_selfheal` records the branch — `recovered` (stale id healed,
+outcome is success; the row still carries the first fetch's
+`error_status: 404`), `retry_failed` (fresh id also 404'd), `ambiguous`
+(several attachments; the error lists the current ids so recovery is one
+retry), `no_attachments` (the id belongs to some other message).
+`attachment_selector` (`id` | `filename`) says how the caller identified the
+attachment — the new `filename` parameter resolves against the fresh parent
+and cannot go stale, so a rising `filename` share is agents adopting the
+robust path. Post-deploy confirmation query: breakdown of
+`attachment_selfheal` for `tool = 'gmail_get_attachment'`, external users;
+the fix is working if `recovered` absorbs the bulk of former 404 errors and
+the tool's error rate converges toward the other Gmail read tools.
 
 **Account-resolution failures (`failure_reason`):** `resolveAccountAndToken`'s
 four failure branches (`no_proxy_key`, `no_accessible_accounts`,
