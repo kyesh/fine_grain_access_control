@@ -1,12 +1,13 @@
 import React from "react";
 import Link from "next/link";
-import { Terminal, ChevronRight, ArrowRight } from "lucide-react";
+import { Terminal, ChevronRight, ArrowRight, Sparkles } from "lucide-react";
 import { CopyButton } from "./CopyButton";
+import { DirectoryCta } from "../DirectoryCta";
 
 export const metadata = {
   title: "Setup & Integration | fgac.ai",
   description:
-    "Connect your AI agents to fgac.ai in one command. Setup guides for Claude Code, Cursor, Windsurf, and Claude Desktop.",
+    "Connect AI agents to fgac.ai — one click from the Claude connectors directory, or one URL in Claude Code, Cursor, Windsurf, and Claude Desktop.",
 };
 
 const MCP_URL = "https://fgac.ai/api/mcp";
@@ -91,8 +92,36 @@ export default function SetupPage() {
           <StepHeading
             number="1"
             title="Add the MCP server"
-            subtitle="Pick your client — the URL is the same in all of them."
+            subtitle="Pick your client — one click from the directory, or one URL everywhere else."
           />
+
+          <div className="rounded-lg border border-primary/40 bg-card p-6">
+            <div className="mb-3.5 flex flex-wrap items-center justify-between gap-2.5">
+              <div className="flex items-center gap-2.5">
+                <div className="flex h-8 w-8 items-center justify-center rounded-sm border border-border bg-background">
+                  <Sparkles className="h-4 w-4 text-primary" />
+                </div>
+                <h3 className="font-semibold text-foreground">
+                  Claude.ai &mdash; web, desktop &amp; mobile
+                </h3>
+              </div>
+              <span className="rounded-full border border-primary/40 bg-primary/10 px-2.5 py-0.5 text-[12px] font-semibold text-primary">
+                Easiest
+              </span>
+            </div>
+            <p className="text-sm leading-relaxed text-muted-foreground">
+              FGAC.ai is listed in the Claude connectors directory &mdash; no
+              URLs to paste. Open the listing, click{" "}
+              <strong>Connect</strong>, and jump straight to step 2.
+            </p>
+            <DirectoryCta
+              location="setup_step1"
+              className="mt-4 inline-flex items-center gap-2 rounded-sm bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:opacity-90"
+            >
+              Open FGAC.ai in the Claude directory
+              <ArrowRight className="h-4 w-4" />
+            </DirectoryCta>
+          </div>
 
           <div className="rounded-lg border border-border bg-card p-6">
             <div className="mb-3.5 flex items-center gap-2.5">

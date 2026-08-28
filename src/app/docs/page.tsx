@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { ArrowRight, BookOpen, Eye, PenLine } from "lucide-react";
+import { DirectoryCta } from "../DirectoryCta";
 
 export const metadata = {
   title: "Documentation | fgac.ai",
@@ -295,6 +296,13 @@ export default function DocsPage() {
             <Link href="/terms" className="text-primary underline underline-offset-2">
               Terms of Service
             </Link>
+            . On claude.ai? FGAC.ai is available in the{" "}
+            <DirectoryCta
+              location="docs_support"
+              className="text-primary underline underline-offset-2"
+            >
+              Claude connectors directory
+            </DirectoryCta>
             .
           </p>
           <Link
