@@ -595,7 +595,8 @@ const SCOPE_REASONS = new Set([
 ]);
 
 function describe403(detail: string, targetEmail: string, r: GoogleErrorReason): string {
-  const reconnect = `Ask the user to reconnect the account here: ${DASHBOARD_URL}/dashboard/accounts — then retry once after they confirm.`;
+  const reconnect = `Ask the user to reconnect the account with this one-click link (it opens Google's consent screen directly): ` +
+    `${DASHBOARD_URL}/dashboard/accounts?reconnect=1 — then retry once after they confirm.`;
 
   // Throttling. Reconnecting the account does nothing here, and the retry the
   // old text suppressed is exactly the right move.
@@ -624,7 +625,7 @@ function describe403(detail: string, targetEmail: string, r: GoogleErrorReason):
   // retry, rather than asserting the scope cause the way the old text did.
   return `❌ Google denied the request (403${r.reason ? ` ${r.reason}` : ''})${detail ? `: ${detail}` : ''}. ` +
     `This is usually either temporary throttling or a missing/revoked OAuth scope for '${targetEmail}'. ` +
-    `Retry ONCE after a short pause — if it fails again it is the grant, not throttling, and reconnecting is the fix: ${DASHBOARD_URL}/dashboard/accounts`;
+    `Retry ONCE after a short pause — if it fails again it is the grant, not throttling, and reconnecting is the fix: ${DASHBOARD_URL}/dashboard/accounts?reconnect=1`;
 }
 
 function describeGoogleError(status: number, data: unknown, targetEmail: string): string {
@@ -636,7 +637,8 @@ function describeGoogleError(status: number, data: unknown, targetEmail: string)
   switch (status) {
     case 401:
       return `❌ Google authorization expired for '${targetEmail}'. STOP — do not retry; it will keep failing. ` +
-        `Ask the user to reconnect this Google account here: ${DASHBOARD_URL}/dashboard/accounts — then retry once after they confirm.`;
+        `Ask the user to reconnect this Google account with this one-click link (it opens Google's consent screen directly): ` +
+        `${DASHBOARD_URL}/dashboard/accounts?reconnect=1 — then retry once after they confirm.`;
     case 403:
       return describe403(detail, targetEmail, r);
     case 404:
@@ -1212,7 +1214,7 @@ async function resolveAccountAndToken(
 
   const googleToken = await getGoogleToken(targetEmail, conn.user);
   if (!googleToken) {
-    return resolveFailure('google_token_unavailable', `❌ Could not fetch Google token for '${targetEmail}'. The account owner may need to reconnect Google.`);
+    return resolveFailure('google_token_unavailable', `❌ Could not fetch Google token for '${targetEmail}'. The account owner may need to reconnect Google — one-click link: ${DASHBOARD_URL}/dashboard/accounts?reconnect=1`);
   }
 
   return { targetEmail, token: googleToken.token, proxyKeyId: conn.proxyKeyId, hasGmailScope: googleToken.hasGmailScope };
@@ -1242,8 +1244,9 @@ function gmailScopeDenial(conn: ConnectionApproved, resolved: ResolvedAccount) {
     `❌ The Google account '${resolved.targetEmail}' is connected WITHOUT Gmail permission — ` +
     `most likely the Gmail checkbox was left unchecked on Google's consent screen when connecting. ` +
     `STOP — every Gmail call on this account will fail until it is reconnected; retrying will NOT help. ` +
-    `Ask the account owner to reconnect Google and approve Gmail access here: ${DASHBOARD_URL}/dashboard/accounts — ` +
-    `then retry once after they confirm. Non-Gmail tools (sheets, docs) are unaffected.`,
+    `👉 Send the account owner this one-click link — it opens Google's consent screen directly; they must approve Gmail access there: ` +
+    `${DASHBOARD_URL}/dashboard/accounts?reconnect=1 — then retry once after they confirm. ` +
+    `Non-Gmail tools (sheets, docs) are unaffected.`,
   );
 }
 

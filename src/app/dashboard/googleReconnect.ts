@@ -11,6 +11,7 @@
  */
 
 export const DRIVE_FILE_SCOPE = 'https://www.googleapis.com/auth/drive.file';
+export const GMAIL_MODIFY_SCOPE = 'https://www.googleapis.com/auth/gmail.modify';
 
 type ExternalAccountLike = {
   provider: string;

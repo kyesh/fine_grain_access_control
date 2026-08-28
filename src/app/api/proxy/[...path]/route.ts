@@ -9,6 +9,17 @@ import { GOOGLE_FETCH_TIMEOUT_MS, CLERK_TOKEN_TIMEOUT_MS, withTimeout, isUpstrea
 
 export const dynamic = 'force-dynamic';
 
+/** Same fallback chain as the MCP route's DASHBOARD_URL (trimmed: pasted
+ * Vercel vars have shipped with trailing whitespace). */
+const DASHBOARD_URL = (process.env.NEXT_PUBLIC_APP_URL || '').trim().replace(/\/+$/, '')
+  || (process.env.VERCEL_PROJECT_PRODUCTION_URL ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL.trim()}` : '')
+  || 'http://localhost:3000';
+
+/** The Gmail scope FGAC requests at sign-in, plus the broader legacy grant —
+ * mirror of the MCP route's GMAIL_SCOPES (see its gmailScopeDenial for the
+ * missing-scope lockout this guards against). */
+const GMAIL_SCOPES = ['https://www.googleapis.com/auth/gmail.modify', 'https://mail.google.com/'];
+
 // Match the MCP route: without this the route runs at the platform default
 // (≤ 15 s), which is BELOW the 50 s Google bound — a slow-but-recoverable
 // Google call would die at the function kill before the classified timeout
@@ -67,9 +78,15 @@ type ProxyTelemetry = {
  * as a generic 403, indistinguishable in analytics from real permission
  * problems. Returns null on any failure.
  */
+type ProxyGoogleToken = {
+  token: string;
+  /** undefined = Clerk did not report scopes; never enforce on missing metadata. */
+  hasGmailScope?: boolean;
+};
+
 async function fetchClerkGoogleToken(
   clerkUserIdForToken: string, reporterClerkUserId: string, telemetry: ProxyTelemetry,
-): Promise<string | null> {
+): Promise<ProxyGoogleToken | null> {
   const client = await clerkClient();
   const started = Date.now();
   try {
@@ -78,7 +95,13 @@ async function fetchClerkGoogleToken(
       CLERK_TOKEN_TIMEOUT_MS,
     );
     telemetry.tokenMs = Date.now() - started;
-    return tokenResponse.data?.[0]?.token || null;
+    const grant = tokenResponse.data?.[0];
+    if (!grant?.token) return null;
+    const scopes = Array.isArray(grant.scopes) ? grant.scopes : undefined;
+    return {
+      token: grant.token,
+      hasGmailScope: scopes ? scopes.some(s => GMAIL_SCOPES.includes(s)) : undefined,
+    };
   } catch (err) {
     telemetry.tokenMs = Date.now() - started;
     const message = err instanceof Error ? err.message : String(err);
@@ -391,7 +414,7 @@ async function handleProxyRequest(request: NextRequest, params: { path: string[]
       const cleanPath = fullPath.replace(/^sheets\//, '');
       const googleUrl = `https://sheets.googleapis.com/${cleanPath}${request.nextUrl.search}`;
       const headers = new Headers(request.headers);
-      headers.set('Authorization', `Bearer ${realGoogleToken}`);
+      headers.set('Authorization', `Bearer ${realGoogleToken.token}`);
       headers.delete('host');
 
       let requestBody: ArrayBuffer | undefined = undefined;
@@ -469,7 +492,7 @@ async function handleProxyRequest(request: NextRequest, params: { path: string[]
       const cleanPath = fullPath.replace(/^docs\//, '');
       const googleUrl = `https://docs.googleapis.com/${cleanPath}${request.nextUrl.search}`;
       const headers = new Headers(request.headers);
-      headers.set('Authorization', `Bearer ${realGoogleToken}`);
+      headers.set('Authorization', `Bearer ${realGoogleToken.token}`);
       headers.delete('host');
 
       let requestBody: ArrayBuffer | undefined = undefined;
@@ -680,6 +703,22 @@ async function handleProxyRequest(request: NextRequest, params: { path: string[]
       }, { status: 403 });
     }
 
+    // Gmail-scope pre-flight, mirror of the MCP route's gmailScopeDenial: a
+    // grant whose Gmail checkbox was left unchecked at consent 403s on every
+    // Gmail call until reconnected, so calling Google is pointless and the
+    // opaque upstream 403 sends callers into retry loops.
+    if (realGoogleToken.hasGmailScope === false) {
+      captureServerEvent(dbUser.clerkUserId, 'google_scope_missing', {
+        via: 'proxy',
+        account_delegated: telemetry.accountDelegated ?? false,
+      });
+      return NextResponse.json({
+        error: `The Google account '${targetEmail}' is connected WITHOUT Gmail permission — most likely the Gmail checkbox was left unchecked on Google's consent screen. ` +
+          `Every Gmail call will fail until the account owner reconnects and approves Gmail access; retrying will not help. ` +
+          `One-click fix (opens Google's consent screen directly): ${DASHBOARD_URL}/dashboard/accounts?reconnect=1`,
+      }, { status: 403 });
+    }
+
     // ─── 8. Forward to Google ───────────────────────────────────────────────
     // For list queries, inject label filtering if rules exist
     let finalQueryString = request.nextUrl.search;
@@ -707,7 +746,7 @@ async function handleProxyRequest(request: NextRequest, params: { path: string[]
 
     const googleUrl = `https://www.googleapis.com/${fullPath}${finalQueryString}`;
     const headers = new Headers(request.headers);
-    headers.set('Authorization', `Bearer ${realGoogleToken}`);
+    headers.set('Authorization', `Bearer ${realGoogleToken.token}`);
     headers.delete('host');
 
     let requestBody: ArrayBuffer | undefined = undefined;

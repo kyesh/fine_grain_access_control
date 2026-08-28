@@ -1,10 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { useUser } from "@clerk/nextjs";
 import { usePostHog } from "posthog-js/react";
-import { startGoogleReconnect, type ClerkUserLike } from "../googleReconnect";
+import {
+  startGoogleReconnect, DRIVE_FILE_SCOPE, GMAIL_MODIFY_SCOPE, type ClerkUserLike,
+} from "../googleReconnect";
 
 /**
  * The control every "reconnect Google from the Accounts page" message points
@@ -12,24 +14,36 @@ import { startGoogleReconnect, type ClerkUserLike } from "../googleReconnect";
  * broken grant) and sends the user through Google's consent, returning here
  * with ?reconnected=1. Failures render inline — never a button that silently
  * does nothing.
+ *
+ * Gmail is requested explicitly (not just drive.file): the missing-scope
+ * lockout this button remediates is a grant whose Gmail checkbox was left
+ * unchecked, and only listing the scope guarantees Google re-presents it.
+ *
+ * `?reconnect=1` (minted into MCP tool errors) auto-fires the flow on load so
+ * the agent's link is one click from Google's consent screen — but ONLY on
+ * the safe reauthorize branch: a non-verified account takes the
+ * destroy+recreate leg, which must stay behind an explicit click.
  */
 export function ReconnectGoogleButton({ prominent = false }: { prominent?: boolean }) {
-  const { user } = useUser();
+  const { user, isLoaded } = useUser();
   const posthog = usePostHog();
   const params = useSearchParams();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const autoFired = useRef(false);
   const justReconnected = params.get("reconnected") === "1";
+  const autoRequested = params.get("reconnect") === "1";
 
-  const onClick = async () => {
+  const start = async (source: string) => {
     if (!user || busy) return;
     setBusy(true);
     setError(null);
-    posthog?.capture("google_reconnect_started", { source: "accounts_page" });
+    posthog?.capture("google_reconnect_started", { source });
     try {
       const url = await startGoogleReconnect(
         user as unknown as ClerkUserLike,
         `${window.location.origin}/dashboard/accounts?reconnected=1`,
+        [GMAIL_MODIFY_SCOPE, DRIVE_FILE_SCOPE],
       );
       window.location.href = url;
     } catch (err) {
@@ -43,10 +57,21 @@ export function ReconnectGoogleButton({ prominent = false }: { prominent?: boole
     }
   };
 
+  useEffect(() => {
+    if (!autoRequested || autoFired.current || !isLoaded || !user || justReconnected) return;
+    const google = user.externalAccounts.find(
+      acc => acc.provider === "google" || (acc.provider as string) === "oauth_google",
+    );
+    if (google?.verification?.status !== "verified") return;
+    autoFired.current = true;
+    void start("agent_link");
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- fire once when the session hydrates
+  }, [autoRequested, isLoaded, user, justReconnected]);
+
   return (
     <div className="flex flex-col items-end gap-1.5">
       <button
-        onClick={onClick}
+        onClick={() => start("accounts_page")}
         disabled={busy}
         className={
           prominent
