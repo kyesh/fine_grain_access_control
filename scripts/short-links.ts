@@ -59,7 +59,26 @@ function connectionString(): string {
 
 function flag(name: string): string | undefined {
   const i = args.indexOf(`--${name}`);
-  return i >= 0 ? args[i + 1] : undefined;
+  const value = i >= 0 ? args[i + 1] : undefined;
+  // A following flag means the value was omitted — fail validation instead of
+  // silently storing "--campaign" as a destination.
+  return value?.startsWith('--') ? undefined : value;
+}
+
+// Slugs must survive as a URL path segment and match the route's lowercase
+// lookup; destinations must be a site-relative path or an absolute http(s)
+// URL — anything else prints a QR that 404s or 500s after it's on a wall.
+const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
+
+function validDestination(dest: string): boolean {
+  if (dest.startsWith('//')) return false; // protocol-relative → off-site host
+  if (dest.startsWith('/')) return true;
+  try {
+    const u = new URL(dest);
+    return (u.protocol === 'https:' || u.protocol === 'http:') && u.hostname.length > 0;
+  } catch {
+    return false;
+  }
 }
 
 const positional = args.filter((a, i) => !a.startsWith('--') && (i === 0 || !args[i - 1].startsWith('--') || ['--prod', '--apply'].includes(args[i - 1])));
@@ -106,10 +125,26 @@ async function main() {
         console.error('Usage: npm run links -- add <slug> --dest <url-or-path> --campaign <name> [--variant v] [--channel c] [--notes "..."]');
         process.exit(1);
       }
+      if (!SLUG_RE.test(slug)) {
+        console.error(`Invalid slug "${slug}" — lowercase letters, digits, hyphens only (max 64), e.g. emu-boards-s.`);
+        process.exit(1);
+      }
+      if (!validDestination(dest)) {
+        console.error(`Invalid destination "${dest}" — use a site path like /setup or a full https:// URL.`);
+        process.exit(1);
+      }
       requireApplyForProdWrite(`add ${slug} → ${dest} (campaign ${campaign})`);
-      await sql`
-        INSERT INTO short_links (slug, destination, campaign, variant, channel, notes)
-        VALUES (${slug}, ${dest}, ${campaign}, ${flag('variant') ?? null}, ${flag('channel') ?? null}, ${flag('notes') ?? null})`;
+      try {
+        await sql`
+          INSERT INTO short_links (slug, destination, campaign, variant, channel, notes)
+          VALUES (${slug}, ${dest}, ${campaign}, ${flag('variant') ?? null}, ${flag('channel') ?? null}, ${flag('notes') ?? null})`;
+      } catch (e: unknown) {
+        if (typeof e === 'object' && e !== null && (e as { code?: string }).code === '23505') {
+          console.error(`Slug "${slug}" already exists — use \`retarget\` to change its destination (keeps the scan counter). remove+add would destroy its history.`);
+          process.exit(1);
+        }
+        throw e;
+      }
       console.log(`Added ${slug} → ${dest}`);
       console.log(`QR target: https://fgac.ai/go/${slug}`);
       return;
@@ -119,6 +154,10 @@ async function main() {
       const dest = flag('dest');
       if (!slug || !dest) {
         console.error('Usage: npm run links -- retarget <slug> --dest <url-or-path>');
+        process.exit(1);
+      }
+      if (!validDestination(dest)) {
+        console.error(`Invalid destination "${dest}" — use a site path like /setup or a full https:// URL.`);
         process.exit(1);
       }
       requireApplyForProdWrite(`retarget ${slug} → ${dest}`);

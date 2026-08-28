@@ -2,7 +2,7 @@
 
 import posthog from 'posthog-js'
 
-export const CLAUDE_DIRECTORY_URL = 'https://claude.ai/directory/fgac-ai'
+const CLAUDE_DIRECTORY_URL = 'https://claude.ai/directory/fgac-ai'
 
 /**
  * Outbound link to the Claude connectors directory listing with funnel
@@ -29,6 +29,7 @@ export function DirectoryCta({
       onClick={() => posthog.capture('directory_link_clicked', { cta_location: location })}
     >
       {children}
+      <span className="sr-only"> (opens claude.ai in a new tab)</span>
     </a>
   )
 }

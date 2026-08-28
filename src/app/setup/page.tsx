@@ -7,7 +7,7 @@ import { DirectoryCta } from "../DirectoryCta";
 export const metadata = {
   title: "Setup & Integration | fgac.ai",
   description:
-    "Connect your AI agents to fgac.ai in one click from the Claude connectors directory, or in one command. Setup guides for Claude.ai, Claude Code, Cursor, Windsurf, and Claude Desktop.",
+    "Connect AI agents to fgac.ai — one click from the Claude connectors directory, or one URL in Claude Code, Cursor, Windsurf, and Claude Desktop.",
 };
 
 const MCP_URL = "https://fgac.ai/api/mcp";
@@ -92,7 +92,7 @@ export default function SetupPage() {
           <StepHeading
             number="1"
             title="Add the MCP server"
-            subtitle="Pick your client — the URL is the same in all of them."
+            subtitle="Pick your client — one click from the directory, or one URL everywhere else."
           />
 
           <div className="rounded-lg border border-primary/40 bg-card p-6">

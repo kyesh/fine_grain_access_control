@@ -253,7 +253,10 @@ export const webhookDeliveries = pgTable('webhook_deliveries', {
 // scripts/short-links.ts (there is no UI); `destination` stays editable so a
 // printed QR can be re-pointed without reprinting. Per-scan detail lives in
 // the `flyer_scanned` PostHog event, not here — this table only keeps the
-// running counter, so no per-scan PII (IP/UA) is ever stored.
+// running counter, so no per-scan PII (IP/UA) is ever stored. The counter is
+// deliberately a second tally: PostHog query access needs a personal API key
+// that is not provisioned everywhere (see docs/analytics.md), so
+// `npm run links -- list` must answer "did anyone scan?" on its own.
 export const shortLinks = pgTable('short_links', {
   slug: text('slug').primaryKey(),
   destination: text('destination').notNull(),      // absolute URL or site-relative path
