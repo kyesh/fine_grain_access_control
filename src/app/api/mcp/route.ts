@@ -275,6 +275,26 @@ async function isOwnClerkEmail(clerkUserId: string, email: string): Promise<bool
   }
 }
 
+// Clerk's token endpoint is a metadata call (Google is only involved when a
+// refresh is due), so 15 s is generous. Bounded for the same reason as
+// GOOGLE_FETCH_TIMEOUT_MS below: an unbounded await here rides into the
+// maxDuration kill, which loses the analytics capture along with the response.
+const CLERK_TOKEN_TIMEOUT_MS = 15_000;
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      const err = new Error(`timed out after ${ms}ms`);
+      err.name = 'TimeoutError';
+      reject(err);
+    }, ms);
+    promise.then(
+      v => { clearTimeout(timer); resolve(v); },
+      e => { clearTimeout(timer); reject(e); },
+    );
+  });
+}
+
 async function getGoogleToken(targetEmail: string, keyOwner: { id: string; email: string; clerkUserId: string }) {
   let tokenOwnerClerkId: string;
 
@@ -320,8 +340,13 @@ async function getGoogleToken(targetEmail: string, keyOwner: { id: string; email
   }
 
   const client = await clerkClient();
+  const tokenStarted = Date.now();
   try {
-    const tokenResponse = await client.users.getUserOauthAccessToken(tokenOwnerClerkId, 'oauth_google');
+    const tokenResponse = await withTimeout(
+      client.users.getUserOauthAccessToken(tokenOwnerClerkId, 'oauth_google'),
+      CLERK_TOKEN_TIMEOUT_MS,
+    );
+    addToolCallProps({ token_ms: Date.now() - tokenStarted });
     const token = tokenResponse.data?.[0]?.token || null;
     if (!token) addToolCallProps({ google_token_error: 'no_token' });
     return token;
@@ -330,8 +355,11 @@ async function getGoogleToken(targetEmail: string, keyOwner: { id: string; email
     // mode (Clerk 422: grant stored without a refresh token — seen on the
     // dev instance 2026-08-20, cause unconfirmed in prod). Without this,
     // these failures are indistinguishable from generic errors in analytics.
+    addToolCallProps({ token_ms: Date.now() - tokenStarted });
     const message = err instanceof Error ? err.message : String(err);
-    const reason = /refresh/i.test(message) ? 'refresh_failed' : 'clerk_error';
+    const reason = err instanceof Error && err.name === 'TimeoutError'
+      ? 'timeout'
+      : /refresh/i.test(message) ? 'refresh_failed' : 'clerk_error';
     addToolCallProps({ google_token_error: reason });
     captureServerEvent(keyOwner.clerkUserId, 'google_token_fetch_failed', {
       reason,
@@ -590,10 +618,32 @@ function describeGoogleError(status: number, data: unknown, targetEmail: string)
   }
 }
 
+// Upper bound for one Google API exchange (connect + headers + body). Chosen
+// from 30 days of production $mcp_duration_ms (2026-08-28): every tool's p99
+// is ≤ ~13 s, but the 2026-08-23 Google slowdown produced sheets reads that
+// stalled 42–59 s and then SUCCEEDED — so the bound sits above that recovery
+// band, and below maxDuration (60 s) so a truly hung call becomes a captured
+// `error_status: 'timeout'` event instead of a function kill, which loses the
+// capture along with the response.
+const GOOGLE_FETCH_TIMEOUT_MS = 50_000;
+
+/**
+ * Accumulate wall-clock spent talking to Google onto the tool-call event
+ * (grace retries make multiple googleFetch calls per tool call), so slow
+ * calls are attributable: google_ms ≈ $mcp_duration_ms means Google was
+ * slow; a wide gap means the time went to FGAC (token fetch, rules, DB).
+ */
+function recordGoogleMs(started: number): void {
+  const prev = getToolCallProps().google_ms;
+  addToolCallProps({ google_ms: (typeof prev === 'number' ? prev : 0) + (Date.now() - started) });
+}
+
 async function googleFetch(
   url: string, token: string, method = 'GET', body?: string, targetEmail = '',
 ): Promise<GoogleFetchResult> {
+  const started = Date.now();
   let res: Response;
+  let text: string;
   try {
     res = await fetch(url, {
       method,
@@ -602,13 +652,31 @@ async function googleFetch(
         'Content-Type': 'application/json',
       },
       body,
+      signal: AbortSignal.timeout(GOOGLE_FETCH_TIMEOUT_MS),
     });
+    // The signal also covers body streaming, so a response that stalls after
+    // headers aborts into the same classified branch below.
+    text = await res.text();
   } catch (err) {
+    recordGoogleMs(started);
+    // The only signal on this fetch is our own timer, so an abort here IS the
+    // timeout (undici surfaces AbortSignal.timeout as TimeoutError; AbortError
+    // kept for runtime variance).
+    if (err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
+      addToolCallProps({ error_status: 'timeout' });
+      const retryAdvice = method === 'GET'
+        ? 'Wait a moment and retry ONCE; if it times out again, Google is degraded — tell the user and try later.'
+        : 'The request MAY have been applied despite the timeout. Do NOT blindly retry a write — read the data back first, and only retry if the change is missing.';
+      return {
+        ok: false,
+        error: `❌ Google did not answer within ${GOOGLE_FETCH_TIMEOUT_MS / 1000}s. This is Google-side slowness, not a permissions problem. ${retryAdvice}`,
+      };
+    }
     addToolCallProps({ error_status: 'network' });
     return { ok: false, error: `❌ Could not reach the Google API: ${err instanceof Error ? err.message : 'network error'}.` };
   }
+  recordGoogleMs(started);
 
-  const text = await res.text();
   let data: unknown = text;
   try { data = text ? JSON.parse(text) : {}; } catch { /* non-JSON body: keep text */ }
 
@@ -2259,4 +2327,6 @@ export const DELETE = authedHandler;
 
 // Headroom for the sheets grant-propagation grace retries (≤ ~7 s added on
 // top of normal Google latency) — never let them race the function timeout.
+// googleFetch aborts each Google exchange at GOOGLE_FETCH_TIMEOUT_MS (50 s),
+// so a hung upstream call is classified and captured before this kill fires.
 export const maxDuration = 60;
