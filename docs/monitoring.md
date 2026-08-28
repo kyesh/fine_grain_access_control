@@ -305,3 +305,26 @@ retry pressure from established clients, the artifact that previously read
 as a conversion collapse. Split by client product via
 `properties.client_name` (populated when the unauthenticated request was an
 MCP `initialize`), or `mcp_client_initialize` for authenticated sessions.
+
+**7.6 — Gmail-scope lockouts.** Users whose Google grant lacks the Gmail scope
+(Gmail checkbox unchecked on Google's consent screen) 403 on every Gmail call
+while the rest of their traffic works — measured 2026-08-28 as repeated
+per-user `gmail_list` 403s (9.5% tool-error rate on the entry-point tool).
+Since 2026-08-28 the MCP path pre-flight-denies these calls
+(`failure_reason: 'gmail_scope_missing'`, outcome `failed`) and fires the
+unsampled standalone event:
+
+```sql
+SELECT toDate(timestamp) AS day, count() AS calls, uniq(person_id) AS users
+FROM events
+WHERE event = 'google_scope_missing' AND timestamp > now() - INTERVAL 30 DAY
+GROUP BY day ORDER BY day
+```
+
+`uniq(person_id)` is the size of the locked-out population. Healthy: zero.
+Non-zero is not a code regression — it is users needing the reconnect nudge the
+tool error now delivers; watch whether the same person persists across days
+(nudge not working) or disappears (reconnected). Cross-check that gmail 403s
+with `error_reason` in (`insufficientPermissions`,
+`ACCESS_TOKEN_SCOPE_INSUFFICIENT`) trend to zero on `$mcp_tool_call` — the
+pre-flight should absorb them before Google is called.

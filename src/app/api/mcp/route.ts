@@ -296,7 +296,26 @@ async function isOwnClerkEmail(clerkUserId: string, email: string): Promise<bool
   }
 }
 
-async function getGoogleToken(targetEmail: string, keyOwner: { id: string; email: string; clerkUserId: string }) {
+/**
+ * The one Gmail scope FGAC requests at sign-in (src/app/layout.tsx), plus the
+ * broader legacy grant that also covers every Gmail call. Google's granular
+ * consent screen lets a user finish sign-in with the Gmail checkbox unchecked —
+ * Clerk then holds a verified account whose token Google 403s on every Gmail
+ * call, forever. The dashboard detects that state (googleAccess.ts); the MCP
+ * path must too, or the user is silently locked out of Gmail tools while
+ * everything else half-works.
+ */
+const GMAIL_SCOPES = ['https://www.googleapis.com/auth/gmail.modify', 'https://mail.google.com/'];
+
+type GoogleTokenResult = {
+  token: string;
+  /** undefined = Clerk did not report scopes; never enforce on missing metadata. */
+  hasGmailScope?: boolean;
+};
+
+async function getGoogleToken(
+  targetEmail: string, keyOwner: { id: string; email: string; clerkUserId: string },
+): Promise<GoogleTokenResult | null> {
   let tokenOwnerClerkId: string;
 
   if (targetEmail.toLowerCase() === keyOwner.email.toLowerCase()) {
@@ -348,9 +367,26 @@ async function getGoogleToken(targetEmail: string, keyOwner: { id: string; email
       CLERK_TOKEN_TIMEOUT_MS,
     );
     addToolCallProps({ token_ms: Date.now() - tokenStarted });
-    const token = tokenResponse.data?.[0]?.token || null;
-    if (!token) addToolCallProps({ google_token_error: 'no_token' });
-    return token;
+    const grant = tokenResponse.data?.[0];
+    if (!grant?.token) {
+      addToolCallProps({ google_token_error: 'no_token' });
+      return null;
+    }
+    // Clerk reports the scopes Google actually granted (the dashboard's
+    // checkGoogleAccess already treats a missing scope here as "not
+    // connected"). Same two-signal pattern as google_token_identity_fallback:
+    // the tool-call property attributes the miss to the call, the standalone
+    // event is the countable one for sizing the affected population.
+    const scopes = Array.isArray(grant.scopes) ? grant.scopes : undefined;
+    const hasGmailScope = scopes ? scopes.some(s => GMAIL_SCOPES.includes(s)) : undefined;
+    if (hasGmailScope === false) {
+      addToolCallProps({ google_scope_missing: true });
+      captureServerEvent(keyOwner.clerkUserId, 'google_scope_missing', {
+        via: 'mcp',
+        account_delegated: targetEmail.toLowerCase() !== keyOwner.email.toLowerCase(),
+      });
+    }
+    return { token: grant.token, hasGmailScope };
   } catch (err) {
     // Observability for the "Clerk cannot refresh the Google token" failure
     // mode (Clerk 422: grant stored without a refresh token — seen on the
@@ -1125,7 +1161,7 @@ function withToolAnalytics<R extends ToolAnalyticsResult>(
   });
 }
 
-type ResolvedAccount = { targetEmail: string; token: string; proxyKeyId: string };
+type ResolvedAccount = { targetEmail: string; token: string; proxyKeyId: string; hasGmailScope?: boolean };
 type ResolvedError = { error: string };
 
 /**
@@ -1146,7 +1182,8 @@ type ResolveFailureReason =
   | 'no_proxy_key'
   | 'no_accessible_accounts'
   | 'account_not_permitted'
-  | 'google_token_unavailable';
+  | 'google_token_unavailable'
+  | 'gmail_scope_missing';
 
 function resolveFailure(reason: ResolveFailureReason, error: string): ResolvedError {
   addToolCallProps({ failure_reason: reason });
@@ -1180,12 +1217,32 @@ async function resolveAccountAndToken(
     account_delegated: !!access.delegationId,
   });
 
-  const token = await getGoogleToken(targetEmail, conn.user);
-  if (!token) {
+  const googleToken = await getGoogleToken(targetEmail, conn.user);
+  if (!googleToken) {
     return resolveFailure('google_token_unavailable', `❌ Could not fetch Google token for '${targetEmail}'. The account owner may need to reconnect Google.`);
   }
 
-  return { targetEmail, token, proxyKeyId: conn.proxyKeyId };
+  return { targetEmail, token: googleToken.token, proxyKeyId: conn.proxyKeyId, hasGmailScope: googleToken.hasGmailScope };
+}
+
+/**
+ * Pre-flight for Gmail surfaces only (sheets/docs/drive don't need the Gmail
+ * scope): a token whose grant lacks the Gmail scope 403s on every Gmail call
+ * until the account is reconnected, so calling Google is pointless and the
+ * generic 403 text used to send agents into retry loops. Deterministic and
+ * never-reached-Google, so it is the `failed` class (textResult), not an
+ * upstream `error` — see the ResolveFailureReason comment above.
+ */
+function gmailScopeDenial(resolved: ResolvedAccount) {
+  if (resolved.hasGmailScope !== false) return null;
+  addToolCallProps({ failure_reason: 'gmail_scope_missing' });
+  return textResult(
+    `❌ The Google account '${resolved.targetEmail}' is connected WITHOUT Gmail permission — ` +
+    `most likely the Gmail checkbox was left unchecked on Google's consent screen when connecting. ` +
+    `STOP — every Gmail call on this account will fail until it is reconnected; retrying will NOT help. ` +
+    `Ask the account owner to reconnect Google and approve Gmail access here: ${DASHBOARD_URL}/dashboard/accounts — ` +
+    `then retry once after they confirm. Non-Gmail tools (sheets, docs) are unaffected.`,
+  );
 }
 
 // ─── Raw Google API Execution ───────────────────────────────────────────────
@@ -1222,6 +1279,13 @@ async function executeRawGoogleCall(
   if (cls.kind === 'denied') {
     addToolCallProps({ denial_code: cls.code });
     return textResult(cls.reason);
+  }
+
+  // Raw Gmail calls need the same scope pre-flight as the dedicated Gmail
+  // tools (every gmail/* path classifies into the 'gmail' family).
+  if (family === 'gmail') {
+    const scopeDenial = gmailScopeDenial(resolved);
+    if (scopeDenial) return scopeDenial;
   }
 
   const cleanPath = path.replace(/^\/+/, '');
@@ -1445,6 +1509,8 @@ const handler = createMcpHandler(
 
         const resolved = await resolveAccountAndToken(conn, account);
         if ('error' in resolved) return textResult(resolved.error);
+        const scopeDenial = gmailScopeDenial(resolved);
+        if (scopeDenial) return scopeDenial;
 
         const params = new URLSearchParams();
         if (query) params.set('q', query);
@@ -1470,6 +1536,8 @@ const handler = createMcpHandler(
 
         const resolved = await resolveAccountAndToken(conn, account);
         if ('error' in resolved) return textResult(resolved.error);
+        const scopeDenial = gmailScopeDenial(resolved);
+        if (scopeDenial) return scopeDenial;
 
         // Read-time enforcement: label blacklist/whitelist + content blacklist
         const rules = await loadApplicableRules(conn.user.id, resolved.proxyKeyId, resolved.targetEmail);
@@ -1505,6 +1573,8 @@ const handler = createMcpHandler(
 
         const resolved = await resolveAccountAndToken(conn, account);
         if ('error' in resolved) return textResult(resolved.error);
+        const scopeDenial = gmailScopeDenial(resolved);
+        if (scopeDenial) return scopeDenial;
 
         // Read-time enforcement on the parent message (labels + content rules):
         // an attachment is only as readable as the email that carries it
@@ -1576,6 +1646,8 @@ const handler = createMcpHandler(
 
         const resolved = await resolveAccountAndToken(conn, account);
         if ('error' in resolved) return textResult(resolved.error);
+        const scopeDenial = gmailScopeDenial(resolved);
+        if (scopeDenial) return scopeDenial;
 
         // Enforce send whitelist
         const rules = await loadApplicableRules(conn.user.id, resolved.proxyKeyId, resolved.targetEmail);
@@ -1605,6 +1677,8 @@ const handler = createMcpHandler(
 
         const resolved = await resolveAccountAndToken(conn, account);
         if ('error' in resolved) return textResult(resolved.error);
+        const scopeDenial = gmailScopeDenial(resolved);
+        if (scopeDenial) return scopeDenial;
 
         const result = await gmailFetch(resolved.token, resolved.targetEmail, 'labels');
         if (!result.ok) return errorResult(result.error);
