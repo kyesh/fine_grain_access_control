@@ -5,8 +5,15 @@ import { eq, and } from 'drizzle-orm';
 import { clerkClient } from '@clerk/nextjs/server';
 import { compileRulePattern } from '@/lib/rulePatterns';
 import { captureServerEvent } from '@/lib/posthogServer';
+import { GOOGLE_FETCH_TIMEOUT_MS, CLERK_TOKEN_TIMEOUT_MS, withTimeout, isUpstreamTimeout } from '@/lib/upstreamTimeouts';
 
 export const dynamic = 'force-dynamic';
+
+// Match the MCP route: without this the route runs at the platform default
+// (≤ 15 s), which is BELOW the 50 s Google bound — a slow-but-recoverable
+// Google call would die at the function kill before the classified timeout
+// ever fired, exactly the invisible failure the bound exists to prevent.
+export const maxDuration = 60;
 
 export async function GET(request: NextRequest, { params }: { params: Promise<{ path: string[] }> }) {
   return trackedProxyRequest(request, await params);
@@ -38,6 +45,12 @@ type ProxyTelemetry = {
   targetEmail?: string;
   /** True when access came through an email delegation rather than the key owner's own mailbox. */
   accountDelegated?: boolean;
+  /** Wall-clock spent talking to Google (one exchange per proxy call). */
+  googleMs?: number;
+  /** Wall-clock spent fetching the Google token from Clerk. */
+  tokenMs?: number;
+  /** Set when the upstream exchange failed before Google answered: 'timeout' | 'network'. */
+  errorStatus?: string;
 };
 
 /**
@@ -54,20 +67,85 @@ type ProxyTelemetry = {
  * as a generic 403, indistinguishable in analytics from real permission
  * problems. Returns null on any failure.
  */
-async function fetchClerkGoogleToken(clerkUserIdForToken: string, reporterClerkUserId: string): Promise<string | null> {
+async function fetchClerkGoogleToken(
+  clerkUserIdForToken: string, reporterClerkUserId: string, telemetry: ProxyTelemetry,
+): Promise<string | null> {
   const client = await clerkClient();
+  const started = Date.now();
   try {
-    const tokenResponse = await client.users.getUserOauthAccessToken(clerkUserIdForToken, 'oauth_google');
+    const tokenResponse = await withTimeout(
+      client.users.getUserOauthAccessToken(clerkUserIdForToken, 'oauth_google'),
+      CLERK_TOKEN_TIMEOUT_MS,
+    );
+    telemetry.tokenMs = Date.now() - started;
     return tokenResponse.data?.[0]?.token || null;
   } catch (err) {
+    telemetry.tokenMs = Date.now() - started;
     const message = err instanceof Error ? err.message : String(err);
     captureServerEvent(reporterClerkUserId, 'google_token_fetch_failed', {
-      reason: /refresh/i.test(message) ? 'refresh_failed' : 'clerk_error',
+      reason: isUpstreamTimeout(err) ? 'timeout'
+        : /refresh/i.test(message) ? 'refresh_failed' : 'clerk_error',
       via: 'proxy',
     });
     console.error('[PROXY] Google token fetch failed:', message);
     return null;
   }
+}
+
+/**
+ * The one Google exchange behind every proxy call, bounded so a hung upstream
+ * becomes a classified 504/502 instead of riding into the function kill
+ * (which would also destroy the proxy_request capture). Returns the raw
+ * status/body/headers because the Gmail handler evaluates read rules against
+ * the body before responding.
+ */
+type GoogleForward =
+  | { ok: true; status: number; body: string; headers: Headers }
+  | { ok: false; response: NextResponse };
+
+async function forwardToGoogle(
+  url: string,
+  init: { method: string; headers: Headers; body?: ArrayBuffer },
+  telemetry: ProxyTelemetry,
+): Promise<GoogleForward> {
+  const started = Date.now();
+  try {
+    const googleResponse = await fetch(url, {
+      ...init,
+      signal: AbortSignal.timeout(GOOGLE_FETCH_TIMEOUT_MS),
+    });
+    // The signal also covers body streaming, so a response that stalls after
+    // headers aborts into the same classified branch below.
+    const body = await googleResponse.text();
+    telemetry.googleMs = Date.now() - started;
+    return { ok: true, status: googleResponse.status, body, headers: googleResponse.headers };
+  } catch (err) {
+    telemetry.googleMs = Date.now() - started;
+    if (isUpstreamTimeout(err)) {
+      telemetry.errorStatus = 'timeout';
+      return {
+        ok: false,
+        response: NextResponse.json({
+          error: `Google did not answer within ${GOOGLE_FETCH_TIMEOUT_MS / 1000}s. This is Google-side slowness, not a permissions problem. ` +
+            'Retry a read once after a short pause; for a write, verify whether it was applied before retrying.',
+        }, { status: 504 }),
+      };
+    }
+    telemetry.errorStatus = 'network';
+    return {
+      ok: false,
+      response: NextResponse.json({
+        error: `Could not reach the Google API: ${err instanceof Error ? err.message : 'network error'}.`,
+      }, { status: 502 }),
+    };
+  }
+}
+
+/** Google's response passed through with hop-by-hop encoding stripped. */
+function passthroughResponse(forward: { status: number; body: string; headers: Headers }): NextResponse {
+  const responseHeaders = new Headers(forward.headers);
+  responseHeaders.delete('content-encoding');
+  return new NextResponse(forward.body, { status: forward.status, headers: responseHeaders });
 }
 
 async function trackedProxyRequest(request: NextRequest, params: { path: string[] }) {
@@ -80,9 +158,13 @@ async function trackedProxyRequest(request: NextRequest, params: { path: string[
     : fullPath.includes('documents') ? 'docs'
     : /^drive\/v[23]\//.test(fullPath) ? 'drive'
     : 'gmail';
+  // 504 is only ever minted by forwardToGoogle's timeout branch (Google's own
+  // 504s pass through with errorStatus unset, and they mean the same thing:
+  // the upstream ran out of time).
   const outcome = response.status < 400 ? 'success'
     : response.status === 401 ? 'auth_failed'
     : response.status === 403 ? 'denied'
+    : response.status === 504 ? 'timeout'
     : 'error';
 
   captureServerEvent(telemetry.clerkUserId ?? 'anonymous-proxy', 'proxy_request', {
@@ -94,6 +176,9 @@ async function trackedProxyRequest(request: NextRequest, params: { path: string[
     proxy_key_id: telemetry.proxyKeyId,
     account_email: telemetry.targetEmail,
     account_delegated: telemetry.accountDelegated,
+    google_ms: telemetry.googleMs,
+    token_ms: telemetry.tokenMs,
+    error_status: telemetry.errorStatus,
   });
 
   return response;
@@ -294,7 +379,7 @@ async function handleProxyRequest(request: NextRequest, params: { path: string[]
       }
 
       // Fetch Real Google Token from Clerk
-      const realGoogleToken = await fetchClerkGoogleToken(dbUser.clerkUserId, dbUser.clerkUserId);
+      const realGoogleToken = await fetchClerkGoogleToken(dbUser.clerkUserId, dbUser.clerkUserId, telemetry);
 
       if (!realGoogleToken) {
         return NextResponse.json({
@@ -314,20 +399,13 @@ async function handleProxyRequest(request: NextRequest, params: { path: string[]
         requestBody = await request.clone().arrayBuffer();
       }
 
-      const googleResponse = await fetch(googleUrl, {
+      const forward = await forwardToGoogle(googleUrl, {
         method: request.method,
         headers,
         body: requestBody,
-      });
-
-      const returnBody = await googleResponse.text();
-      const responseHeaders = new Headers(googleResponse.headers);
-      responseHeaders.delete('content-encoding');
-
-      return new NextResponse(returnBody, {
-        status: googleResponse.status,
-        headers: responseHeaders,
-      });
+      }, telemetry);
+      if (!forward.ok) return forward.response;
+      return passthroughResponse(forward);
     }
 
     // ─── GOOGLE DOCS PROXY HANDLER ───────────────────────────────────────────
@@ -380,7 +458,7 @@ async function handleProxyRequest(request: NextRequest, params: { path: string[]
         }
       }
 
-      const realGoogleToken = await fetchClerkGoogleToken(dbUser.clerkUserId, dbUser.clerkUserId);
+      const realGoogleToken = await fetchClerkGoogleToken(dbUser.clerkUserId, dbUser.clerkUserId, telemetry);
 
       if (!realGoogleToken) {
         return NextResponse.json({
@@ -399,20 +477,13 @@ async function handleProxyRequest(request: NextRequest, params: { path: string[]
         requestBody = await request.clone().arrayBuffer();
       }
 
-      const googleResponse = await fetch(googleUrl, {
+      const forward = await forwardToGoogle(googleUrl, {
         method: request.method,
         headers,
         body: requestBody,
-      });
-
-      const returnBody = await googleResponse.text();
-      const responseHeaders = new Headers(googleResponse.headers);
-      responseHeaders.delete('content-encoding');
-
-      return new NextResponse(returnBody, {
-        status: googleResponse.status,
-        headers: responseHeaders,
-      });
+      }, telemetry);
+      if (!forward.ok) return forward.response;
+      return passthroughResponse(forward);
     }
 
     // ─── 2. Resolve Target Email (Gmail Proxy Handler) ───────────────────────────
@@ -601,7 +672,7 @@ async function handleProxyRequest(request: NextRequest, params: { path: string[]
     }
 
     // ─── 8. Fetch Real Google Token from Clerk ──────────────────────────────
-    const realGoogleToken = await fetchClerkGoogleToken(tokenOwnerClerkUserId, dbUser.clerkUserId);
+    const realGoogleToken = await fetchClerkGoogleToken(tokenOwnerClerkUserId, dbUser.clerkUserId, telemetry);
 
     if (!realGoogleToken) {
       return NextResponse.json({
@@ -644,14 +715,15 @@ async function handleProxyRequest(request: NextRequest, params: { path: string[]
       requestBody = await request.clone().arrayBuffer();
     }
 
-    const googleResponse = await fetch(googleUrl, {
+    const forward = await forwardToGoogle(googleUrl, {
       method: request.method,
       headers,
       body: requestBody,
-    });
+    }, telemetry);
+    if (!forward.ok) return forward.response;
 
-    const returnBody = await googleResponse.text();
-    const isJson = googleResponse.headers.get('content-type')?.includes('application/json');
+    const returnBody = forward.body;
+    const isJson = forward.headers.get('content-type')?.includes('application/json');
 
     // ─── 9. Evaluate Read / Inbound Rules ───────────────────────────────────
     if (request.method === 'GET' && fullPath.includes('messages') && isJson) {
@@ -706,13 +778,7 @@ async function handleProxyRequest(request: NextRequest, params: { path: string[]
       }
     }
 
-    const responseHeaders = new Headers(googleResponse.headers);
-    responseHeaders.delete('content-encoding');
-
-    return new NextResponse(returnBody, {
-      status: googleResponse.status,
-      headers: responseHeaders,
-    });
+    return passthroughResponse(forward);
 
   } catch (error) {
     console.error('Proxy Error:', error);

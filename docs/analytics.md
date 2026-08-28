@@ -31,8 +31,8 @@ keep internal/QA traffic out of the numbers.
 | `flyer_scanned` | server (`/go/[slug]` QR redirect) | `slug`, `slug_known`, `campaign`, `variant`, `channel`, `destination`, `device`, `geo_city`/`geo_country` (from Vercel headers; `$geoip_disable` set so the server IP isn't resolved). **Bot-filtered** (link-preview crawlers get the redirect but no event) and captured with a random distinct id per scan — `count()` is scans, not people. Joins to the web funnel via `utm_content`/`ref` = slug on the landing `$pageview`. Links managed via `npm run links` (`scripts/short-links.ts`); per-slug running totals also live in the `short_links.scan_count` column |
 | `sign_up_completed` | server (Clerk webhook, `user.created`) | `$set.email` |
 | `video_played` | client (`TrackedVideoEmbed.tsx`, all Descript demo embeds) | `video_id`, `video_title`, `page` |
-| `$mcp_tool_call` | server (`/api/mcp`, every tool) | `$mcp_tool_name`, `$mcp_duration_ms`, `$mcp_is_error`, `client_id`, `client_name`, `user_agent`, `outcome`, `account_email`, `account_delegated`; raw tools add `raw_api_kind`, `raw_api_family`, `raw_api_endpoint`, `raw_api_mutating`; denials add `denial_code`, and denials carrying an approval link add `approval_request_id` (joins to the approval funnel); failures add `error_status`, `error_reason`, `error_domain`, `failure_reason`, `gmail_404_site` |
-| `proxy_request` | server (`/api/proxy/[...path]`) | `service` (gmail/sheets/drive), `method`, `status`, `outcome`, `duration_ms`, `proxy_key_id`, `account_email`, `account_delegated` |
+| `$mcp_tool_call` | server (`/api/mcp`, every tool) | `$mcp_tool_name`, `$mcp_duration_ms`, `$mcp_is_error`, `client_id`, `client_name`, `user_agent`, `outcome`, `account_email`, `account_delegated`; raw tools add `raw_api_kind`, `raw_api_family`, `raw_api_endpoint`, `raw_api_mutating`; denials add `denial_code`, and denials carrying an approval link add `approval_request_id` (joins to the approval funnel); failures add `error_status`, `error_reason`, `error_domain`, `failure_reason`, `gmail_404_site`; calls that reach Google add `google_ms` (cumulative wall-clock inside `googleFetch`) and `token_ms` (Clerk token fetch) |
+| `proxy_request` | server (`/api/proxy/[...path]`) | `service` (gmail/sheets/drive), `method`, `status`, `outcome` (`success`/`auth_failed`/`denied`/`timeout`/`error`), `duration_ms`, `proxy_key_id`, `account_email`, `account_delegated`, `google_ms`, `token_ms`; upstream failures add `error_status` (`timeout`/`network`) |
 | `mcp_connection_created` | server (`/api/mcp` auth layer) | `connection_id`, `client_id`, `client_name`/`client_version` (from MCP `initialize` clientInfo, when the creating request was one), `auto_attached`, `account_age_seconds` |
 | `mcp_client_initialize` | server (`/api/mcp` auth layer, every authenticated `initialize`) | `client_name`, `client_version` (the client's self-reported MCP clientInfo), `client_id`, `user_agent`. Once per MCP session — the substrate for the per-product split (Cowork / Claude Code / Claude.ai) |
 | `delegation_created` | server (dashboard action) | `delegate_email`, `reactivated` |
@@ -44,7 +44,7 @@ keep internal/QA traffic out of the numbers.
 | `sheets_grant_verification` | server (approve-page load via `/api/rules/verify-sheets-access`, and approval in `actions.ts`) | `result` (`ok`/`missing`/`unknown`), `via` (`link_open`/`magic_link`/`post_approval`), `spreadsheet_id` |
 | `sheets_grant_recovered` | server (`/api/rules/verify-sheets-access`) | `spreadsheet_id` |
 | `docs_grant_verification` / `docs_grant_recovered` | server (`/api/rules/verify-docs-access`, approval in `actions.ts`) | docs twins of the sheets grant-funnel events, with `document_id` |
-| `google_token_fetch_failed` | server (MCP `getGoogleToken`, proxy `fetchClerkGoogleToken`, `getOwnerGoogleToken`) | `reason` (`refresh_failed` = Clerk 422 cannot-refresh, `clerk_error`), `via` (`mcp`/`proxy`/`grant_check`), `account_delegated`. The `$mcp_tool_call` event also carries `google_token_error` on affected calls. Added 2026-08-20 after the dev-instance refresh-token loss was found; this is the signal for whether production users hit it too |
+| `google_token_fetch_failed` | server (MCP `getGoogleToken`, proxy `fetchClerkGoogleToken`, `getOwnerGoogleToken`) | `reason` (`refresh_failed` = Clerk 422 cannot-refresh, `clerk_error`, `timeout` = MCP-path Clerk call exceeded 15 s), `via` (`mcp`/`proxy`/`grant_check`), `account_delegated`. The `$mcp_tool_call` event also carries `google_token_error` on affected calls. Added 2026-08-20 after the dev-instance refresh-token loss was found; this is the signal for whether production users hit it too |
 | `google_token_identity_fallback` | server (MCP `getGoogleToken`) | `via` (`mcp`). Fires when a key owner's own mailbox is reached through the identity-drift self-heal added in `4b551018` — the target address is not a delegation but IS one of the owner's verified Clerk addresses. Unsampled, and independent of `$mcp_tool_call`, so `uniq(person)` is exactly the drifted population still being rescued; the same call also carries `google_token_identity_fallback: true` on `$mcp_tool_call`. Expected to trend to zero as users self-heal — see docs/monitoring.md 7.4 |
 | `mcp_auth_attempt` | server (`/api/mcp` `verifyMcpAuth`) | `outcome` (`ok`/`invalid_token`/`no_token`), `client_id`, `strategy_used` (`clerk`/`direct`/`none`), `memo_hit`, `optimizations_enabled`, `success_sample_rate`, `error_class`, `kid` (on `invalid_token` only), `method`. Auth-health substrate for the JWKS/strategy optimizations. **Failures are unsampled; successes are a 1-in-20 per-request sample** — multiply `ok` by 20 for volume, valid only from the 2026-08-25 fix onward (two earlier versions sampled per-token and were biased; see docs/monitoring.md 1). `kid = 'probe'` marks our own synthetic probes, not users |
 | `agent_doc_created` | server (`/api/mcp`, raw `POST v1/documents`) | `document_id`, `auto_granted` (docs twin of `agent_sheet_created`) |
@@ -129,7 +129,8 @@ Unauthenticated calls attribute to the `anonymous-mcp` / `anonymous-proxy` perso
 > should ever emit `mcp_tool_call` again; QA capability 16 asserts this.
 
 **Failure detail (2026-08 grant-race fixes):** every non-OK Google response
-adds `error_status` (HTTP status, or `network`) to the `$mcp_tool_call` event.
+adds `error_status` (HTTP status, `network`, or `timeout`) to the
+`$mcp_tool_call` event.
 Sheets failures whose matching FGAC rule is fresh also carry
 `sheets_grant_age_seconds`, and when the post-approval grace retry engaged,
 `sheets_grace_retries` + `sheets_grace_recovered` — `recovered=true` volume is
@@ -152,6 +153,31 @@ class and that suppressed the retry which would have succeeded. **The
 `insufficientPermissions` vs `usageLimits` split in production was unmeasured
 when this shipped** (no PostHog query access at the time); `error_reason` is
 what makes it measurable.
+
+**Upstream timeout classification (sheets-tool-timeout-errors plan,
+2026-08-28):** `googleFetch` aborts any single Google exchange at 50 s
+(`GOOGLE_FETCH_TIMEOUT_MS`) and stamps `error_status: 'timeout'`. Before
+this, a hung Google call ran into the route's 60 s `maxDuration` and Vercel
+killed the function — which also destroyed the `$mcp_tool_call` capture (it
+fires on handler completion, flushed in `after()`), so genuine upstream
+timeouts were **invisible in PostHog**: the 2026-08-27 user-reported Sheets
+timeouts left zero server-side telemetry. The 50 s bound comes from 30 days
+of production durations: every tool's p99 ≤ ~13 s, but the 2026-08-23
+Google slowdown produced reads that stalled 42–59 s and then succeeded, so
+a tighter bound (e.g. 25 s) would have failed 11 calls that recovered.
+`google_ms` (cumulative time inside `googleFetch`, summed across grace
+retries) and `token_ms` (Clerk token fetch, bounded at 15 s) split
+`$mcp_duration_ms` into Google-time vs FGAC-time, so "was Google slow?" is
+answerable per call: `google_ms ≈ $mcp_duration_ms` means yes.
+
+The proxy path gets the same treatment (shared constants in
+`src/lib/upstreamTimeouts.ts`): its Google exchange is bounded at 50 s
+(timeout → HTTP 504, `outcome: 'timeout'`, `error_status: 'timeout'`;
+unreachable → 502, `error_status: 'network'`), its Clerk token fetch at
+15 s, and `proxy_request` carries `google_ms` / `token_ms`. The proxy route
+also now exports `maxDuration = 60` — it previously ran at the platform
+default (≤ 15 s), so a slow-but-recoverable Google call died at the function
+kill before any 50 s bound could matter.
 
 `gmail_get_attachment` issues two requests — the parent message read, then the
 attachment read — and both used to return the same generic "check the ID"
