@@ -30,6 +30,7 @@ import { loadApplicableRules, checkReadRestrictions, type ApplicableRules } from
 import { compileRulePattern } from '@/lib/rulePatterns';
 import { captureServerEvent } from '@/lib/posthogServer';
 import { runWithToolCallProps, addToolCallProps, getToolCallProps } from '@/lib/toolCallContext';
+import { GOOGLE_FETCH_TIMEOUT_MS, CLERK_TOKEN_TIMEOUT_MS, withTimeout, isUpstreamTimeout } from '@/lib/upstreamTimeouts';
 import { inSuccessSample, AUTH_SUCCESS_SAMPLE } from '@/lib/authSampling';
 import { ensureDefaultProfile } from '@/db/defaultProfile';
 import { mintApprovalLink, type ApprovalAction } from '@/lib/approvalLinks';
@@ -273,26 +274,6 @@ async function isOwnClerkEmail(clerkUserId: string, email: string): Promise<bool
     console.error('[MCP] Clerk lookup failed while checking own-email fallback:', err);
     return false;
   }
-}
-
-// Clerk's token endpoint is a metadata call (Google is only involved when a
-// refresh is due), so 15 s is generous. Bounded for the same reason as
-// GOOGLE_FETCH_TIMEOUT_MS below: an unbounded await here rides into the
-// maxDuration kill, which loses the analytics capture along with the response.
-const CLERK_TOKEN_TIMEOUT_MS = 15_000;
-
-function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      const err = new Error(`timed out after ${ms}ms`);
-      err.name = 'TimeoutError';
-      reject(err);
-    }, ms);
-    promise.then(
-      v => { clearTimeout(timer); resolve(v); },
-      e => { clearTimeout(timer); reject(e); },
-    );
-  });
 }
 
 async function getGoogleToken(targetEmail: string, keyOwner: { id: string; email: string; clerkUserId: string }) {
@@ -618,15 +599,6 @@ function describeGoogleError(status: number, data: unknown, targetEmail: string)
   }
 }
 
-// Upper bound for one Google API exchange (connect + headers + body). Chosen
-// from 30 days of production $mcp_duration_ms (2026-08-28): every tool's p99
-// is ≤ ~13 s, but the 2026-08-23 Google slowdown produced sheets reads that
-// stalled 42–59 s and then SUCCEEDED — so the bound sits above that recovery
-// band, and below maxDuration (60 s) so a truly hung call becomes a captured
-// `error_status: 'timeout'` event instead of a function kill, which loses the
-// capture along with the response.
-const GOOGLE_FETCH_TIMEOUT_MS = 50_000;
-
 /**
  * Accumulate wall-clock spent talking to Google onto the tool-call event
  * (grace retries make multiple googleFetch calls per tool call), so slow
@@ -659,10 +631,7 @@ async function googleFetch(
     text = await res.text();
   } catch (err) {
     recordGoogleMs(started);
-    // The only signal on this fetch is our own timer, so an abort here IS the
-    // timeout (undici surfaces AbortSignal.timeout as TimeoutError; AbortError
-    // kept for runtime variance).
-    if (err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
+    if (isUpstreamTimeout(err)) {
       addToolCallProps({ error_status: 'timeout' });
       const retryAdvice = method === 'GET'
         ? 'Wait a moment and retry ONCE; if it times out again, Google is degraded — tell the user and try later.'

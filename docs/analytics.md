@@ -30,7 +30,7 @@ keep internal/QA traffic out of the numbers.
 | `sign_up_completed` | server (Clerk webhook, `user.created`) | `$set.email` |
 | `video_played` | client (`TrackedVideoEmbed.tsx`, all Descript demo embeds) | `video_id`, `video_title`, `page` |
 | `$mcp_tool_call` | server (`/api/mcp`, every tool) | `$mcp_tool_name`, `$mcp_duration_ms`, `$mcp_is_error`, `client_id`, `client_name`, `outcome`, `account_email`, `account_delegated`; raw tools add `raw_api_kind`, `raw_api_family`, `raw_api_endpoint`, `raw_api_mutating`; denials add `denial_code`, and denials carrying an approval link add `approval_request_id` (joins to the approval funnel); failures add `error_status`, `error_reason`, `error_domain`, `failure_reason`, `gmail_404_site`; calls that reach Google add `google_ms` (cumulative wall-clock inside `googleFetch`) and `token_ms` (Clerk token fetch) |
-| `proxy_request` | server (`/api/proxy/[...path]`) | `service` (gmail/sheets/drive), `method`, `status`, `outcome`, `duration_ms`, `proxy_key_id`, `account_email`, `account_delegated` |
+| `proxy_request` | server (`/api/proxy/[...path]`) | `service` (gmail/sheets/drive), `method`, `status`, `outcome` (`success`/`auth_failed`/`denied`/`timeout`/`error`), `duration_ms`, `proxy_key_id`, `account_email`, `account_delegated`, `google_ms`, `token_ms`; upstream failures add `error_status` (`timeout`/`network`) |
 | `mcp_connection_created` | server (`/api/mcp` auth layer) | `connection_id`, `client_id`, `auto_attached`, `account_age_seconds` |
 | `delegation_created` | server (dashboard action) | `delegate_email`, `reactivated` |
 | `account_linked` | server (dashboard action) | `target_email`, `delegated`, `via` |
@@ -166,6 +166,15 @@ a tighter bound (e.g. 25 s) would have failed 11 calls that recovered.
 retries) and `token_ms` (Clerk token fetch, bounded at 15 s) split
 `$mcp_duration_ms` into Google-time vs FGAC-time, so "was Google slow?" is
 answerable per call: `google_ms ≈ $mcp_duration_ms` means yes.
+
+The proxy path gets the same treatment (shared constants in
+`src/lib/upstreamTimeouts.ts`): its Google exchange is bounded at 50 s
+(timeout → HTTP 504, `outcome: 'timeout'`, `error_status: 'timeout'`;
+unreachable → 502, `error_status: 'network'`), its Clerk token fetch at
+15 s, and `proxy_request` carries `google_ms` / `token_ms`. The proxy route
+also now exports `maxDuration = 60` — it previously ran at the platform
+default (≤ 15 s), so a slow-but-recoverable Google call died at the function
+kill before any 50 s bound could matter.
 
 `gmail_get_attachment` issues two requests — the parent message read, then the
 attachment read — and both used to return the same generic "check the ID"
