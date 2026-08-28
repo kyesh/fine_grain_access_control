@@ -54,7 +54,12 @@ Current branch: !`git branch --show-current`
    - `READY <url>` → continue to step 8.
    - `ERROR <classification>` → apply the matching fix **after reading the quoted log lines**:
      - `MIGRATION_SQL` — fix the migration file or the `splitStatements` parser in `migrate.ts`.
-     - `NEON_BRANCH_LIMIT` — only THEN run `npx tsx scripts/cleanup-neon-branches.ts` (ask-gated).
+     - `NEON_BRANCH_LIMIT` — only THEN run `bash scripts/cleanup-neon-branches.sh` — EXACTLY
+       that literal command, no `export PATH` prefix, no pipes: the allowlist rule is an exact
+       match, and any prefix/suffix drops the command to the ask-gated classifier. The wrapper
+       resolves Node 22 itself and the underlying script is merge-aware (verify with
+       `bash scripts/cleanup-neon-branches.sh --dry-run` first if in doubt — but note flags
+       also break the exact-match rule, so the dry run may prompt).
      - `BUILD_ERROR` — fix the code.
      - `ENV_MISSING` — check Vercel project settings; env-var changes are ask-gated.
      - `OTHER` — diagnose from the quoted logs before touching anything.
