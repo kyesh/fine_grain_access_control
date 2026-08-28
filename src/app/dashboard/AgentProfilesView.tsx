@@ -1278,16 +1278,16 @@ function McpConnectCard({ endpoint, proxyKey }: { endpoint: string; proxyKey: st
             {copied ? 'Copied' : 'Copy'}
           </span>
         </button>
-        <p className="text-xs leading-relaxed text-subtle">
-          Using claude.ai? Skip the endpoint and token — add FGAC.ai from the{' '}
+        <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1.5 pt-0.5">
           <DirectoryCta
             location="dashboard_connect"
-            className="text-primary underline underline-offset-2 hover:opacity-80"
+            className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border border-claude-border bg-claude-bg px-3 py-1 text-[12px] font-semibold text-claude hover:opacity-80"
           >
-            Claude connectors directory
-          </DirectoryCta>{' '}
-          and it connects through the same sign-in.
-        </p>
+            <span className="h-[7px] w-[7px] rounded-full bg-claude" />
+            Connect in Claude.ai Directory
+          </DirectoryCta>
+          <span className="text-[11px] text-subtle">No endpoint or token needed.</span>
+        </div>
       </div>
     </Card>
   );
