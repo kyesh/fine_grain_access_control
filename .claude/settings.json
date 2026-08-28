@@ -65,7 +65,8 @@
       "Bash(curl -s http://localhost:9222/json/version)",
       "Bash(curl -sf http://localhost:3000:*)",
       "Bash(npx tsx scripts/cleanup-neon-branches.ts:*)",
-      "Bash(bash scripts/cleanup-neon-branches.sh)"
+      "Bash(bash scripts/cleanup-neon-branches.sh)",
+      "Bash(bash scripts/cleanup-neon-branches.sh:*)"
     ]
   },
   "hooks": {

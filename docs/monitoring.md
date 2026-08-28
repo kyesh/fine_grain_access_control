@@ -257,3 +257,51 @@ created again, which would be a regression in `clerkPrimaryEmail` /
 `resolveDbUser` rather than a self-heal, and is worth investigating at the first
 non-zero day. The event is unsampled and independent of `$mcp_tool_call`, so
 these counts are exact.
+
+**Deploy-lag caveat (2026-08-27):** the standalone event shipped in `2ed046b`
+(main, 2026-08-25) but production ran older code past that date — prod emits
+only the `google_token_identity_fallback` **property** on `$mcp_tool_call`.
+Until the deploy carrying `2ed046b` is confirmed live, this watch item must
+query the property, not the event:
+
+```sql
+SELECT toDate(timestamp) AS day, count() AS fallbacks, uniq(person_id) AS users
+FROM events
+WHERE event = '$mcp_tool_call' AND properties.google_token_identity_fallback = 'true'
+  AND timestamp > now() - INTERVAL 30 DAY
+GROUP BY day ORDER BY day
+```
+
+Measured 2026-08-27 via that property query: **28 fallbacks in the trailing
+week** — no longer the zero measured on 2026-08-25. Per this runbook's own
+rule, a rising count means drift is being *created* again (a
+`clerkPrimaryEmail` / `resolveDbUser` regression), and is open for
+investigation.
+
+**7.5 — Install-funnel unique installers.** Raw
+`connector_install_started{mcp_401}` counts are per-request identical to
+`mcp_auth_attempt` failures (same code path) — they measure 401/retry volume,
+not people. `install_fingerprint` (salted ip+user-agent hash, deployed
+2026-08-27) is the uniqueness key; there is no unique-count reading for data
+before it.
+
+```sql
+SELECT toDate(timestamp) AS day,
+       uniq(properties.install_fingerprint) AS unique_installers,
+       count() AS raw_401_volume
+FROM events
+WHERE event = 'connector_install_started'
+  AND properties.touchpoint = 'mcp_401'
+  AND properties.reason = 'no_token' AND properties.method = 'POST'
+  AND properties.environment = 'production'
+  AND timestamp > now() - INTERVAL 14 DAY
+GROUP BY day ORDER BY day
+```
+
+Install→signup conversion compares `unique_installers` against daily
+`sign_up_completed` (internal/QA accounts excluded). A large
+`raw_401_volume / unique_installers` ratio is expected and benign — it is
+retry pressure from established clients, the artifact that previously read
+as a conversion collapse. Split by client product via
+`properties.client_name` (populated when the unauthenticated request was an
+MCP `initialize`), or `mcp_client_initialize` for authenticated sessions.

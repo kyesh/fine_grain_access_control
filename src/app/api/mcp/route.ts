@@ -31,6 +31,7 @@ import { compileRulePattern } from '@/lib/rulePatterns';
 import { captureServerEvent } from '@/lib/posthogServer';
 import { runWithToolCallProps, addToolCallProps, getToolCallProps } from '@/lib/toolCallContext';
 import { GOOGLE_FETCH_TIMEOUT_MS, CLERK_TOKEN_TIMEOUT_MS, withTimeout, isUpstreamTimeout } from '@/lib/upstreamTimeouts';
+import { installFingerprint, parseInitializeClientInfo, type McpClientInfo } from '@/lib/mcpClientSignals';
 import { inSuccessSample, AUTH_SUCCESS_SAMPLE } from '@/lib/authSampling';
 import { ensureDefaultProfile } from '@/db/defaultProfile';
 import { mintApprovalLink, type ApprovalAction } from '@/lib/approvalLinks';
@@ -78,7 +79,14 @@ interface ConnectionDenied {
 
 type ConnectionResult = ConnectionApproved | ConnectionDenied;
 
-async function resolveConnection(userId: string, clientId: string | undefined): Promise<ConnectionResult> {
+async function resolveConnection(
+  userId: string,
+  clientId: string | undefined,
+  // Self-reported name/version from an MCP `initialize` request — only the
+  // auth layer's eager resolve ever has it (tool handlers see later POSTs,
+  // which carry no clientInfo in stateless mode).
+  clientHint?: McpClientInfo,
+): Promise<ConnectionResult> {
   if (!clientId) {
     return { authorized: false, reason: 'no_client_id' };
   }
@@ -122,7 +130,9 @@ async function resolveConnection(userId: string, clientId: string | undefined): 
       const [newConn] = await db.insert(agentConnections).values({
         userId: user.id,
         clientId,
-        clientName: clientId,
+        // Real product name when the creating request was `initialize`;
+        // the opaque client_id otherwise (later initializes backfill it).
+        clientName: clientHint?.name ?? clientId,
         status: 'approved',
         proxyKeyId: defaultKey.id,
         approvedAt: new Date(),
@@ -140,6 +150,8 @@ async function resolveConnection(userId: string, clientId: string | undefined): 
       captureServerEvent(user.clerkUserId, 'mcp_connection_created', {
         connection_id: newConn.id,
         client_id: clientId,
+        client_name: clientHint?.name,
+        client_version: clientHint?.version,
         auto_attached: true,
         account_age_seconds: accountAgeSeconds,
         ...(accountAgeSeconds < 600 ? { $set_once: { signup_source: 'claude_connector' } } : {}),
@@ -158,9 +170,17 @@ async function resolveConnection(userId: string, clientId: string | undefined): 
     }
   }
 
+  // Backfill-on-touch: rows created before initialize-time capture (or by a
+  // tool-handler resolve losing the race) hold the opaque client_id as their
+  // name; the next initialize replaces it. Never overwrites a real name.
+  const backfillName =
+    clientHint?.name && connection.clientName === connection.clientId
+      ? { clientName: clientHint.name }
+      : {};
   await db.update(agentConnections)
-    .set({ lastUsedAt: new Date() })
+    .set({ lastUsedAt: new Date(), ...backfillName })
     .where(eq(agentConnections.id, connection.id));
+  if (backfillName.clientName) connection.clientName = backfillName.clientName;
 
   if (connection.status === 'pending') {
     return {
@@ -993,7 +1013,7 @@ function parseGmailMessage(msg: Record<string, unknown>) {
 
 // ─── Require Approval Wrapper ───────────────────────────────────────────────
 
-type AuthInfo = { extra?: { userId?: string }; clientId?: string };
+type AuthInfo = { extra?: { userId?: string; userAgent?: string }; clientId?: string };
 
 type ApprovalDenied = { content: Array<{ type: 'text'; text: string }>; isError?: boolean };
 
@@ -1071,6 +1091,7 @@ function withToolAnalytics<R extends ToolAnalyticsResult>(
         $mcp_duration_ms: Date.now() - started,
         $mcp_is_error: outcome === 'error' || outcome === 'exception',
         client_id: extra?.authInfo?.clientId,
+        user_agent: extra?.authInfo?.extra?.userAgent,
         outcome,
         ...getToolCallProps(),
       },
@@ -2219,6 +2240,14 @@ const verifyMcpAuth = async (req: Request, bearerToken?: string) => {
     strategyMemoSet(clientIdHint, strategyUsed);
   }
 
+  // Client self-identification: in stateless streamable HTTP every POST gets
+  // a fresh McpServer, so the `initialize` request is the ONLY place the
+  // client's name/version exist server-side — and this auth wrapper is the
+  // only code that still holds the raw Request. Parsed from a clone;
+  // undefined for every other request.
+  const clientInfo = await parseInitializeClientInfo(req);
+  const userAgent = req.headers.get('user-agent') ?? undefined;
+
   // Auth-health instrumentation: every failure, sampled successes. This is
   // the alerting substrate for the JWKS/strategy optimizations — an auth
   // regression shows up here (and as vanishing $mcp_tool_call volume) long
@@ -2249,12 +2278,21 @@ const verifyMcpAuth = async (req: Request, bearerToken?: string) => {
   // this is a rate metric, not an identity metric. reason='no_token' on POST
   // approximates fresh install attempts; 'invalid_token' is mostly token
   // expiry/refresh noise from established clients.
+  // `install_fingerprint` (salted hash of ip+ua) is the uniqueness key:
+  // distinct_id stays 'anonymous-mcp' so person-space is untouched, and
+  // uniq(properties.install_fingerprint) becomes the real installer count —
+  // raw daily totals are 401/retry volume (exactly the mcp_auth_attempt
+  // failure counts above), not people. An unauthenticated `initialize`
+  // additionally self-reports the client product.
   if (!authInfo) {
     captureServerEvent('anonymous-mcp', 'connector_install_started', {
       touchpoint: 'mcp_401',
       reason: bearerToken ? 'invalid_token' : 'no_token',
       method: req.method,
-      user_agent: req.headers.get('user-agent') ?? undefined,
+      user_agent: userAgent,
+      install_fingerprint: installFingerprint(req),
+      client_name: clientInfo?.name,
+      client_version: clientInfo?.version,
     });
   }
 
@@ -2266,9 +2304,21 @@ const verifyMcpAuth = async (req: Request, bearerToken?: string) => {
   if (authInfo) {
     const userId = authInfo.extra?.userId as string | undefined;
     const clientId = (authInfo as Record<string, unknown>).clientId as string | undefined;
+    // withToolAnalytics sees only authInfo, never the Request — ride the
+    // user-agent along so $mcp_tool_call can be split by client product.
+    (authInfo as { extra?: Record<string, unknown> }).extra = { ...authInfo.extra, userAgent };
+    // Once-per-MCP-session product attribution (the initialize handshake).
+    if (clientInfo && userId) {
+      captureServerEvent(userId, 'mcp_client_initialize', {
+        client_name: clientInfo.name,
+        client_version: clientInfo.version,
+        client_id: clientId,
+        user_agent: userAgent,
+      });
+    }
     if (userId && clientId) {
       try {
-        await resolveConnection(userId, clientId);
+        await resolveConnection(userId, clientId, clientInfo);
       } catch (err) {
         console.error('[MCP] Eager connection creation failed:', describeErrorForLog(err));
       }
