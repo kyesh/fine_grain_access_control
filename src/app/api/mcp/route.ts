@@ -374,18 +374,11 @@ async function getGoogleToken(
     }
     // Clerk reports the scopes Google actually granted (the dashboard's
     // checkGoogleAccess already treats a missing scope here as "not
-    // connected"). Same two-signal pattern as google_token_identity_fallback:
-    // the tool-call property attributes the miss to the call, the standalone
-    // event is the countable one for sizing the affected population.
+    // connected"). Only computed here — gmailScopeDenial does the enforcement
+    // and the analytics, so a sheets-only call by a Gmail-scope-less user
+    // records nothing.
     const scopes = Array.isArray(grant.scopes) ? grant.scopes : undefined;
     const hasGmailScope = scopes ? scopes.some(s => GMAIL_SCOPES.includes(s)) : undefined;
-    if (hasGmailScope === false) {
-      addToolCallProps({ google_scope_missing: true });
-      captureServerEvent(keyOwner.clerkUserId, 'google_scope_missing', {
-        via: 'mcp',
-        account_delegated: targetEmail.toLowerCase() !== keyOwner.email.toLowerCase(),
-      });
-    }
     return { token: grant.token, hasGmailScope };
   } catch (err) {
     // Observability for the "Clerk cannot refresh the Google token" failure
@@ -1232,10 +1225,19 @@ async function resolveAccountAndToken(
  * generic 403 text used to send agents into retry loops. Deterministic and
  * never-reached-Google, so it is the `failed` class (textResult), not an
  * upstream `error` — see the ResolveFailureReason comment above.
+ *
+ * Two signals, same pattern as google_token_identity_fallback: the tool-call
+ * properties attribute the denial to the call; the standalone event is
+ * unsampled and independent of $mcp_tool_call, so `uniq(person)` over it is
+ * exactly the locked-out population (docs/monitoring.md 7.6).
  */
-function gmailScopeDenial(resolved: ResolvedAccount) {
+function gmailScopeDenial(conn: ConnectionApproved, resolved: ResolvedAccount) {
   if (resolved.hasGmailScope !== false) return null;
-  addToolCallProps({ failure_reason: 'gmail_scope_missing' });
+  addToolCallProps({ failure_reason: 'gmail_scope_missing', google_scope_missing: true });
+  captureServerEvent(conn.user.clerkUserId, 'google_scope_missing', {
+    via: 'mcp',
+    account_delegated: resolved.targetEmail.toLowerCase() !== conn.user.email.toLowerCase(),
+  });
   return textResult(
     `❌ The Google account '${resolved.targetEmail}' is connected WITHOUT Gmail permission — ` +
     `most likely the Gmail checkbox was left unchecked on Google's consent screen when connecting. ` +
@@ -1284,7 +1286,7 @@ async function executeRawGoogleCall(
   // Raw Gmail calls need the same scope pre-flight as the dedicated Gmail
   // tools (every gmail/* path classifies into the 'gmail' family).
   if (family === 'gmail') {
-    const scopeDenial = gmailScopeDenial(resolved);
+    const scopeDenial = gmailScopeDenial(conn, resolved);
     if (scopeDenial) return scopeDenial;
   }
 
@@ -1509,7 +1511,7 @@ const handler = createMcpHandler(
 
         const resolved = await resolveAccountAndToken(conn, account);
         if ('error' in resolved) return textResult(resolved.error);
-        const scopeDenial = gmailScopeDenial(resolved);
+        const scopeDenial = gmailScopeDenial(conn, resolved);
         if (scopeDenial) return scopeDenial;
 
         const params = new URLSearchParams();
@@ -1536,7 +1538,7 @@ const handler = createMcpHandler(
 
         const resolved = await resolveAccountAndToken(conn, account);
         if ('error' in resolved) return textResult(resolved.error);
-        const scopeDenial = gmailScopeDenial(resolved);
+        const scopeDenial = gmailScopeDenial(conn, resolved);
         if (scopeDenial) return scopeDenial;
 
         // Read-time enforcement: label blacklist/whitelist + content blacklist
@@ -1573,7 +1575,7 @@ const handler = createMcpHandler(
 
         const resolved = await resolveAccountAndToken(conn, account);
         if ('error' in resolved) return textResult(resolved.error);
-        const scopeDenial = gmailScopeDenial(resolved);
+        const scopeDenial = gmailScopeDenial(conn, resolved);
         if (scopeDenial) return scopeDenial;
 
         // Read-time enforcement on the parent message (labels + content rules):
@@ -1646,7 +1648,7 @@ const handler = createMcpHandler(
 
         const resolved = await resolveAccountAndToken(conn, account);
         if ('error' in resolved) return textResult(resolved.error);
-        const scopeDenial = gmailScopeDenial(resolved);
+        const scopeDenial = gmailScopeDenial(conn, resolved);
         if (scopeDenial) return scopeDenial;
 
         // Enforce send whitelist
@@ -1677,7 +1679,7 @@ const handler = createMcpHandler(
 
         const resolved = await resolveAccountAndToken(conn, account);
         if ('error' in resolved) return textResult(resolved.error);
-        const scopeDenial = gmailScopeDenial(resolved);
+        const scopeDenial = gmailScopeDenial(conn, resolved);
         if (scopeDenial) return scopeDenial;
 
         const result = await gmailFetch(resolved.token, resolved.targetEmail, 'labels');
