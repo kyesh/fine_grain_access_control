@@ -305,6 +305,9 @@ expect('batch denied → null (denial_code identifies it)',
 expect('family-unsupported denied keeps family visible (per-family demand analytics)',
   rawApiFamily(classifyGoogleApiCall('people/v1/people:createContact', 'POST')),
   (f: string | null) => f === 'people');
+expect('gmail-write denied keeps gmail family (which writes agents want is roadmap signal)',
+  rawApiFamily(classifyGoogleApiCall('gmail/v1/users/me/drafts', 'POST')),
+  (f: string | null) => f === 'gmail');
 
 if (failures > 0) {
   console.error(`\n${failures} test(s) FAILED`);

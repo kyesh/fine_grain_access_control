@@ -133,7 +133,10 @@ export function classifyGoogleApiCall(rawPath: string, method: string): RawCallC
     if (segments[segments.length - 1] === 'send' && segments[segments.length - 2] === 'messages') {
       return { kind: 'gmail_send' };
     }
-    return { kind: 'denied', code: 'gmail_write_unsupported', reason: '🚫 Access Denied: This Gmail write endpoint is not permitted through FGAC. The only supported Gmail write is messages/send (recipients are checked against the send whitelist).' };
+    // family kept on the denial: which Gmail writes agents reach for (drafts,
+    // labels, trash, …) is roadmap-prioritization signal, same as the
+    // unsupported-family denials — raw_api_endpoint carries the exact path.
+    return { kind: 'denied', code: 'gmail_write_unsupported', family: 'gmail', reason: '🚫 Access Denied: This Gmail write endpoint is not permitted through FGAC. The only supported Gmail write is messages/send (recipients are checked against the send whitelist).' };
   }
 
   // Slides rides drive.file exactly like Sheets/Docs (creates and app-created
