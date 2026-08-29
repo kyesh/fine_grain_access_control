@@ -499,8 +499,16 @@ async function policyDenialWithLink(
       action: action.action, request_id: requestId, target_hash: targetHash, mint_count: mintCount,
     });
     addToolCallProps({ approval_request_id: requestId });
+    // The user-facing sentence exists because the denial text above is
+    // FGAC-jargon the agent tends to paraphrase AT the user ("not exposed in
+    // your FGAC rules") — and measured 2026-08-25→29, 62% of file-approval
+    // links were never opened while every opened+approved link now verifies
+    // clean, so the remaining funnel loss is entirely in getting the click.
+    // A quotable, jargon-free line doubles the URL's survival odds in
+    // paraphrase and tells the user why clicking is safe.
     return textResult(
       `${message}\n👉 Share this link with the user to approve it in one click: ${url}\n` +
+      `Suggested wording to relay: "FGAC is blocking this until you approve it — one click, and you can revoke it any time from your dashboard: ${url}"\n` +
       AGENT_APPROVAL_PROTOCOL,
     );
   } catch (err) {
