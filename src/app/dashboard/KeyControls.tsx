@@ -82,12 +82,22 @@ export function KeyControls({
 }) {
   const [isPending, startTransition] = useTransition();
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
 
   async function onSubmit(formData: FormData) {
     startTransition(async () => {
       try {
+        setCreateError(null);
         const result = await createProxyKey(formData);
-        
+
+        if ('error' in result) {
+          // Validation refusals (e.g. a label whose URL slug collides with an
+          // existing profile) come back as values — production masks thrown
+          // server-action messages, and the user needs to see the reason.
+          setCreateError(result.error ?? "Profile creation was refused.");
+          return;
+        }
+
         if (result?.privateKey && result?.proxyKey) {
           // Show the key and endpoint to the user (primary flow)
           const proxyEndpoint = "https://gmail.fgac.ai";
@@ -146,6 +156,7 @@ export function KeyControls({
         setIsModalOpen(false);
       } catch (err) {
         console.error("Failed to create key", err);
+        setCreateError("Something went wrong creating the profile. Please try again.");
       }
     });
   }
@@ -333,6 +344,11 @@ export function KeyControls({
                 )}
               </div>
 
+              {createError && (
+                <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                  {createError}
+                </p>
+              )}
               <div className="mt-2 flex justify-end gap-3 pt-2">
                 <button
                   type="button"

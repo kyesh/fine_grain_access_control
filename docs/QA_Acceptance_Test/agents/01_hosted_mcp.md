@@ -135,6 +135,26 @@ curl -s $BASE_URL/api/mcp -X POST \
 ### A7: Block → rejected
 - [ ] Tool call returns "blocked" message
 
+### A12: Profile-addressed URL binds a new connection to that profile
+- Discovery per-URL first (curl, no auth): `POST /api/mcp/<slug>` → 401 whose
+  `resource_metadata` points at `/.well-known/oauth-protected-resource/mcp/<slug>`;
+  that document AND the RFC 9728 probe form
+  `/.well-known/oauth-protected-resource/api/mcp/<slug>` both return
+  `resource` = the full slug URL. `<slug>` = a non-default profile's label
+  slugified (lowercase, non-alphanumerics → `-`)
+- Register a FRESH DCR client and complete OAuth (same procedure as auth
+  setup) against `/api/mcp/<slug>`
+- [ ] Dashboard shows the new connection already bound to the slug's profile
+      (no approval/attach step)
+- [ ] A nonsense slug (`/api/mcp/no-such-profile`) still authenticates but
+      binds to the Default Profile
+
+### A13: Profile-addressed URLs never rebind an existing connection
+- Reuse the A12 client's bearer token; POST a tool call to a DIFFERENT
+  profile's slug URL
+- [ ] Call succeeds under the ORIGINAL profile's rules; dashboard binding
+      unchanged
+
 ---
 
 ## Capability: Key Lifecycle (→ capabilities/07_key_lifecycle.md)

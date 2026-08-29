@@ -129,6 +129,24 @@ tmux send-keys -t fgac-qa "What are my permissions?" Enter
 ```
 - [ ] Shows connection, key, emails, rules
 
+### A12: Profile-addressed URL binds to that profile
+```bash
+# <slug> = a non-default profile's label slugified ("All Access" → all-access)
+claude mcp add --transport http fgac-slug <BASE_URL>/api/mcp/<slug>
+claude mcp login fgac-slug    # needs a TTY — run inside tmux, complete OAuth via /browser-agent
+```
+- [ ] After OAuth, `get_my_permissions` (or the dashboard) shows the new
+      connection bound to the slug's profile — no dashboard attach step
+
+### A13: URL change never rebinds an existing connection
+```bash
+claude mcp remove fgac-slug && claude mcp add --transport http fgac-slug <BASE_URL>/api/mcp/<other-slug>
+```
+- Reconnect (cached credentials reuse the same OAuth client for the same
+  entry name in the same project)
+- [ ] The connection stays bound to its ORIGINAL profile; only the dashboard
+      can rebind (cap 06 A5)
+
 ---
 
 ## Capability: Label Access (→ capabilities/05_label_access.md)

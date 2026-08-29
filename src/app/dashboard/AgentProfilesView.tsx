@@ -13,6 +13,7 @@ import { DeleteRuleButton } from './DeleteRuleButton';
 import { RuleControls } from './RuleControls';
 import { KeyControls, SecretKeyDisplay } from './KeyControls';
 import { DirectoryCta } from '../DirectoryCta';
+import { slugifyProfileLabel } from '@/lib/profileSlugs';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -257,7 +258,7 @@ export function AgentProfilesView({
                 hasCompleteGoogleAccess={hasCompleteGoogleAccess}
               />
 
-              <McpConnectCard endpoint={mcpEndpoint} proxyKey={active.key} />
+              <McpConnectCard endpoint={mcpEndpoint} profile={active} />
             </div>
           </div>
 
@@ -1245,39 +1246,65 @@ function GmailAccessCard({
 
 // ─── MCP endpoint ───────────────────────────────────────────────────────────
 
-function McpConnectCard({ endpoint, proxyKey }: { endpoint: string; proxyKey: string }) {
+function CopyRow({ value, display }: { value: string; display?: string }) {
   const [copied, setCopied] = useState(false);
+  return (
+    <button
+      onClick={async () => {
+        await navigator.clipboard.writeText(value);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+      }}
+      className="flex w-full items-center justify-between gap-2 rounded-sm bg-surface-inverse px-3 py-2 text-left"
+    >
+      <code className="min-w-0 truncate font-mono text-[11px] text-surface-inverse-foreground">
+        {display ?? value}
+      </code>
+      <span className="shrink-0 text-[11px] font-semibold text-surface-inverse-foreground">
+        {copied ? 'Copied' : 'Copy'}
+      </span>
+    </button>
+  );
+}
+
+function McpConnectCard({ endpoint, profile }: { endpoint: string; profile: Profile }) {
+  // Every profile is addressable by its label slug; the bare endpoint keeps
+  // meaning "Default Profile", so the default shows the canonical short URL.
+  const slug = slugifyProfileLabel(profile.label);
+  const profileUrl = profile.isDefault || !slug ? endpoint : `${endpoint}/${slug}`;
+  const claudeCmd = `claude mcp add --transport http fgac ${profileUrl}`;
 
   return (
     <Card>
       <CardHeader
         title="Connect a new agent via MCP"
-        subtitle="Point any MCP client at this endpoint. New agents attach to your Default Profile read-only; re-scope or block them above."
+        subtitle={
+          profile.isDefault
+            ? 'Agents that connect through this URL attach to your Default Profile read-only; re-scope or block them above.'
+            : `Agents that connect through this URL attach to “${profile.label}” automatically — no dashboard step needed.`
+        }
       />
       <div className="px-5 pb-5 space-y-3">
+        <div>
+          <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-subtle">
+            MCP endpoint for this profile
+          </p>
+          <CopyRow value={profileUrl} />
+        </div>
+        <div>
+          <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-subtle">
+            Claude Code — run in your project directory
+          </p>
+          <CopyRow value={claudeCmd} />
+        </div>
         {/* Endpoint and key sit together because configuring an agent needs
             both; splitting them across cards made people hunt for the key. */}
         <div>
           <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-subtle">
             Bearer token for this profile
           </p>
-          <SecretKeyDisplay apiKey={proxyKey} className="text-[12px] text-foreground w-full" />
+          <SecretKeyDisplay apiKey={profile.key} className="text-[12px] text-foreground w-full" />
         </div>
-        <button
-          onClick={async () => {
-            await navigator.clipboard.writeText(endpoint);
-            setCopied(true);
-            setTimeout(() => setCopied(false), 1500);
-          }}
-          className="flex w-full items-center justify-between gap-2 rounded-sm bg-surface-inverse px-3 py-2 text-left"
-        >
-          <code className="min-w-0 truncate font-mono text-[11px] text-surface-inverse-foreground">
-            {endpoint}
-          </code>
-          <span className="shrink-0 text-[11px] font-semibold text-surface-inverse-foreground">
-            {copied ? 'Copied' : 'Copy'}
-          </span>
-        </button>
         <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1.5 pt-0.5">
           <DirectoryCta
             location="dashboard_connect"

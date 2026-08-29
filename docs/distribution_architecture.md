@@ -133,6 +133,7 @@ the operation findable.
 |---------|-----|------|---------|
 | REST Proxy | `https://gmail.fgac.ai/gmail/v1/...` | `Bearer sk_proxy_...` | Local scripts, direct API calls |
 | MCP Server | `https://fgac.ai/api/mcp` | OAuth Bearer token (Clerk) | Claude Code MCP, any MCP client |
+| MCP Server (profile-addressed) | `https://fgac.ai/api/mcp/<profile-slug>` | OAuth Bearer token (Clerk) | Same server; a NEW connection binds to the profile whose slugified label matches (`src/lib/profileSlugs.ts`). Unknown slug → Default Profile; never rebinds existing connections |
 | CLI Token | `https://fgac.ai/api/auth/cli-token` | OAuth Bearer token (Clerk) | Local scripts (auth.js) — exchanges token for proxy key |
 | Dashboard | `https://fgac.ai/dashboard` | Clerk session | Users managing agents |
 

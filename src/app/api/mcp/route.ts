@@ -22,7 +22,7 @@ import {
   agentConnections, users, proxyKeys, keyEmailAccess,
   accessRules, keyRuleAssignments, emailDelegations,
 } from '@/db/schema';
-import { eq, and } from 'drizzle-orm';
+import { eq, and, isNull } from 'drizzle-orm';
 import { filterLiveDelegatedAccess } from '@/db/delegationQueries';
 import { clerkClient } from '@clerk/nextjs/server';
 import { resolveDbUser } from '@/db/userHelpers';
@@ -43,6 +43,7 @@ import {
 } from './googleApiPolicy';
 import { DRIVE_FILE_KINDS, ACTIVE_DRIVE_FILE_KINDS, type DriveFileKind } from '@/lib/driveFileKinds';
 import { clerkPrimaryEmail } from '@/lib/clerkPrimaryEmail';
+import { slugifyProfileLabel } from '@/lib/profileSlugs';
 import { logAndSanitize, describeErrorForLog, toolErrorResult } from '@/lib/serverErrors';
 
 /** Env URL values have shipped with trailing whitespace/newlines (pasted
@@ -79,6 +80,17 @@ interface ConnectionDenied {
 
 type ConnectionResult = ConnectionApproved | ConnectionDenied;
 
+/** Resolve a profile-addressed MCP URL's slug (set by middleware from
+ * /api/mcp/<slug>) to one of THIS user's live profiles. The slug is
+ * addressing, not authorization: an unknown slug falls back to the default
+ * profile rather than failing, so a renamed profile degrades gracefully. */
+async function findProfileBySlug(userId: string, slug: string) {
+  const keys = await db.query.proxyKeys.findMany({
+    where: and(eq(proxyKeys.userId, userId), isNull(proxyKeys.revokedAt)),
+  });
+  return keys.find((k) => slugifyProfileLabel(k.label) === slug);
+}
+
 async function resolveConnection(
   userId: string,
   clientId: string | undefined,
@@ -86,6 +98,10 @@ async function resolveConnection(
   // auth layer's eager resolve ever has it (tool handlers see later POSTs,
   // which carry no clientInfo in stateless mode).
   clientHint?: McpClientInfo,
+  // Profile slug from a profile-addressed URL (/api/mcp/<slug>). Applies only
+  // when the connection is FIRST created; an existing connection keeps its
+  // dashboard-managed binding regardless of which URL requests arrive on.
+  profileSlug?: string,
 ): Promise<ConnectionResult> {
   if (!clientId) {
     return { authorized: false, reason: 'no_client_id' };
@@ -125,7 +141,13 @@ async function resolveConnection(
     // completed OAuth for this client, which is per-client consent — so the
     // connection auto-attaches to the read-only Default Profile instead of
     // starting pending. Delegated mailboxes are still gated by delegation.
-    const defaultKey = await ensureDefaultProfile(user.id, user.email);
+    // A profile-addressed URL (/api/mcp/<slug>) overrides the default with
+    // the caller's own matching profile.
+    const slugKey = profileSlug ? await findProfileBySlug(user.id, profileSlug) : undefined;
+    const defaultKey = slugKey ?? await ensureDefaultProfile(user.id, user.email);
+    if (profileSlug) {
+      console.log(`[MCP] Profile slug '${profileSlug}' ${slugKey ? `matched profile '${slugKey.label}' (${slugKey.id})` : 'matched no live profile — falling back to default'} for user=${user.email}`);
+    }
     try {
       const [newConn] = await db.insert(agentConnections).values({
         userId: user.id,
@@ -153,6 +175,8 @@ async function resolveConnection(
         client_name: clientHint?.name,
         client_version: clientHint?.version,
         auto_attached: true,
+        profile_slug: profileSlug,
+        profile_slug_matched: profileSlug ? !!slugKey : undefined,
         account_age_seconds: accountAgeSeconds,
         ...(accountAgeSeconds < 600 ? { $set_once: { signup_source: 'claude_connector' } } : {}),
       });
@@ -1044,7 +1068,7 @@ function parseGmailMessage(msg: Record<string, unknown>) {
 
 // ─── Require Approval Wrapper ───────────────────────────────────────────────
 
-type AuthInfo = { extra?: { userId?: string; userAgent?: string }; clientId?: string };
+type AuthInfo = { extra?: { userId?: string; userAgent?: string; profileSlug?: string }; clientId?: string };
 
 type ApprovalDenied = { content: Array<{ type: 'text'; text: string }>; isError?: boolean };
 
@@ -1063,7 +1087,7 @@ async function requireApproval(authInfo: AuthInfo | undefined): Promise<Connecti
   // Clerk user id) straight into the tool result. Keep the detail in the log.
   let result: ConnectionResult;
   try {
-    result = await resolveConnection(userId, clientId);
+    result = await resolveConnection(userId, clientId, undefined, authInfo?.extra?.profileSlug);
   } catch (err) {
     return errorResult(logAndSanitize('Connection resolution failed', err));
   }
@@ -2408,6 +2432,8 @@ const verifyMcpAuth = async (req: Request, bearerToken?: string) => {
   // undefined for every other request.
   const clientInfo = await parseInitializeClientInfo(req);
   const userAgent = req.headers.get('user-agent') ?? undefined;
+  // Set by middleware when the client connected via /api/mcp/<slug>.
+  const profileSlug = req.headers.get('x-fgac-profile-slug') ?? undefined;
 
   // Auth-health instrumentation: every failure, sampled successes. This is
   // the alerting substrate for the JWKS/strategy optimizations — an auth
@@ -2467,7 +2493,7 @@ const verifyMcpAuth = async (req: Request, bearerToken?: string) => {
     const clientId = (authInfo as Record<string, unknown>).clientId as string | undefined;
     // withToolAnalytics sees only authInfo, never the Request — ride the
     // user-agent along so $mcp_tool_call can be split by client product.
-    (authInfo as { extra?: Record<string, unknown> }).extra = { ...authInfo.extra, userAgent };
+    (authInfo as { extra?: Record<string, unknown> }).extra = { ...authInfo.extra, userAgent, profileSlug };
     // Once-per-MCP-session product attribution (the initialize handshake).
     if (clientInfo && userId) {
       captureServerEvent(userId, 'mcp_client_initialize', {
@@ -2479,7 +2505,7 @@ const verifyMcpAuth = async (req: Request, bearerToken?: string) => {
     }
     if (userId && clientId) {
       try {
-        await resolveConnection(userId, clientId, clientInfo);
+        await resolveConnection(userId, clientId, clientInfo, profileSlug);
       } catch (err) {
         console.error('[MCP] Eager connection creation failed:', describeErrorForLog(err));
       }
@@ -2501,9 +2527,47 @@ const authedHandler = experimental_withMcpAuth(
   }
 );
 
-export const POST = authedHandler;
-export const GET = authedHandler;
-export const DELETE = authedHandler;
+// experimental_withMcpAuth takes resourceMetadataPath as a module-level
+// constant, but profile-addressed URLs (/api/mcp/<slug>, rewritten by
+// middleware with the slug in a header) need their 401s to point at the
+// per-slug metadata document — the MCP spec requires the advertised
+// `resource` to match the URL the client connected to exactly. Patch the
+// pointer on the way out.
+const withProfileResourceMetadata =
+  (h: (req: Request) => Promise<Response>) =>
+  async (req: Request): Promise<Response> => {
+    const slug = req.headers.get('x-fgac-profile-slug');
+    // The middleware rewrite routes /api/mcp/<slug> to this file, but the
+    // handler still sees the ORIGINAL external URL in req.url — and
+    // mcp-handler 404s on anything that isn't exactly '/api/mcp'. Normalize
+    // before handing over; the slug survives in the header.
+    if (slug) {
+      const url = new URL(req.url);
+      if (url.pathname !== '/api/mcp') {
+        url.pathname = '/api/mcp';
+        req = new Request(url, req);
+      }
+    }
+    const res = await h(req);
+    if (!slug || res.status !== 401) return res;
+    const www = res.headers.get('WWW-Authenticate');
+    if (!www || !www.includes('resource_metadata=')) return res;
+    const headers = new Headers(res.headers);
+    headers.set(
+      'WWW-Authenticate',
+      www.replace(
+        /resource_metadata="([^"]+?)\/?"/,
+        (_m, base) => `resource_metadata="${base}/${slug}"`,
+      ),
+    );
+    return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
+  };
+
+const profileAwareHandler = withProfileResourceMetadata(authedHandler);
+
+export const POST = profileAwareHandler;
+export const GET = profileAwareHandler;
+export const DELETE = profileAwareHandler;
 
 // Headroom for the sheets grant-propagation grace retries (≤ ~7 s added on
 // top of normal Google latency) — never let them race the function timeout.

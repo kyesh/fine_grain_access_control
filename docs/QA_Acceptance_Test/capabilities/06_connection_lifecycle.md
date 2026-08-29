@@ -74,3 +74,24 @@
   a tool call
 - **Expected**: Blocked — auto-attach does not weaken the key-liveness check
   from the directory-readiness refactor
+
+### A12: Profile-addressed URL binds a new connection to that profile
+- Create (or reuse) a non-default profile; connect a NEW DCR client via
+  `/api/mcp/<slug>` where `<slug>` is the profile label slugified
+  (lowercase, non-alphanumerics → `-`, e.g. "All Access" → `all-access`)
+- Discovery must work per-URL first: unauthenticated POST to
+  `/api/mcp/<slug>` returns 401 whose `resource_metadata` points at
+  `/.well-known/oauth-protected-resource/mcp/<slug>`, and that document's
+  `resource` is the full URL including the slug (the RFC 9728 probe form
+  `/.well-known/oauth-protected-resource/api/mcp/<slug>` serves the same
+  document)
+- **Expected**: After OAuth, the connection appears in the dashboard already
+  bound to the slug's profile — no dashboard step. An unknown slug (typo or
+  revoked profile) still connects but binds to the Default profile
+
+### A13: Profile-addressed URLs never rebind an existing connection
+- Take an attached connection bound to profile X and send its requests to
+  profile Y's URL (same bearer token, different slug)
+- **Expected**: The connection stays bound to X — the slug applies only when
+  a connection is first created; rebinding remains a dashboard-only action
+  (A5)

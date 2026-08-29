@@ -100,6 +100,11 @@ curl -X POST http://localhost:18790/api/chat \
 ### A3-A5: Tested during auth setup
 - [ ] OAuth → pending → approved → tools work through gateway
 
+### A12–A13: Profile-addressed MCP URLs
+> Not applicable — OpenClaw connects through the gateway with a proxy key,
+> not MCP OAuth URLs. Record as `skip` with reason "MCP-URL capability;
+> covered in hosted-mcp and claude-code-mcp runbooks".
+
 ---
 
 ## Capability: Key Lifecycle (→ capabilities/07_key_lifecycle.md)
