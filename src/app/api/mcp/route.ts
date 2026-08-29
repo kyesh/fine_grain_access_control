@@ -855,7 +855,7 @@ async function withGrantGrace(
     addToolCallProps({ [`${service}_grace_retries`]: retries, [`${service}_grace_recovered`]: result.ok });
     if (result.ok) {
       // Don't let the first attempt's transient status ride on a success event.
-      addToolCallProps({ error_status: undefined });
+      addToolCallProps({ error_status: undefined, error_reason: undefined, error_domain: undefined });
       console.log(`[MCP] ${service} grace retry recovered after ${retries} attempt(s) (rule age ${grantAgeSeconds()}s)`);
     }
   }
@@ -1680,8 +1680,13 @@ const handler = createMcpHandler(
             if (retry.ok) {
               // Transparent recovery: the caller's id was stale, the message
               // has exactly one attachment, so the fresh id is unambiguously
-              // the one they meant. Counts as a success, not an error.
-              addToolCallProps({ attachment_selfheal: 'recovered' });
+              // the one they meant. Counts as a success, not an error — so
+              // the failed first attempt's status/reason must not ride on
+              // the success event (same rule as the sheets grace retry).
+              addToolCallProps({
+                attachment_selfheal: 'recovered',
+                error_status: undefined, error_reason: undefined, error_domain: undefined,
+              });
               attachmentResult = retry;
             } else {
               addToolCallProps({ attachment_selfheal: 'retry_failed' });
