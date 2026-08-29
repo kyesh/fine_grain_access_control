@@ -1569,12 +1569,17 @@ const handler = createMcpHandler(
       TOOL_DEFS.gmail_get_attachment.name,
       toolConfig(TOOL_DEFS.gmail_get_attachment, {
         messageId: z.string().describe('Gmail message ID containing the attachment'),
-        attachmentId: z.string().describe('Attachment ID, taken from the `attachments` array of a gmail_read on THIS messageId. Ids are message-scoped and are re-issued when the message is re-indexed — do not reuse one saved from an earlier session; re-read the message first.'),
+        attachmentId: z.string().optional().describe('Attachment ID, taken from the `attachments` array of a gmail_read on THIS messageId. Ids are message-scoped and are re-issued when the message is re-indexed; a stale id is healed automatically when the message has exactly one attachment. Prefer `filename` when you know it — filenames never go stale.'),
+        filename: z.string().optional().describe('Attachment filename as shown in gmail_read `attachments` (case-insensitive), as an alternative to attachmentId. If several attachments share the name, the error lists them so you can pick one by attachmentId.'),
         account: z.string().optional().describe('Email account to use.'),
       }),
-      async ({ messageId, attachmentId, account }, { authInfo }) => {
+      async ({ messageId, attachmentId, filename, account }, { authInfo }) => {
         const conn = await requireApproval(authInfo);
         if ('content' in conn) return conn;
+
+        if (!attachmentId && !filename) {
+          return errorResult('❌ Provide either attachmentId or filename to identify the attachment.');
+        }
 
         const resolved = await resolveAccountAndToken(conn, account);
         if ('error' in resolved) return textResult(resolved.error);
@@ -1593,6 +1598,39 @@ const handler = createMcpHandler(
           return textResult(restriction);
         }
 
+        // The parent read above is FRESH, so its attachment ids are the ones
+        // Gmail currently honours — the list both selector paths resolve
+        // against, and the authority the 404 self-heal below retries from.
+        // (Attachment ids are ephemeral: Gmail re-issues them on re-index,
+        // which is why an id cached from an earlier gmail_read can 404 while
+        // the message stays valid — the dominant failure of this tool per the
+        // 2026-08 directory metrics.)
+        const freshAttachments = parseGmailMessage(parentResult.data as Record<string, unknown>).attachments;
+        const listFresh = () => freshAttachments
+          .map(a => `- '${a.filename}' (${a.mimeType || 'unknown type'}, ~${Math.round((a.sizeBytes || 0) / 1024)} KB, attachmentId: ${a.attachmentId})`)
+          .join('\n');
+
+        let targetId: string;
+        if (attachmentId) {
+          addToolCallProps({ attachment_selector: 'id' });
+          targetId = attachmentId;
+        } else {
+          addToolCallProps({ attachment_selector: 'filename' });
+          const wanted = (filename as string).toLowerCase();
+          const matches = freshAttachments.filter(a => a.filename.toLowerCase() === wanted);
+          if (matches.length === 0) {
+            return errorResult(freshAttachments.length === 0
+              ? `❌ Message '${messageId}' has no attachments.`
+              : `❌ No attachment named '${filename}' on message '${messageId}'. It currently has:\n${listFresh()}\nRetry ONCE with one of these filenames or attachmentIds; if none is the one you need, it is not on this message.`);
+          }
+          if (matches.length > 1) {
+            return errorResult(
+              `❌ ${matches.length} attachments on message '${messageId}' are named '${filename}':\n${listFresh()}\n` +
+              `Retry ONCE with the attachmentId of the one you need.`);
+          }
+          targetId = matches[0].attachmentId;
+        }
+
         // Declared size from the parent's MIME metadata, stamped BEFORE the
         // attachment fetch: if that fetch fails, the event still says how big
         // the attachment was, so error rows are attributable to size vs
@@ -1601,7 +1639,7 @@ const handler = createMcpHandler(
         // property name on purpose.)
         const declaredSize = (function findDeclared(part?: { body?: { attachmentId?: string; size?: number }; parts?: unknown[] }): number | undefined {
           if (!part) return undefined;
-          if (part.body?.attachmentId === attachmentId) return part.body.size;
+          if (part.body?.attachmentId === targetId) return part.body.size;
           for (const child of (part.parts as typeof part[] | undefined) ?? []) {
             const found = findDeclared(child);
             if (found !== undefined) return found;
@@ -1612,13 +1650,52 @@ const handler = createMcpHandler(
           addToolCallProps({ attachment_declared_kb: Math.round(declaredSize / 1024) });
         }
 
-        const attachmentResult = await gmailFetch(
+        let attachmentResult = await gmailFetch(
           resolved.token,
           resolved.targetEmail,
-          `messages/${messageId}/attachments/${attachmentId}`
+          `messages/${messageId}/attachments/${targetId}`
         );
-        // Reaching here means the parent read succeeded, so a 404 now is
-        // provably the attachmentId, not the messageId.
+        // Reaching here means the parent read succeeded, so a failure now is
+        // provably the attachmentId, not the messageId. Google's split
+        // (measured 2026-08-28 against production): a well-formed token it has
+        // invalidated (message re-indexed) → 404; a malformed/truncated token
+        // → 400 "Invalid attachment token". Both mean "this id will never
+        // work, the message is fine", and the recovery is identical — so when
+        // the caller supplied the id themselves, heal it server-side instead
+        // of erroring: the fresh parent already says which ids are current.
+        if (!attachmentResult.ok && (attachmentResult.status === 404 || attachmentResult.status === 400) && attachmentId) {
+          const suppliedIdIsCurrent = freshAttachments.some(a => a.attachmentId === attachmentId);
+          if (freshAttachments.length === 0) {
+            addToolCallProps({ attachment_selfheal: 'no_attachments' });
+            return errorResult(
+              `❌ Message '${messageId}' has no attachments (${attachmentResult.status}). The attachmentId may belong to a different message — ` +
+              `STOP retrying this pair and re-check which message carries the attachment via gmail_read.`);
+          }
+          if (!suppliedIdIsCurrent && freshAttachments.length === 1) {
+            const retry = await gmailFetch(
+              resolved.token,
+              resolved.targetEmail,
+              `messages/${messageId}/attachments/${freshAttachments[0].attachmentId}`
+            );
+            if (retry.ok) {
+              // Transparent recovery: the caller's id was stale, the message
+              // has exactly one attachment, so the fresh id is unambiguously
+              // the one they meant. Counts as a success, not an error.
+              addToolCallProps({ attachment_selfheal: 'recovered' });
+              attachmentResult = retry;
+            } else {
+              addToolCallProps({ attachment_selfheal: 'retry_failed' });
+            }
+          } else if (!suppliedIdIsCurrent) {
+            addToolCallProps({ attachment_selfheal: 'ambiguous' });
+            return errorResult(
+              `❌ Gmail rejected that attachmentId (${attachmentResult.status}) — it is stale or invalid; Gmail re-issues ids when a message is re-indexed. Message '${messageId}' currently has:\n${listFresh()}\n` +
+              `Retry ONCE with the matching attachmentId above (or call again with the filename parameter instead). ` +
+              `Do NOT retry the old id — it is guaranteed to fail again.`);
+          }
+          // suppliedIdIsCurrent but Google still 404s: not a staleness case —
+          // fall through to the generic per-site text.
+        }
         if (!attachmentResult.ok) return gmailNotFoundResult('attachment', attachmentResult, messageId);
 
         const attachment = attachmentResult.data as { size?: number; data?: string };
