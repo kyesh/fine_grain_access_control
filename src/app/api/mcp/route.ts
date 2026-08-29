@@ -205,7 +205,21 @@ async function resolveConnection(
   await db.update(agentConnections)
     .set({ lastUsedAt: new Date(), ...backfillName })
     .where(eq(agentConnections.id, connection.id));
-  if (backfillName.clientName) connection.clientName = backfillName.clientName;
+  if (backfillName.clientName) {
+    connection.clientName = backfillName.clientName;
+    // The row is almost never created by the initialize POST itself — the
+    // client's concurrent SSE GET (no body, no clientInfo) usually wins the
+    // insert race — so mcp_connection_created fires nameless (measured
+    // 2026-08-29: 0 of 10 events since 08-27 carried client_name). This
+    // one-time event, on the opaque-id → product-name transition, is the
+    // reliable connection→client mapping; join on connection_id.
+    captureServerEvent(user.clerkUserId, 'mcp_connection_client_identified', {
+      connection_id: connection.id,
+      client_id: clientId,
+      client_name: clientHint?.name,
+      client_version: clientHint?.version,
+    });
+  }
 
   if (connection.status === 'pending') {
     return {
@@ -2315,7 +2329,20 @@ const handler = createMcpHandler(
     // before any tool is called. Agents read tool catalogs as paths (task →
     // first plausible tool → stop), so the shortcut/full-surface relationship
     // must be stated up front, not only inside individual descriptions.
+    //
+    // The first two sentences are the whole onboarding surface for most
+    // connectors: 2026-08-29 analysis of the silent-connector cohort showed
+    // every measurable zero-call user DOES complete the initialize handshake
+    // (Claude.ai web 8:1 over Claude Code, most across many sessions), so
+    // this string reaches their context repeatedly while list_accounts's
+    // next_steps block never does — a user whose agent calls nothing never
+    // sees a tool result. Two failure modes it must counter: the agent
+    // claiming it cannot access the user's mail despite the connector, and
+    // a just-connected user never being shown what a first use looks like.
     instructions:
+      "These tools give live access to the Gmail, Google Docs, and Google Sheets accounts the user has already connected — mailbox reads work immediately, with no further setup. " +
+      "When the user mentions their email, documents, or spreadsheets, reach for these tools instead of saying you cannot access their data. " +
+      "If this connector has not been used yet, call list_accounts first: it returns the reachable mailboxes plus next-step guidance, and makes an easy first demonstration to offer (e.g. summarizing recent unread mail). " +
       'FGAC proxies Google Workspace behind per-user access rules enforced upstream at the proxy — every tool passes through the same enforcement. ' +
       'The typed tools are shortcuts for common operations: docs_edit and sheets_edit accept native Google batchUpdate requests (tables, text styles, ' +
       'cell formatting, charts, sheet tabs), comments_read and comments_add cover Drive-API comments on docs and sheets, and the values/gmail tools ' +
