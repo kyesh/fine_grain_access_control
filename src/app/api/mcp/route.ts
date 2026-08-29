@@ -529,7 +529,7 @@ async function policyDenialWithLink(
     // paraphrase and tells the user why clicking is safe.
     return textResult(
       `${message}\n👉 Share this link with the user to approve it in one click: ${url}\n` +
-      `Suggested wording to relay: "FGAC is blocking this until you approve it — one click, and you can revoke it any time from your dashboard: ${url}"\n` +
+      `Suggested wording to relay: "FGAC is blocking this until you approve it here: ${url} — one click, and you can revoke it any time from your dashboard."\n` +
       AGENT_APPROVAL_PROTOCOL,
     );
   } catch (err) {
