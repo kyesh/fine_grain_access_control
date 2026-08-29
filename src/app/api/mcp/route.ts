@@ -39,7 +39,8 @@ import { recordApprovalMint } from '@/lib/approvalRequests';
 import { TOOL_DEFS, toolAnnotations, type FgacToolDef } from './toolDefs';
 import {
   classifyGoogleApiCall, extractSendRecipients, sheetsApprovalAction, docsApprovalAction,
-  templateGoogleApiPath, rawApiFamily,
+  templateGoogleApiPath, rawApiFamily, extractGoogleErrorReason,
+  type RawCallClass, type GoogleErrorReason,
 } from './googleApiPolicy';
 import { DRIVE_FILE_KINDS, ACTIVE_DRIVE_FILE_KINDS, type DriveFileKind } from '@/lib/driveFileKinds';
 import { clerkPrimaryEmail } from '@/lib/clerkPrimaryEmail';
@@ -204,7 +205,21 @@ async function resolveConnection(
   await db.update(agentConnections)
     .set({ lastUsedAt: new Date(), ...backfillName })
     .where(eq(agentConnections.id, connection.id));
-  if (backfillName.clientName) connection.clientName = backfillName.clientName;
+  if (backfillName.clientName) {
+    connection.clientName = backfillName.clientName;
+    // The row is almost never created by the initialize POST itself — the
+    // client's concurrent SSE GET (no body, no clientInfo) usually wins the
+    // insert race — so mcp_connection_created fires nameless (measured
+    // 2026-08-29: 0 of 10 events since 08-27 carried client_name). This
+    // one-time event, on the opaque-id → product-name transition, is the
+    // reliable connection→client mapping; join on connection_id.
+    captureServerEvent(user.clerkUserId, 'mcp_connection_client_identified', {
+      connection_id: connection.id,
+      client_id: clientId,
+      client_name: clientHint?.name,
+      client_version: clientHint?.version,
+    });
+  }
 
   if (connection.status === 'pending') {
     return {
@@ -330,11 +345,16 @@ async function isOwnClerkEmail(clerkUserId: string, email: string): Promise<bool
  * everything else half-works.
  */
 const GMAIL_SCOPES = ['https://www.googleapis.com/auth/gmail.modify', 'https://mail.google.com/'];
+// Every non-Gmail surface (Sheets, Docs, Slides, Drive) rides drive.file;
+// the full drive scope would also satisfy it if a grant ever carried one.
+const DRIVE_FILE_SCOPES = ['https://www.googleapis.com/auth/drive.file', 'https://www.googleapis.com/auth/drive'];
 
 type GoogleTokenResult = {
   token: string;
   /** undefined = Clerk did not report scopes; never enforce on missing metadata. */
   hasGmailScope?: boolean;
+  /** undefined = Clerk did not report scopes; never enforce on missing metadata. */
+  hasDriveFileScope?: boolean;
 };
 
 async function getGoogleToken(
@@ -403,7 +423,8 @@ async function getGoogleToken(
     // records nothing.
     const scopes = Array.isArray(grant.scopes) ? grant.scopes : undefined;
     const hasGmailScope = scopes ? scopes.some(s => GMAIL_SCOPES.includes(s)) : undefined;
-    return { token: grant.token, hasGmailScope };
+    const hasDriveFileScope = scopes ? scopes.some(s => DRIVE_FILE_SCOPES.includes(s)) : undefined;
+    return { token: grant.token, hasGmailScope, hasDriveFileScope };
   } catch (err) {
     // Observability for the "Clerk cannot refresh the Google token" failure
     // mode (Clerk 422: grant stored without a refresh token — seen on the
@@ -499,8 +520,16 @@ async function policyDenialWithLink(
       action: action.action, request_id: requestId, target_hash: targetHash, mint_count: mintCount,
     });
     addToolCallProps({ approval_request_id: requestId });
+    // The user-facing sentence exists because the denial text above is
+    // FGAC-jargon the agent tends to paraphrase AT the user ("not exposed in
+    // your FGAC rules") — and measured 2026-08-25→29, 62% of file-approval
+    // links were never opened while every opened+approved link now verifies
+    // clean, so the remaining funnel loss is entirely in getting the click.
+    // A quotable, jargon-free line doubles the URL's survival odds in
+    // paraphrase and tells the user why clicking is safe.
     return textResult(
       `${message}\n👉 Share this link with the user to approve it in one click: ${url}\n` +
+      `Suggested wording to relay: "FGAC is blocking this until you approve it here: ${url} — one click, and you can revoke it any time from your dashboard."\n` +
       AGENT_APPROVAL_PROTOCOL,
     );
   } catch (err) {
@@ -575,30 +604,9 @@ type GoogleFetchResult =
   | { ok: true; data: unknown }
   | { ok: false; error: string; status?: number };
 
-/**
- * Google's error body carries the only field that distinguishes the several
- * unrelated conditions it multiplexes onto one HTTP status — most importantly
- * 403, which covers both "your OAuth grant is missing a scope" and "you are
- * being rate limited". Only the numeric status used to survive, so the 403
- * remediation asserted the scope cause unconditionally and told rate-limited
- * callers to tear down a working Google connection.
- *
- * `reason`/`domain` are Google-defined enum strings (`rateLimitExceeded`,
- * `usageLimits`, …) and `status` is its canonical code (`PERMISSION_DENIED`)
- * — none of them are customer data, so they are safe to put on events.
- */
-type GoogleErrorReason = { reason?: string; domain?: string; status?: string };
-
-function extractGoogleErrorReason(data: unknown): GoogleErrorReason {
-  const err = (data as { error?: { errors?: Array<{ reason?: string; domain?: string }>; status?: string } })?.error;
-  if (!err || typeof err !== 'object') return {};
-  const first = Array.isArray(err.errors) ? err.errors[0] : undefined;
-  return {
-    reason: typeof first?.reason === 'string' ? first.reason : undefined,
-    domain: typeof first?.domain === 'string' ? first.domain : undefined,
-    status: typeof err.status === 'string' ? err.status : undefined,
-  };
-}
+// GoogleErrorReason / extractGoogleErrorReason moved to googleApiPolicy.ts
+// (pure parsing, now unit-tested — it also reads the gRPC-style
+// error.details[] ErrorInfo shape that Sheets/Docs/Slides/People return).
 
 /** 403s Google raises for throttling rather than for a missing/revoked grant. */
 const RATE_LIMIT_REASONS = new Set([
@@ -732,7 +740,11 @@ async function googleFetch(
     const r = extractGoogleErrorReason(data);
     addToolCallProps({
       error_status: res.status,
-      ...(r.reason ? { error_reason: r.reason } : {}),
+      // Fall back to Google's canonical status string (PERMISSION_DENIED,
+      // NOT_FOUND) when the body carries no reason enum — before this, most
+      // raw-API errors landed with a null error_reason and could not be
+      // triaged by cause at all.
+      ...(r.reason || r.status ? { error_reason: r.reason ?? r.status } : {}),
       ...(r.domain ? { error_domain: r.domain } : {}),
     });
     return { ok: false, error: describeGoogleError(res.status, data, targetEmail), status: res.status };
@@ -1180,7 +1192,7 @@ function withToolAnalytics<R extends ToolAnalyticsResult>(
   });
 }
 
-type ResolvedAccount = { targetEmail: string; token: string; proxyKeyId: string; hasGmailScope?: boolean };
+type ResolvedAccount = { targetEmail: string; token: string; proxyKeyId: string; hasGmailScope?: boolean; hasDriveFileScope?: boolean };
 type ResolvedError = { error: string };
 
 /**
@@ -1241,7 +1253,13 @@ async function resolveAccountAndToken(
     return resolveFailure('google_token_unavailable', `❌ Could not fetch Google token for '${targetEmail}'. The account owner may need to reconnect Google — one-click link: ${DASHBOARD_URL}/dashboard/accounts?reconnect=1`);
   }
 
-  return { targetEmail, token: googleToken.token, proxyKeyId: conn.proxyKeyId, hasGmailScope: googleToken.hasGmailScope };
+  return {
+    targetEmail,
+    token: googleToken.token,
+    proxyKeyId: conn.proxyKeyId,
+    hasGmailScope: googleToken.hasGmailScope,
+    hasDriveFileScope: googleToken.hasDriveFileScope,
+  };
 }
 
 /**
@@ -1262,6 +1280,7 @@ function gmailScopeDenial(conn: ConnectionApproved, resolved: ResolvedAccount) {
   addToolCallProps({ failure_reason: 'gmail_scope_missing', google_scope_missing: true });
   captureServerEvent(conn.user.clerkUserId, 'google_scope_missing', {
     via: 'mcp',
+    scope: 'gmail',
     account_delegated: resolved.targetEmail.toLowerCase() !== conn.user.email.toLowerCase(),
   });
   return textResult(
@@ -1274,6 +1293,35 @@ function gmailScopeDenial(conn: ConnectionApproved, resolved: ResolvedAccount) {
   );
 }
 
+/**
+ * Mirror of gmailScopeDenial for the drive.file scope, which every non-Gmail
+ * surface (Sheets, Docs, Slides, Drive) rides. Accounts connected before
+ * drive.file joined the grant — or with the Drive checkbox left unchecked on
+ * Google's consent screen — 403 on every one of these calls (observed as the
+ * 403s on POST v4/spreadsheets, 2026-08 production), and the upstream 403
+ * body often carries no reason the agent can act on. Deterministic and
+ * never-reached-Google, so it is the `failed` class (textResult), not an
+ * upstream `error`. Applied by every typed per-file tool (sheets_*, docs_*,
+ * comments_*) and by non-Gmail raw google_api_get/modify calls.
+ */
+function driveFileScopeDenial(conn: ConnectionApproved, resolved: ResolvedAccount) {
+  if (resolved.hasDriveFileScope !== false) return null;
+  addToolCallProps({ failure_reason: 'drive_file_scope_missing', google_scope_missing: true });
+  captureServerEvent(conn.user.clerkUserId, 'google_scope_missing', {
+    via: 'mcp',
+    scope: 'drive_file',
+    account_delegated: resolved.targetEmail.toLowerCase() !== conn.user.email.toLowerCase(),
+  });
+  return textResult(
+    `❌ The Google account '${resolved.targetEmail}' is connected WITHOUT the Google Drive file permission (drive.file) — ` +
+    `most likely the account was connected before FGAC requested it, or the Drive checkbox was left unchecked on Google's consent screen. ` +
+    `Every Sheets, Docs, Slides, and Drive call on this account will fail until it is reconnected; retrying will NOT help. ` +
+    `👉 Send the account owner this one-click link — it opens Google's consent screen directly; they must approve Drive file access there: ` +
+    `${DASHBOARD_URL}/dashboard/accounts?reconnect=1 — then retry once after they confirm. ` +
+    `Gmail tools are unaffected.`,
+  );
+}
+
 // ─── Raw Google API Execution ───────────────────────────────────────────────
 
 function serializeBody(body?: string | Record<string, unknown>): string | undefined {
@@ -1282,22 +1330,17 @@ function serializeBody(body?: string | Record<string, unknown>): string | undefi
 }
 
 /**
- * Shared executor for google_api_get / google_api_modify. Classification is
- * deny-by-default (see googleApiPolicy.ts); every allowed family maps onto
- * the same FGAC enforcement the dedicated tools use.
+ * Classify a raw call and stamp its observability props. Called from the tool
+ * handlers BEFORE account resolution, so resolution failures (and
+ * unsupported-family denials, which need no account at all) still carry
+ * raw_api_endpoint/raw_api_family — until 2026-08 those events landed with
+ * null endpoint/family and were unattributable. Raw calls are the
+ * highest-volume tool surface, and the classifier already knows the product —
+ * stamp it on every call (denials included) so analytics can break raw usage
+ * down by Google product and id-stripped endpoint, not just "google_api_get".
  */
-async function executeRawGoogleCall(
-  conn: ConnectionApproved,
-  resolved: ResolvedAccount,
-  path: string,
-  method: 'GET' | 'POST' | 'PUT' | 'PATCH',
-  body?: string | Record<string, unknown>,
-) {
+function classifyAndStampRawCall(path: string, method: string): RawCallClass {
   const cls = classifyGoogleApiCall(path, method);
-  // Product/action observability: raw calls are the highest-volume tool
-  // surface, and the classifier already knows the product — stamp it on
-  // every call (denials included) so analytics can break raw usage down by
-  // Google product and id-stripped endpoint, not just "google_api_get".
   const family = rawApiFamily(cls);
   addToolCallProps({
     raw_api_kind: cls.kind,
@@ -1305,24 +1348,73 @@ async function executeRawGoogleCall(
     raw_api_mutating: method !== 'GET',
     ...(family ? { raw_api_family: family } : {}),
   });
+  if (cls.kind === 'denied') addToolCallProps({ denial_code: cls.code });
+  return cls;
+}
+
+/**
+ * Passthrough failures ride Google's own enforcement, and under drive.file a
+ * 404 is ambiguous in a way agents cannot know: files the user never exposed
+ * to FGAC (and this agent didn't create) are simply invisible and 404
+ * identically to a wrong id. The bare "check the ID" framing sent agents into
+ * retry loops on ids that were never going to appear (observed on
+ * drive/v3/files/{id}/permissions and PATCH drive/v3/files/{id}, 2026-08
+ * production); say what the 404 can and cannot prove, and where the fix is.
+ */
+function passthroughErrorResult(result: { error: string; status?: number }) {
+  if (result.status !== 404) return errorResult(result.error);
+  return errorResult(
+    `${result.error} ` +
+    `NOTE: FGAC's Google grant is per-file (drive.file) — files the user never exposed to FGAC and this agent did not create are INVISIBLE to this token, ` +
+    `and Google reports them with this exact 404 even though they exist. A wrong id looks identical, so do NOT retry the same id. ` +
+    `If this id is a Google Sheet or Doc, call request_access with the spreadsheetId/documentId to send the user a one-click approval link; ` +
+    `for other Drive files, ask the user to expose the file via the FGAC dashboard, or create the file through FGAC so it is granted automatically.`,
+  );
+}
+
+/**
+ * Shared executor for google_api_get / google_api_modify. `cls` comes from
+ * classifyAndStampRawCall in the tool handler; classification is
+ * deny-by-default (see googleApiPolicy.ts) and every allowed family maps onto
+ * the same FGAC enforcement the dedicated tools use.
+ */
+async function executeRawGoogleCall(
+  conn: ConnectionApproved,
+  resolved: ResolvedAccount,
+  path: string,
+  method: 'GET' | 'POST' | 'PUT' | 'PATCH',
+  cls: RawCallClass,
+  body?: string | Record<string, unknown>,
+) {
+  const family = rawApiFamily(cls);
   if (cls.kind === 'denied') {
-    addToolCallProps({ denial_code: cls.code });
+    // Handlers short-circuit denials before account resolution; kept here so
+    // the executor stays total over RawCallClass.
     return textResult(cls.reason);
   }
 
-  // Raw Gmail calls need the same scope pre-flight as the dedicated Gmail
-  // tools (every gmail/* path classifies into the 'gmail' family).
+  // Scope pre-flight, mirroring the dedicated tools: gmail/* needs the Gmail
+  // scope; every other family rides drive.file. A token that provably lacks
+  // the scope fails deterministically at Google, so calling it is pointless —
+  // and its 403 body often gives the agent nothing to act on.
   if (family === 'gmail') {
     const scopeDenial = gmailScopeDenial(conn, resolved);
+    if (scopeDenial) return scopeDenial;
+  } else {
+    const scopeDenial = driveFileScopeDenial(conn, resolved);
     if (scopeDenial) return scopeDenial;
   }
 
   const cleanPath = path.replace(/^\/+/, '');
-  // Route a raw path to the host that owns its API family. Sheets and Docs
-  // live on their own subdomains; everything else rides www.googleapis.com.
+  // Route a raw path to the host that owns its API family. Sheets, Docs,
+  // Slides, and Forms live on their own subdomains (www.googleapis.com does
+  // NOT serve the latter two — routing them there returned bare 404s that
+  // read as missing resources); everything else rides www.googleapis.com.
   const rawUrl = (p: string) =>
     p.includes('spreadsheets') ? `https://sheets.googleapis.com/${p.replace(/^sheets\//, '')}`
     : p.includes('documents') ? `https://docs.googleapis.com/${p.replace(/^docs\//, '')}`
+    : p.includes('presentations') ? `https://slides.googleapis.com/${p.replace(/^slides\//, '')}`
+    : /(^|\/)forms(\/|$)/.test(p) ? `https://forms.googleapis.com/${p.replace(/^forms\//, '')}`
     : `https://www.googleapis.com/${p}`;
 
   if (cls.kind === 'sheets_create') {
@@ -1419,7 +1511,7 @@ async function executeRawGoogleCall(
     // (family/kind/endpoint were already stamped at classification above).
     addToolCallProps({ raw_api_passthrough: true });
     const result = await googleFetch(rawUrl(cleanPath), resolved.token, method, serializeBody(body), resolved.targetEmail);
-    if (!result.ok) return errorResult(result.error);
+    if (!result.ok) return passthroughErrorResult(result);
     return jsonResult(result.data);
   }
 
@@ -1510,7 +1602,7 @@ const handler = createMcpHandler(
             sheets: 'Spreadsheet access is granted per sheet: call sheets_get_spreadsheet with a spreadsheetId, or request_access — a denial returns a one-click approval link for the user.',
             docs: 'Google Docs access is granted per document: call docs_read_document with a documentId, or request_access — a denial returns a one-click approval link for the user.',
             sending: 'Email sending is off by default; the first gmail_send returns a one-click approval link the user can use to whitelist the recipient.',
-            raw_api: "Anything the typed tools can't express — Gmail threads/drafts, Drive listing and export, creating new docs or sheets — is reachable via google_api_get / google_api_modify under the same rules (see their descriptions).",
+            raw_api: "Anything the typed tools can't express — Gmail threads/drafts, Drive listing and export, creating new docs, sheets, or slides — is reachable via google_api_get / google_api_modify under the same rules (see their descriptions). The Google grant covers ONLY Gmail plus per-file Drive access (Sheets/Docs/Slides/Drive files the user picked or this agent created); People/Contacts, Calendar, Tasks, and other Google APIs are not available and calls to them are refused.",
           },
           add_more_accounts: {
             // Every extra mailbox — the user's own second account included —
@@ -1810,6 +1902,8 @@ const handler = createMcpHandler(
 
         const resolved = await resolveAccountAndToken(conn, account);
         if ('error' in resolved) return textResult(resolved.error);
+        const scopeDenial = driveFileScopeDenial(conn, resolved);
+        if (scopeDenial) return scopeDenial;
 
         const perm = await checkSheetsPermission(conn.user.id, resolved.proxyKeyId, spreadsheetId, false);
         if (!perm.allowed) return policyDenialWithLink(conn, resolved.proxyKeyId, perm.reason, sheetsDenialAction(perm, spreadsheetId, false));
@@ -1834,6 +1928,8 @@ const handler = createMcpHandler(
 
         const resolved = await resolveAccountAndToken(conn, account);
         if ('error' in resolved) return textResult(resolved.error);
+        const scopeDenial = driveFileScopeDenial(conn, resolved);
+        if (scopeDenial) return scopeDenial;
 
         const perm = await checkSheetsPermission(conn.user.id, resolved.proxyKeyId, spreadsheetId, false);
         if (!perm.allowed) return policyDenialWithLink(conn, resolved.proxyKeyId, perm.reason, sheetsDenialAction(perm, spreadsheetId, false));
@@ -1860,6 +1956,8 @@ const handler = createMcpHandler(
 
         const resolved = await resolveAccountAndToken(conn, account);
         if ('error' in resolved) return textResult(resolved.error);
+        const scopeDenial = driveFileScopeDenial(conn, resolved);
+        if (scopeDenial) return scopeDenial;
 
         const perm = await checkSheetsPermission(conn.user.id, resolved.proxyKeyId, spreadsheetId, true);
         if (!perm.allowed) return policyDenialWithLink(conn, resolved.proxyKeyId, perm.reason, sheetsDenialAction(perm, spreadsheetId, true));
@@ -1890,6 +1988,8 @@ const handler = createMcpHandler(
 
         const resolved = await resolveAccountAndToken(conn, account);
         if ('error' in resolved) return textResult(resolved.error);
+        const scopeDenial = driveFileScopeDenial(conn, resolved);
+        if (scopeDenial) return scopeDenial;
 
         const perm = await checkSheetsPermission(conn.user.id, resolved.proxyKeyId, spreadsheetId, true);
         if (!perm.allowed) return policyDenialWithLink(conn, resolved.proxyKeyId, perm.reason, sheetsDenialAction(perm, spreadsheetId, true));
@@ -1919,6 +2019,8 @@ const handler = createMcpHandler(
 
         const resolved = await resolveAccountAndToken(conn, account);
         if ('error' in resolved) return textResult(resolved.error);
+        const scopeDenial = driveFileScopeDenial(conn, resolved);
+        if (scopeDenial) return scopeDenial;
 
         const perm = await checkSheetsPermission(conn.user.id, resolved.proxyKeyId, spreadsheetId, true);
         if (!perm.allowed) return policyDenialWithLink(conn, resolved.proxyKeyId, perm.reason, sheetsDenialAction(perm, spreadsheetId, true));
@@ -1944,6 +2046,8 @@ const handler = createMcpHandler(
 
         const resolved = await resolveAccountAndToken(conn, account);
         if ('error' in resolved) return textResult(resolved.error);
+        const scopeDenial = driveFileScopeDenial(conn, resolved);
+        if (scopeDenial) return scopeDenial;
 
         const perm = await checkDocsPermission(conn.user.id, resolved.proxyKeyId, documentId, false);
         if (!perm.allowed) return policyDenialWithLink(conn, resolved.proxyKeyId, perm.reason, docsDenialAction(perm, documentId, false));
@@ -1969,6 +2073,8 @@ const handler = createMcpHandler(
 
         const resolved = await resolveAccountAndToken(conn, account);
         if ('error' in resolved) return textResult(resolved.error);
+        const scopeDenial = driveFileScopeDenial(conn, resolved);
+        if (scopeDenial) return scopeDenial;
 
         const perm = await checkDocsPermission(conn.user.id, resolved.proxyKeyId, documentId, true);
         if (!perm.allowed) return policyDenialWithLink(conn, resolved.proxyKeyId, perm.reason, docsDenialAction(perm, documentId, true));
@@ -1994,6 +2100,8 @@ const handler = createMcpHandler(
 
         const resolved = await resolveAccountAndToken(conn, account);
         if ('error' in resolved) return textResult(resolved.error);
+        const scopeDenial = driveFileScopeDenial(conn, resolved);
+        if (scopeDenial) return scopeDenial;
 
         const check = await checkCommentsPermission(conn, resolved.proxyKeyId, fileId, false);
         if ('denial' in check) return check.denial;
@@ -2024,6 +2132,8 @@ const handler = createMcpHandler(
 
         const resolved = await resolveAccountAndToken(conn, account);
         if ('error' in resolved) return textResult(resolved.error);
+        const scopeDenial = driveFileScopeDenial(conn, resolved);
+        if (scopeDenial) return scopeDenial;
 
         const check = await checkCommentsPermission(conn, resolved.proxyKeyId, fileId, true);
         if ('denial' in check) return check.denial;
@@ -2050,10 +2160,16 @@ const handler = createMcpHandler(
         const conn = await requireApproval(authInfo);
         if ('content' in conn) return conn;
 
+        // Classify before resolving the account: resolution failures keep
+        // their raw_api_* props, and denials that need no account (batch,
+        // unsupported families) answer without a token fetch.
+        const cls = classifyAndStampRawCall(path, 'GET');
+        if (cls.kind === 'denied') return textResult(cls.reason);
+
         const resolved = await resolveAccountAndToken(conn, account);
         if ('error' in resolved) return textResult(resolved.error);
 
-        return executeRawGoogleCall(conn, resolved, path, 'GET');
+        return executeRawGoogleCall(conn, resolved, path, 'GET', cls);
       }
     );
 
@@ -2070,10 +2186,14 @@ const handler = createMcpHandler(
         const conn = await requireApproval(authInfo);
         if ('content' in conn) return conn;
 
+        // Classify before resolving the account — see google_api_get.
+        const cls = classifyAndStampRawCall(path, method);
+        if (cls.kind === 'denied') return textResult(cls.reason);
+
         const resolved = await resolveAccountAndToken(conn, account);
         if ('error' in resolved) return textResult(resolved.error);
 
-        return executeRawGoogleCall(conn, resolved, path, method, body);
+        return executeRawGoogleCall(conn, resolved, path, method, cls, body);
       }
     );
 
@@ -2179,7 +2299,7 @@ const handler = createMcpHandler(
             sheets: 'DENIED unless a per-spreadsheet rule below exposes the sheet',
             docs: 'DENIED unless a per-document rule below exposes the document',
             deletion: 'NEVER available through any tool',
-            rawApi: 'google_api_get / google_api_modify expose the full Google API surface under these same rules; unknown Google API families (e.g. Drive) are forwarded subject to the Google OAuth scopes the user granted; POST v4/spreadsheets and POST v1/documents create new files auto-granted to this key',
+            rawApi: 'google_api_get / google_api_modify expose the Google API surface the grant covers under these same rules; Drive and Slides calls are forwarded subject to the per-file drive.file scope the user granted; POST v4/spreadsheets and POST v1/documents create new files auto-granted to this key; APIs outside the grant (People/Contacts, Calendar, Tasks, …) are refused with a clear denial',
           },
           rules: applicableRules.map(r => ({
             name: r.ruleName,
@@ -2209,7 +2329,20 @@ const handler = createMcpHandler(
     // before any tool is called. Agents read tool catalogs as paths (task →
     // first plausible tool → stop), so the shortcut/full-surface relationship
     // must be stated up front, not only inside individual descriptions.
+    //
+    // The first two sentences are the whole onboarding surface for most
+    // connectors: 2026-08-29 analysis of the silent-connector cohort showed
+    // every measurable zero-call user DOES complete the initialize handshake
+    // (Claude.ai web 8:1 over Claude Code, most across many sessions), so
+    // this string reaches their context repeatedly while list_accounts's
+    // next_steps block never does — a user whose agent calls nothing never
+    // sees a tool result. Two failure modes it must counter: the agent
+    // claiming it cannot access the user's mail despite the connector, and
+    // a just-connected user never being shown what a first use looks like.
     instructions:
+      "These tools give live access to the Gmail, Google Docs, and Google Sheets accounts the user has already connected — mailbox reads work immediately, with no further setup. " +
+      "When the user mentions their email, documents, or spreadsheets, reach for these tools instead of saying you cannot access their data. " +
+      "If this connector has not been used yet, call list_accounts first: it returns the reachable mailboxes plus next-step guidance, and makes an easy first demonstration to offer (e.g. summarizing recent unread mail). " +
       'FGAC proxies Google Workspace behind per-user access rules enforced upstream at the proxy — every tool passes through the same enforcement. ' +
       'The typed tools are shortcuts for common operations: docs_edit and sheets_edit accept native Google batchUpdate requests (tables, text styles, ' +
       'cell formatting, charts, sheet tabs), comments_read and comments_add cover Drive-API comments on docs and sheets, and the values/gmail tools ' +

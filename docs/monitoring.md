@@ -321,7 +321,11 @@ WHERE event = 'google_scope_missing' AND timestamp > now() - INTERVAL 30 DAY
 GROUP BY day ORDER BY day
 ```
 
-`uniq(person_id)` is the size of the locked-out population. Healthy: zero.
+`uniq(person_id)` is the size of the locked-out population. Since 2026-08-29
+the event carries a `scope` prop (`gmail` / `drive_file`): the `drive_file`
+variant fires from the raw google_api_* path when the token lacks `drive.file`
+(the cause behind the 2026-08 `POST v4/spreadsheets` 403s) — group by `scope`
+to separate the two populations. Healthy: zero.
 Non-zero is not a code regression — it is users needing the reconnect nudge the
 tool error now delivers; watch whether the same person persists across days
 (nudge not working) or disappears (reconnected). Cross-check that gmail 403s

@@ -20,12 +20,38 @@ export type RawCallClass =
   | { kind: 'gmail_send' }
   | { kind: 'file_comments'; fileId: string; isMutating: boolean }
   | { kind: 'passthrough'; family: string; isMutating: boolean }
-  | { kind: 'denied'; reason: string; code: DenialCode };
+  | { kind: 'denied'; reason: string; code: DenialCode; family?: string };
 
 /** Machine-readable denial reasons, stamped onto $mcp_tool_call as `denial_code`. */
 export type DenialCode =
   | 'raw_api_batch_unsupported'
+  | 'raw_api_family_unsupported'
   | 'gmail_write_unsupported';
+
+/**
+ * Google API families FGAC's OAuth grant can never authorize. The grant is
+ * exactly gmail.modify + drive.file, so these fail at Google no matter how the
+ * path is spelled — and because most of them aren't even served from
+ * www.googleapis.com, the agent sees a bare routing 404, retries a different
+ * path spelling, and fails again (observed: People and Slides probes retried
+ * as `v1/…` variants, doubling the public error count). Answering with a 🚫
+ * denial names the real cause once and stops the loop. Keyed by the path
+ * segment that identifies the family; values are the human API name used in
+ * the denial text.
+ */
+const UNSUPPORTED_GOOGLE_APIS: Record<string, string> = {
+  people: 'People (Contacts)',
+  contacts: 'Contacts',
+  calendar: 'Calendar',
+  tasks: 'Tasks',
+  youtube: 'YouTube',
+  chat: 'Google Chat',
+  admin: 'Admin SDK',
+  classroom: 'Classroom',
+  photoslibrary: 'Photos Library',
+  meet: 'Google Meet',
+  groups: 'Google Groups',
+};
 
 export function extractSheetsSpreadsheetId(path: string): string | null {
   const match = path.match(/(?:v4\/spreadsheets|sheets\/v4\/spreadsheets|spreadsheets)\/([^/?:#]+)/);
@@ -50,6 +76,26 @@ export function classifyGoogleApiCall(rawPath: string, method: string): RawCallC
   // read-restriction checks and writes past the deny-by-default policy.
   if (segments.includes('batch') || segments.some(s => s.startsWith('batch'))) {
     return { kind: 'denied', code: 'raw_api_batch_unsupported', reason: '🚫 Access Denied: Google batch endpoints are not supported through FGAC. Call individual endpoints instead.' };
+  }
+
+  // Never-can-work families are refused before any network call. The family
+  // segment may come first (`people/v1/…`) or after a bare version segment
+  // (`v1/people:createContact`), and may carry a `:verb` suffix — check the
+  // verb-stripped base of the first two segments.
+  for (const seg of segments.slice(0, 2)) {
+    const base = seg.split(':')[0];
+    const apiName = UNSUPPORTED_GOOGLE_APIS[base];
+    if (apiName) {
+      return {
+        kind: 'denied',
+        code: 'raw_api_family_unsupported',
+        family: base,
+        reason: `🚫 Not available: the Google ${apiName} API is outside FGAC's Google grant. ` +
+          `FGAC's OAuth grant covers Gmail plus per-file Drive access (Sheets, Docs, Slides, and Drive files the user picked or this agent created) — ` +
+          `it holds no ${apiName} scope, so no retry, alternate path spelling, or different method can make this call succeed. ` +
+          `STOP calling ${base} endpoints. If the user needs ${apiName} access, tell them FGAC does not currently support it.`,
+      };
+    }
   }
 
   const isMutating = method !== 'GET';
@@ -87,7 +133,21 @@ export function classifyGoogleApiCall(rawPath: string, method: string): RawCallC
     if (segments[segments.length - 1] === 'send' && segments[segments.length - 2] === 'messages') {
       return { kind: 'gmail_send' };
     }
-    return { kind: 'denied', code: 'gmail_write_unsupported', reason: '🚫 Access Denied: This Gmail write endpoint is not permitted through FGAC. The only supported Gmail write is messages/send (recipients are checked against the send whitelist).' };
+    // family kept on the denial: which Gmail writes agents reach for (drafts,
+    // labels, trash, …) is roadmap-prioritization signal, same as the
+    // unsupported-family denials — raw_api_endpoint carries the exact path.
+    return { kind: 'denied', code: 'gmail_write_unsupported', family: 'gmail', reason: '🚫 Access Denied: This Gmail write endpoint is not permitted through FGAC. The only supported Gmail write is messages/send (recipients are checked against the send whitelist).' };
+  }
+
+  // Slides rides drive.file exactly like Sheets/Docs (creates and app-created
+  // or user-picked presentations), but per-file Slides policy is the stubbed
+  // `slide` kind in driveFileKinds.ts — a separate feature. Until it ships,
+  // Slides is scope-backstop passthrough; classifying it here (both
+  // `slides/v1/…` and the bare `v1/presentations` spelling agents fall back
+  // to) is what lets the route send it to slides.googleapis.com instead of
+  // www.googleapis.com, which does not serve Slides and 404s every call.
+  if (segments.some(s => s.split(':')[0] === 'presentations')) {
+    return { kind: 'passthrough', family: 'slides', isMutating };
   }
 
   // Comments on a Drive file (which is how Docs/Sheets comments are
@@ -114,6 +174,12 @@ const ID_PARENT_SEGMENTS = new Set([
   'attachments', 'files', 'calendars', 'events', 'tasklists', 'tasks', 'contacts',
 ]);
 
+// Literal API subresources that follow an id-parent segment without being
+// ids themselves. Without this, `messages/send` templated as `messages/{id}`
+// and send-body 400s were indistinguishable from message-modify probes in
+// the endpoint breakdown.
+const LITERAL_SUBRESOURCES = new Set(['send']);
+
 /**
  * Id-strip a raw Google API path into a low-cardinality endpoint template for
  * analytics (`raw_api_endpoint`), e.g.
@@ -138,7 +204,9 @@ export function templateGoogleApiPath(rawPath: string): string {
     try { decoded = decodeURIComponent(base); } catch { /* keep raw */ }
 
     if (prev === 'values') return `{range}${verb}`;
-    if (ID_PARENT_SEGMENTS.has(prev)) return `{id}${verb}`;
+    if (ID_PARENT_SEGMENTS.has(prev) && !LITERAL_SUBRESOURCES.has(decoded.toLowerCase())) {
+      return `{id}${verb}`;
+    }
     // Fallback for families without a known parent: long or digit-bearing
     // segments and anything email-shaped are identifiers.
     if (decoded.length >= 25 || (decoded.length >= 10 && /\d/.test(decoded)) || decoded.includes('@')) {
@@ -170,7 +238,10 @@ export function rawApiFamily(cls: RawCallClass): string | null {
     case 'passthrough':
       return cls.family;
     case 'denied':
-      return null;
+      // Family-unsupported denials keep their family visible so per-family
+      // demand for un-granted APIs still shows up in analytics; other denial
+      // kinds are identified by denial_code alone.
+      return cls.family ?? null;
   }
 }
 
@@ -231,6 +302,49 @@ export function collectLabelIds(value: unknown, depth = 0): string[] {
     out.push(...collectLabelIds(obj[key], depth + 1));
   }
   return out;
+}
+
+// ─── Google error-body parsing ──────────────────────────────────────────────
+
+/**
+ * Google's error body carries the only field that distinguishes the several
+ * unrelated conditions it multiplexes onto one HTTP status — most importantly
+ * 403, which covers both "your OAuth grant is missing a scope" and "you are
+ * being rate limited". Only the numeric status used to survive, so the 403
+ * remediation asserted the scope cause unconditionally and told rate-limited
+ * callers to tear down a working Google connection.
+ *
+ * `reason`/`domain` are Google-defined enum strings (`rateLimitExceeded`,
+ * `usageLimits`, …) and `status` is its canonical code (`PERMISSION_DENIED`)
+ * — none of them are customer data, so they are safe to put on events.
+ */
+export type GoogleErrorReason = { reason?: string; domain?: string; status?: string };
+
+export function extractGoogleErrorReason(data: unknown): GoogleErrorReason {
+  const err = (data as {
+    error?: {
+      errors?: Array<{ reason?: string; domain?: string }>;
+      status?: string;
+      details?: Array<{ reason?: unknown; domain?: unknown }>;
+    };
+  })?.error;
+  if (!err || typeof err !== 'object') return {};
+  const first = Array.isArray(err.errors) ? err.errors[0] : undefined;
+  // gRPC-transcoded APIs (Sheets v4, Docs v1, Slides v1, People v1) don't
+  // send the legacy `errors[]` array at all — their reason/domain live in
+  // `error.details[]` ErrorInfo entries. Before this fallback, every error
+  // from those APIs landed with a null `error_reason` and the 403 remediation
+  // could not tell a missing drive.file scope from throttling.
+  const info = Array.isArray(err.details)
+    ? err.details.find(d => d && typeof d === 'object' && typeof d.reason === 'string')
+    : undefined;
+  return {
+    reason: typeof first?.reason === 'string' ? first.reason
+      : typeof info?.reason === 'string' ? info.reason : undefined,
+    domain: typeof first?.domain === 'string' ? first.domain
+      : typeof info?.domain === 'string' ? info.domain : undefined,
+    status: typeof err.status === 'string' ? err.status : undefined,
+  };
 }
 
 // ─── Per-file denial → approval action (magic links) ────────────────────────
