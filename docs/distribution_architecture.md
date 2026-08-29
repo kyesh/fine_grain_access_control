@@ -98,11 +98,25 @@ in `src/app/api/mcp/googleApiPolicy.ts`:
   `file_comments` and inherit the file's per-file rule — comment writes on a
   read-only or blocked doc/sheet are denied, never scope-only passthrough.
   The `comments_read` / `comments_add` typed tools ride the same check.
-- Other unknown Google API families (Drive listing/export, Calendar, …)
-  **pass through** with the account's token — classify-don't-block, with
-  Google's OAuth scopes as the backstop (`drive.file` limits Drive to
-  picked/app-created files) — and are stamped `raw_api_passthrough` for
-  demand monitoring.
+- Other unknown Google API families that could work under the grant (Drive
+  listing/export, Slides, Forms) **pass through** with the account's token —
+  classify-don't-block, with Google's OAuth scopes as the backstop
+  (`drive.file` limits Drive to picked/app-created files) — and are stamped
+  `raw_api_passthrough` for demand monitoring. Slides and Forms paths route to
+  their own API hosts (`slides.googleapis.com` / `forms.googleapis.com`;
+  `www.googleapis.com` does not serve them). Passthrough 404s explain
+  drive.file invisibility (a file outside the grant 404s identically to a
+  wrong id).
+- Families the grant can **never** authorize (People/Contacts, Calendar,
+  Tasks, YouTube, Chat, Admin SDK, Classroom, Photos, Meet, Groups) are
+  refused pre-flight with a 🚫 denial naming the grant surface
+  (`raw_api_family_unsupported`) — forwarding them produced opaque 403s/404s
+  and path-respelling retry loops (2026-08 production), and the OAuth token
+  cannot authorize them under any spelling.
+- Non-Gmail raw calls on a token that provably lacks `drive.file` (account
+  connected before the scope existed, or box unchecked at consent) are
+  pre-flight denied with a reconnect link (`drive_file_scope_missing`),
+  mirroring the Gmail scope pre-flight.
 - Batch endpoints and non-send Gmail writes are denied. DELETE is not exposed
   at all.
 

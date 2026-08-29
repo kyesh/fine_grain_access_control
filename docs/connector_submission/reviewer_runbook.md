@@ -108,6 +108,8 @@ field — gives reviewers expected outcomes per prompt):
   write via `google_api_modify` to see a denial); other API families (e.g.
   `google_api_get` with `drive/v3/files`) are forwarded with the account's
   token, bounded by the OAuth scopes the user granted — `drive.file` limits
-  Drive to files the user picked or the connector created.
+  Drive to files the user picked or the connector created. API families the
+  grant can never authorize (People/Contacts, Calendar, Tasks, …) are refused
+  with a clear denial instead of being forwarded.
 - Public docs: `https://fgac.ai/docs` · Privacy: `https://fgac.ai/privacy`
 - Support / questions: `support@fgac.ai`
