@@ -144,7 +144,16 @@ export default function SetupPage() {
             </div>
             <p className="mt-3 text-xs text-subtle">
               Run this in any project directory. The server persists across
-              sessions.
+              sessions. Working per-project? Each agent profile has its own
+              URL (<code className="font-mono">/api/mcp/&lt;profile&gt;</code>)
+              that maps the connection to that profile automatically —{" "}
+              <Link
+                href="/use-cases/claude-code-per-project"
+                className="text-primary underline underline-offset-2"
+              >
+                see the per-project guide
+              </Link>
+              .
             </p>
           </div>
 
@@ -313,7 +322,16 @@ export default function SetupPage() {
                 <p className="mt-0.5 text-[13px] leading-relaxed text-muted-foreground">
                   Profiles bundle rules and grants into a scoped identity. Your
                   research agent and your inbox agent don&apos;t have to share
-                  permissions.
+                  permissions — and each profile has its own MCP URL, so an
+                  agent connecting through it lands on the right profile
+                  automatically. See{" "}
+                  <Link
+                    href="/use-cases/claude-code-per-project"
+                    className="text-primary underline underline-offset-2"
+                  >
+                    per-project profiles in Claude Code
+                  </Link>
+                  .
                 </p>
               </div>
             </div>
@@ -423,6 +441,25 @@ export default function SetupPage() {
               <p className="text-[13px] leading-relaxed text-muted-foreground">
                 Work + personal inboxes, and mailboxes teammates delegate to
                 you — each under its own rules, revocable in one click.
+              </p>
+              <span className="mt-3 inline-flex items-center gap-1.5 text-[13px] font-semibold text-primary">
+                Read the guide
+                <ArrowRight className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5" />
+              </span>
+            </Link>
+            <Link
+              href="/use-cases/claude-code-per-project"
+              className="group rounded-lg border border-border bg-card p-6 hover:border-ring sm:col-span-2"
+            >
+              <span className="mb-2.5 inline-block rounded-full border border-claude-border bg-claude-bg px-2.5 py-0.5 text-xs font-bold text-claude">
+                Claude Code
+              </span>
+              <h3 className="mb-1.5 text-[15px] font-bold text-foreground">
+                One profile per project in Claude Code
+              </h3>
+              <p className="text-[13px] leading-relaxed text-muted-foreground">
+                Scope FGAC to a single project directory and map it to a
+                specific agent profile just by the MCP URL it connects to.
               </p>
               <span className="mt-3 inline-flex items-center gap-1.5 text-[13px] font-semibold text-primary">
                 Read the guide

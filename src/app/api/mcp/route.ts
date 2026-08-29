@@ -43,6 +43,7 @@ import {
 } from './googleApiPolicy';
 import { DRIVE_FILE_KINDS, ACTIVE_DRIVE_FILE_KINDS, type DriveFileKind } from '@/lib/driveFileKinds';
 import { clerkPrimaryEmail } from '@/lib/clerkPrimaryEmail';
+import { slugifyProfileLabel } from '@/lib/profileSlugs';
 import { logAndSanitize, describeErrorForLog, toolErrorResult } from '@/lib/serverErrors';
 
 /** Env URL values have shipped with trailing whitespace/newlines (pasted
@@ -78,16 +79,6 @@ interface ConnectionDenied {
 }
 
 type ConnectionResult = ConnectionApproved | ConnectionDenied;
-
-/** URL slug for a profile label: 'Research Bot' → 'research-bot'. Unique only
- * per user — the lookup below is always scoped to the authenticated caller. */
-export function slugifyProfileLabel(label: string): string {
-  return label
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '');
-}
 
 /** Resolve a profile-addressed MCP URL's slug (set by middleware from
  * /api/mcp/<slug>) to one of THIS user's live profiles. The slug is

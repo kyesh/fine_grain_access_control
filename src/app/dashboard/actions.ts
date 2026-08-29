@@ -8,6 +8,7 @@ import { syncDefaultProfileDelegatedAccess } from "@/db/defaultProfile";
 import { currentUser } from "@clerk/nextjs/server";
 import { revalidatePath } from "next/cache";
 import { validateRulePattern, patternKind, assertStorablePattern } from "@/lib/rulePatterns";
+import { slugifyProfileLabel } from "@/lib/profileSlugs";
 import type { ApprovalSearchParams, ApprovalPayload } from "@/lib/approvalLinks";
 import * as jose from "jose";
 
@@ -160,6 +161,24 @@ export async function createProxyKey(formData: FormData) {
   const emailAddresses = formData.getAll("emails") as string[];
 
   if (!label) throw new Error("Label is required");
+
+  // Profile labels double as MCP URL slugs (/api/mcp/<slug>, see
+  // src/lib/profileSlugs.ts). Two labels that slugify identically would make
+  // the URL ambiguous, so block the collision here — labels are immutable
+  // after creation, which makes this the only enforcement point. Returned as
+  // a value, not thrown: production masks server-action error messages, and
+  // the user needs to see WHY the label was refused.
+  const slug = slugifyProfileLabel(label);
+  if (!slug) return { error: "Label must contain at least one letter or number." };
+  const existingKeys = await db.query.proxyKeys.findMany({
+    where: and(eq(proxyKeys.userId, dbUser.id), isNull(proxyKeys.revokedAt)),
+  });
+  const clash = existingKeys.find(k => slugifyProfileLabel(k.label) === slug);
+  if (clash) {
+    return {
+      error: `A profile named "${clash.label}" already uses the URL slug "${slug}". Pick a label that differs by more than punctuation or casing.`,
+    };
+  }
 
   // Generate RSA Keypair for Service Account compatibility
   const { publicKey, privateKey } = await jose.generateKeyPair('RS256', { extractable: true });

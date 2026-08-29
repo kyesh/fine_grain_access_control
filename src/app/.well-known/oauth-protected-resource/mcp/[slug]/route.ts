@@ -15,13 +15,14 @@ import {
 import { metadataCorsOptionsRequestHandler } from '@clerk/mcp-tools/next';
 import { captureServerEvent } from '@/lib/posthogServer';
 import { installFingerprint } from '@/lib/mcpClientSignals';
+import { PROFILE_SLUG_RE } from '@/lib/profileSlugs';
 
 export async function GET(
   req: Request,
   { params }: { params: Promise<{ slug: string }> },
 ) {
   const { slug } = await params;
-  if (!/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/.test(slug)) {
+  if (!PROFILE_SLUG_RE.test(slug)) {
     return Response.json({ error: 'invalid_resource' }, { status: 404 });
   }
 

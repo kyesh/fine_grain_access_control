@@ -1,23 +1,21 @@
 import { clerkMiddleware, createRouteMatcher } from '@clerk/nextjs/server';
 import { NextResponse } from 'next/server';
 import type { NextFetchEvent, NextRequest } from 'next/server';
+import { MCP_PROFILE_PATH_RE } from '@/lib/profileSlugs';
 
 const isProtectedRoute = createRouteMatcher(['/dashboard(.*)']);
-
-// Profile-addressed MCP URLs: /api/mcp/<slug> is the same MCP server, with
-// the slug naming which of the caller's agent profiles a NEW connection
-// should bind to (addressing, not authorization — the bearer token still
-// decides the user, and the slug only resolves among that user's profiles).
-// mcp-handler matches the pathname '/api/mcp' exactly, so the slug is moved
-// into a request header before the route sees it.
-const MCP_PROFILE_PATH = /^\/api\/mcp\/([a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?)$/;
 
 const clerkHandler = clerkMiddleware(async (auth, req) => {
   const url = req.nextUrl.clone();
   const hostname = url.hostname;
 
-  // Route profile-addressed MCP requests
-  const profileMatch = url.pathname.match(MCP_PROFILE_PATH);
+  // Profile-addressed MCP URLs: /api/mcp/<slug> is the same MCP server, with
+  // the slug naming which of the caller's agent profiles a NEW connection
+  // should bind to (addressing, not authorization — the bearer token still
+  // decides the user, and the slug only resolves among that user's profiles).
+  // mcp-handler matches the pathname '/api/mcp' exactly, so the slug is moved
+  // into a request header before the route sees it.
+  const profileMatch = url.pathname.match(MCP_PROFILE_PATH_RE);
   if (profileMatch) {
     url.pathname = '/api/mcp';
     const requestHeaders = new Headers(req.headers);
@@ -71,7 +69,7 @@ export default async function middleware(req: NextRequest, event: NextFetchEvent
 
     console.warn('[middleware] Rejecting malformed bearer token:', err.message);
     const isMcp = req.nextUrl.pathname.startsWith('/api/mcp');
-    const slugMatch = req.nextUrl.pathname.match(MCP_PROFILE_PATH);
+    const slugMatch = req.nextUrl.pathname.match(MCP_PROFILE_PATH_RE);
     const proto = req.headers.get('x-forwarded-proto') ?? req.nextUrl.protocol.replace(/:$/, '');
     const host = req.headers.get('x-forwarded-host') ?? req.headers.get('host');
     const origin = host ? `${proto}://${host}` : req.nextUrl.origin;
