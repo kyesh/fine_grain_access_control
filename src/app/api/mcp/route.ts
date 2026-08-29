@@ -1279,7 +1279,8 @@ function gmailScopeDenial(conn: ConnectionApproved, resolved: ResolvedAccount) {
  * 403s on POST v4/spreadsheets, 2026-08 production), and the upstream 403
  * body often carries no reason the agent can act on. Deterministic and
  * never-reached-Google, so it is the `failed` class (textResult), not an
- * upstream `error`.
+ * upstream `error`. Applied by every typed per-file tool (sheets_*, docs_*,
+ * comments_*) and by non-Gmail raw google_api_get/modify calls.
  */
 function driveFileScopeDenial(conn: ConnectionApproved, resolved: ResolvedAccount) {
   if (resolved.hasDriveFileScope !== false) return null;
@@ -1879,6 +1880,8 @@ const handler = createMcpHandler(
 
         const resolved = await resolveAccountAndToken(conn, account);
         if ('error' in resolved) return textResult(resolved.error);
+        const scopeDenial = driveFileScopeDenial(conn, resolved);
+        if (scopeDenial) return scopeDenial;
 
         const perm = await checkSheetsPermission(conn.user.id, resolved.proxyKeyId, spreadsheetId, false);
         if (!perm.allowed) return policyDenialWithLink(conn, resolved.proxyKeyId, perm.reason, sheetsDenialAction(perm, spreadsheetId, false));
@@ -1903,6 +1906,8 @@ const handler = createMcpHandler(
 
         const resolved = await resolveAccountAndToken(conn, account);
         if ('error' in resolved) return textResult(resolved.error);
+        const scopeDenial = driveFileScopeDenial(conn, resolved);
+        if (scopeDenial) return scopeDenial;
 
         const perm = await checkSheetsPermission(conn.user.id, resolved.proxyKeyId, spreadsheetId, false);
         if (!perm.allowed) return policyDenialWithLink(conn, resolved.proxyKeyId, perm.reason, sheetsDenialAction(perm, spreadsheetId, false));
@@ -1929,6 +1934,8 @@ const handler = createMcpHandler(
 
         const resolved = await resolveAccountAndToken(conn, account);
         if ('error' in resolved) return textResult(resolved.error);
+        const scopeDenial = driveFileScopeDenial(conn, resolved);
+        if (scopeDenial) return scopeDenial;
 
         const perm = await checkSheetsPermission(conn.user.id, resolved.proxyKeyId, spreadsheetId, true);
         if (!perm.allowed) return policyDenialWithLink(conn, resolved.proxyKeyId, perm.reason, sheetsDenialAction(perm, spreadsheetId, true));
@@ -1959,6 +1966,8 @@ const handler = createMcpHandler(
 
         const resolved = await resolveAccountAndToken(conn, account);
         if ('error' in resolved) return textResult(resolved.error);
+        const scopeDenial = driveFileScopeDenial(conn, resolved);
+        if (scopeDenial) return scopeDenial;
 
         const perm = await checkSheetsPermission(conn.user.id, resolved.proxyKeyId, spreadsheetId, true);
         if (!perm.allowed) return policyDenialWithLink(conn, resolved.proxyKeyId, perm.reason, sheetsDenialAction(perm, spreadsheetId, true));
@@ -1988,6 +1997,8 @@ const handler = createMcpHandler(
 
         const resolved = await resolveAccountAndToken(conn, account);
         if ('error' in resolved) return textResult(resolved.error);
+        const scopeDenial = driveFileScopeDenial(conn, resolved);
+        if (scopeDenial) return scopeDenial;
 
         const perm = await checkSheetsPermission(conn.user.id, resolved.proxyKeyId, spreadsheetId, true);
         if (!perm.allowed) return policyDenialWithLink(conn, resolved.proxyKeyId, perm.reason, sheetsDenialAction(perm, spreadsheetId, true));
@@ -2013,6 +2024,8 @@ const handler = createMcpHandler(
 
         const resolved = await resolveAccountAndToken(conn, account);
         if ('error' in resolved) return textResult(resolved.error);
+        const scopeDenial = driveFileScopeDenial(conn, resolved);
+        if (scopeDenial) return scopeDenial;
 
         const perm = await checkDocsPermission(conn.user.id, resolved.proxyKeyId, documentId, false);
         if (!perm.allowed) return policyDenialWithLink(conn, resolved.proxyKeyId, perm.reason, docsDenialAction(perm, documentId, false));
@@ -2038,6 +2051,8 @@ const handler = createMcpHandler(
 
         const resolved = await resolveAccountAndToken(conn, account);
         if ('error' in resolved) return textResult(resolved.error);
+        const scopeDenial = driveFileScopeDenial(conn, resolved);
+        if (scopeDenial) return scopeDenial;
 
         const perm = await checkDocsPermission(conn.user.id, resolved.proxyKeyId, documentId, true);
         if (!perm.allowed) return policyDenialWithLink(conn, resolved.proxyKeyId, perm.reason, docsDenialAction(perm, documentId, true));
@@ -2063,6 +2078,8 @@ const handler = createMcpHandler(
 
         const resolved = await resolveAccountAndToken(conn, account);
         if ('error' in resolved) return textResult(resolved.error);
+        const scopeDenial = driveFileScopeDenial(conn, resolved);
+        if (scopeDenial) return scopeDenial;
 
         const check = await checkCommentsPermission(conn, resolved.proxyKeyId, fileId, false);
         if ('denial' in check) return check.denial;
@@ -2093,6 +2110,8 @@ const handler = createMcpHandler(
 
         const resolved = await resolveAccountAndToken(conn, account);
         if ('error' in resolved) return textResult(resolved.error);
+        const scopeDenial = driveFileScopeDenial(conn, resolved);
+        if (scopeDenial) return scopeDenial;
 
         const check = await checkCommentsPermission(conn, resolved.proxyKeyId, fileId, true);
         if ('denial' in check) return check.denial;
