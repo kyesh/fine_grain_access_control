@@ -5,7 +5,7 @@
 import {
   classifyGoogleApiCall, extractSendRecipients, collectLabelIds,
   sheetsApprovalAction, docsApprovalAction, extractDocsDocumentId,
-  templateGoogleApiPath, rawApiFamily,
+  templateGoogleApiPath, rawApiFamily, extractGoogleErrorReason,
 } from '../src/app/api/mcp/googleApiPolicy';
 
 let failures = 0;
@@ -99,9 +99,40 @@ expect('drive comment replies POST → file_comments mutating',
 expect('drive file metadata GET stays passthrough (no comments segment)',
   classifyGoogleApiCall('drive/v3/files/1BxiM2doc-ID_x', 'GET'),
   (c: { kind: string }) => c.kind === 'passthrough');
-expect('unknown API (calendar) → passthrough with family',
+expect('un-granted API (calendar) → denied unsupported (no calendar scope in the grant)',
   classifyGoogleApiCall('calendar/v3/calendars/primary/events', 'GET'),
-  (c: { kind: string; family?: string }) => c.kind === 'passthrough' && c.family === 'calendar/v3');
+  (c: { kind: string; code?: string; family?: string }) =>
+    c.kind === 'denied' && c.code === 'raw_api_family_unsupported' && c.family === 'calendar');
+expect('un-granted API (people) → denied unsupported',
+  classifyGoogleApiCall('people/v1/people:createContact', 'POST'),
+  (c: { kind: string; code?: string; family?: string }) =>
+    c.kind === 'denied' && c.code === 'raw_api_family_unsupported' && c.family === 'people');
+expect('people path-variant retry spelling (v1/people:createContact) → same denial',
+  classifyGoogleApiCall('v1/people:createContact', 'POST'),
+  (c: { kind: string; code?: string; family?: string }) =>
+    c.kind === 'denied' && c.code === 'raw_api_family_unsupported' && c.family === 'people');
+expect('un-granted API (tasks) → denied unsupported',
+  classifyGoogleApiCall('tasks/v1/lists', 'GET'),
+  (c: { kind: string; code?: string }) => c.kind === 'denied' && c.code === 'raw_api_family_unsupported');
+expect('unsupported denial reason names the grant surface and says stop',
+  classifyGoogleApiCall('people/v1/people:createContact', 'POST'),
+  (c: { kind: string; reason?: string }) =>
+    c.kind === 'denied' && !!c.reason && c.reason.startsWith('🚫') &&
+    c.reason.includes('Gmail') && c.reason.includes('Drive') && c.reason.includes('STOP'));
+expect('slides create → passthrough family slides (routed to slides.googleapis.com)',
+  classifyGoogleApiCall('slides/v1/presentations', 'POST'),
+  (c: { kind: string; family?: string; isMutating?: boolean }) =>
+    c.kind === 'passthrough' && c.family === 'slides' && c.isMutating === true);
+expect('slides bare-version retry spelling (v1/presentations) → same classification',
+  classifyGoogleApiCall('v1/presentations', 'POST'),
+  (c: { kind: string; family?: string }) => c.kind === 'passthrough' && c.family === 'slides');
+expect('slides read with id → passthrough family slides',
+  classifyGoogleApiCall('slides/v1/presentations/1AbCpres?fields=title', 'GET'),
+  (c: { kind: string; family?: string; isMutating?: boolean }) =>
+    c.kind === 'passthrough' && c.family === 'slides' && c.isMutating === false);
+expect('slides batchUpdate verb suffix → passthrough family slides',
+  classifyGoogleApiCall('v1/presentations/1AbCpres:batchUpdate', 'POST'),
+  (c: { kind: string; family?: string }) => c.kind === 'passthrough' && c.family === 'slides');
 
 console.log('extractSendRecipients:');
 const raw = Buffer.from(
@@ -204,6 +235,44 @@ expect('calendar event under named calendar → {id}s',
 expect('short literal segments survive (me, v4, about)',
   templateGoogleApiPath('drive/v3/about'),
   (t: string) => t === 'drive/v3/about');
+expect('messages/send is a literal subresource, not an id',
+  templateGoogleApiPath('gmail/v1/users/me/messages/send'),
+  (t: string) => t === 'gmail/v1/users/me/messages/send');
+
+console.log('extractGoogleErrorReason:');
+expect('legacy errors[] shape (Gmail/Drive)',
+  extractGoogleErrorReason({ error: { errors: [{ reason: 'rateLimitExceeded', domain: 'usageLimits' }], code: 403 } }),
+  (r: { reason?: string; domain?: string }) => r.reason === 'rateLimitExceeded' && r.domain === 'usageLimits');
+expect('gRPC details[] ErrorInfo shape (Sheets/Docs/Slides/People)',
+  extractGoogleErrorReason({ error: {
+    code: 403, message: 'Request had insufficient authentication scopes.', status: 'PERMISSION_DENIED',
+    details: [
+      { '@type': 'type.googleapis.com/google.rpc.ErrorInfo', reason: 'ACCESS_TOKEN_SCOPE_INSUFFICIENT', domain: 'googleapis.com' },
+    ],
+  } }),
+  (r: { reason?: string; domain?: string; status?: string }) =>
+    r.reason === 'ACCESS_TOKEN_SCOPE_INSUFFICIENT' && r.domain === 'googleapis.com' && r.status === 'PERMISSION_DENIED');
+expect('gRPC shape with non-ErrorInfo details first (skipped until reason found)',
+  extractGoogleErrorReason({ error: {
+    code: 404, status: 'NOT_FOUND',
+    details: [
+      { '@type': 'type.googleapis.com/google.rpc.Help', links: [] },
+      { '@type': 'type.googleapis.com/google.rpc.ErrorInfo', reason: 'notFound' },
+    ],
+  } }),
+  (r: { reason?: string; status?: string }) => r.reason === 'notFound' && r.status === 'NOT_FOUND');
+expect('status-only body (no reason anywhere) keeps status',
+  extractGoogleErrorReason({ error: { code: 404, message: 'Requested entity was not found.', status: 'NOT_FOUND' } }),
+  (r: { reason?: string; status?: string }) => r.reason === undefined && r.status === 'NOT_FOUND');
+expect('legacy errors[] wins over details[] when both present',
+  extractGoogleErrorReason({ error: {
+    errors: [{ reason: 'legacyReason', domain: 'legacyDomain' }],
+    details: [{ reason: 'detailsReason', domain: 'detailsDomain' }],
+  } }),
+  (r: { reason?: string; domain?: string }) => r.reason === 'legacyReason' && r.domain === 'legacyDomain');
+expect('non-object body → empty',
+  extractGoogleErrorReason('Not Found'),
+  (r: object) => Object.keys(r).length === 0);
 
 console.log('rawApiFamily:');
 expect('sheets kind → spreadsheets',
@@ -225,11 +294,17 @@ expect('file_comments family → drive_comments',
   rawApiFamily(classifyGoogleApiCall('drive/v3/files/1BxiM2doc-ID_x/comments', 'POST')),
   (f: string | null) => f === 'drive_comments');
 expect('passthrough carries classifier family',
-  rawApiFamily(classifyGoogleApiCall('calendar/v3/calendars/primary/events', 'GET')),
-  (f: string | null) => f === 'calendar/v3');
-expect('denied → null',
+  rawApiFamily(classifyGoogleApiCall('drive/v3/about', 'GET')),
+  (f: string | null) => f === 'drive/v3');
+expect('slides passthrough → slides',
+  rawApiFamily(classifyGoogleApiCall('slides/v1/presentations', 'POST')),
+  (f: string | null) => f === 'slides');
+expect('batch denied → null (denial_code identifies it)',
   rawApiFamily(classifyGoogleApiCall('batch/gmail/v1', 'POST')),
   (f: string | null) => f === null);
+expect('family-unsupported denied keeps family visible (per-family demand analytics)',
+  rawApiFamily(classifyGoogleApiCall('people/v1/people:createContact', 'POST')),
+  (f: string | null) => f === 'people');
 
 if (failures > 0) {
   console.error(`\n${failures} test(s) FAILED`);

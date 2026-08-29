@@ -46,7 +46,7 @@ keep internal/QA traffic out of the numbers.
 | `docs_grant_verification` / `docs_grant_recovered` | server (`/api/rules/verify-docs-access`, approval in `actions.ts`) | docs twins of the sheets grant-funnel events, with `document_id` |
 | `google_token_fetch_failed` | server (MCP `getGoogleToken`, proxy `fetchClerkGoogleToken`, `getOwnerGoogleToken`) | `reason` (`refresh_failed` = Clerk 422 cannot-refresh, `clerk_error`, `timeout` = MCP-path Clerk call exceeded 15 s), `via` (`mcp`/`proxy`/`grant_check`), `account_delegated`. The `$mcp_tool_call` event also carries `google_token_error` on affected calls. Added 2026-08-20 after the dev-instance refresh-token loss was found; this is the signal for whether production users hit it too |
 | `google_token_identity_fallback` | server (MCP `getGoogleToken`) | `via` (`mcp`). Fires when a key owner's own mailbox is reached through the identity-drift self-heal added in `4b551018` — the target address is not a delegation but IS one of the owner's verified Clerk addresses. Unsampled, and independent of `$mcp_tool_call`, so `uniq(person)` is exactly the drifted population still being rescued; the same call also carries `google_token_identity_fallback: true` on `$mcp_tool_call`. Expected to trend to zero as users self-heal — see docs/monitoring.md 7.4 |
-| `google_scope_missing` | server (MCP `gmailScopeDenial`, proxy Gmail handler) | `via` (`mcp`/`proxy`), `account_delegated`. Fires when a Gmail call is pre-flight denied because Clerk's granted scopes for the account lack Gmail (`gmail.modify` / `mail.google.com`) — the "Gmail checkbox left unchecked at consent" state, which would 403 on every Gmail call until reconnect. Gmail calls only; a sheets/docs call by the same user records nothing. Unsampled and independent of `$mcp_tool_call`, so `uniq(person)` is the size of the locked-out population; the same call carries `google_scope_missing: true` on `$mcp_tool_call`, and Gmail tools then pre-flight-deny with `failure_reason: 'gmail_scope_missing'` (outcome `failed`) instead of surfacing Google's 403 (outcome `error`). Added 2026-08-28 after repeated per-user gmail_list 403s |
+| `google_scope_missing` | server (MCP `gmailScopeDenial` / `driveFileScopeDenial`, proxy Gmail handler) | `via` (`mcp`/`proxy`), `scope` (`gmail` / `drive_file`; absent on pre-2026-08-29 events, all of which are gmail), `account_delegated`. Fires when a call is pre-flight denied because Clerk's granted scopes for the account lack what the surface rides on: Gmail calls need `gmail.modify` / `mail.google.com`; raw non-Gmail calls (Sheets/Docs/Slides/Drive) need `drive.file` — the "checkbox left unchecked at consent" (or pre-drive.file connection) states, which would 403 on every such call until reconnect. Unsampled and independent of `$mcp_tool_call`, so `uniq(person)` is the size of the locked-out population; the same call carries `google_scope_missing: true` on `$mcp_tool_call` and pre-flight-denies with `failure_reason: 'gmail_scope_missing'` / `'drive_file_scope_missing'` (outcome `failed`) instead of surfacing Google's 403 (outcome `error`). Added 2026-08-28 after repeated per-user gmail_list 403s; drive_file variant 2026-08-29 |
 | `mcp_auth_attempt` | server (`/api/mcp` `verifyMcpAuth`) | `outcome` (`ok`/`invalid_token`/`no_token`), `client_id`, `strategy_used` (`clerk`/`direct`/`none`), `memo_hit`, `optimizations_enabled`, `success_sample_rate`, `error_class`, `kid` (on `invalid_token` only), `method`. Auth-health substrate for the JWKS/strategy optimizations. **Failures are unsampled; successes are a 1-in-20 per-request sample** — multiply `ok` by 20 for volume, valid only from the 2026-08-25 fix onward (two earlier versions sampled per-token and were biased; see docs/monitoring.md 1). `kid = 'probe'` marks our own synthetic probes, not users |
 | `agent_doc_created` | server (`/api/mcp`, raw `POST v1/documents`) | `document_id`, `auto_granted` (docs twin of `agent_sheet_created`) |
 | `connector_install_started` | server (`.well-known` OAuth discovery routes, `/api/mcp` auth layer) | `touchpoint` (`oauth_discovery`/`mcp_401`), `endpoint`, `reason` (`no_token`/`invalid_token`), `method`, `user_agent`, `install_fingerprint` (salted sha256 of ip+user-agent — the uniqueness key; see funnel note below), `client_name`/`client_version` (mcp_401 only, when the unauthenticated request was an MCP `initialize`) |
@@ -146,7 +146,13 @@ missing/revoked OAuth scope and plain throttling. Every non-OK response now
 also stamps `error_reason` (Google's `error.errors[0].reason`, e.g.
 `rateLimitExceeded`, `insufficientPermissions`, `domainPolicy`) and
 `error_domain` (`error.errors[0].domain`, e.g. `usageLimits`) when present.
-These are Google-defined enum strings, never customer data. `describeGoogleError`
+These are Google-defined enum strings, never customer data. Since the
+raw-api-error-quality change (2026-08-29), the extractor also reads the
+gRPC-style `error.details[]` ErrorInfo shape that Sheets v4 / Docs v1 /
+Slides v1 return (their bodies carry no legacy `errors[]` array — before
+this, every error from those APIs landed with a null `error_reason`), and
+when no reason enum exists anywhere, `error_reason` falls back to Google's
+canonical `error.status` string (`PERMISSION_DENIED`, `NOT_FOUND`). `describeGoogleError`
 branches its 403 remediation on them: before this, the 403 text asserted the
 scope cause unconditionally and told rate-limited callers to reconnect a
 working Google account — advice that is wrong for the whole `usageLimits`
@@ -253,15 +259,29 @@ is unchanged.
 classification time, denials included — `raw_api_kind` (the
 `classifyGoogleApiCall` result: `sheets`, `sheets_create`, `docs`,
 `docs_create`, `gmail_read`, `gmail_send`, `passthrough`, `denied`),
-`raw_api_family` (Google product: `gmail`, `spreadsheets`, `documents`, or
-the classifier's first-two-segments family for passthroughs; omitted on
-denials, which carry `denial_code`), `raw_api_endpoint` (the HTTP method plus
+`raw_api_family` (Google product: `gmail`, `spreadsheets`, `documents`,
+`slides`, or the classifier's first-two-segments family for passthroughs;
+omitted on denials, which carry `denial_code` — except
+`raw_api_family_unsupported` denials, which keep the family so per-family
+demand for un-granted APIs stays visible), `raw_api_endpoint` (the HTTP method plus
 the **id-stripped** path template from `templateGoogleApiPath`, e.g.
 `GET gmail/v1/users/me/messages/{id}` — identifiers are customer data and
 high-cardinality, so they never land on events), and `raw_api_mutating`.
 Passthrough calls additionally keep `raw_api_passthrough: true`. Raw paths
 were never captured before this change, so there is no backfill — coverage
 starts at the deploy.
+
+Since raw-api-error-quality (2026-08-29): classification+stamping runs in the
+tool handler **before** account resolution, so resolution failures carry the
+raw props too (previously they landed with null endpoint/family);
+`messages/send` templates literally instead of as `messages/{id}` (new
+template value — historical events keep the old one); families FGAC's grant
+can never authorize (People, Calendar, Tasks, YouTube, …) are refused
+pre-flight with `denial_code: 'raw_api_family_unsupported'` (outcome
+`denied_by_policy`, family kept on the event) instead of forwarding to Google
+and surfacing an opaque 403/404 error; Slides paths route to
+`slides.googleapis.com` as passthrough family `slides` (they previously hit
+`www.googleapis.com`, which does not serve Slides, and 404ed unconditionally).
 
 **`client_name`:** populated from the MCP `initialize` handshake's
 clientInfo — the auth layer parses it (the only request that carries it in
