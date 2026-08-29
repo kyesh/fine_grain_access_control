@@ -296,7 +296,26 @@ async function isOwnClerkEmail(clerkUserId: string, email: string): Promise<bool
   }
 }
 
-async function getGoogleToken(targetEmail: string, keyOwner: { id: string; email: string; clerkUserId: string }) {
+/**
+ * The one Gmail scope FGAC requests at sign-in (src/app/layout.tsx), plus the
+ * broader legacy grant that also covers every Gmail call. Google's granular
+ * consent screen lets a user finish sign-in with the Gmail checkbox unchecked —
+ * Clerk then holds a verified account whose token Google 403s on every Gmail
+ * call, forever. The dashboard detects that state (googleAccess.ts); the MCP
+ * path must too, or the user is silently locked out of Gmail tools while
+ * everything else half-works.
+ */
+const GMAIL_SCOPES = ['https://www.googleapis.com/auth/gmail.modify', 'https://mail.google.com/'];
+
+type GoogleTokenResult = {
+  token: string;
+  /** undefined = Clerk did not report scopes; never enforce on missing metadata. */
+  hasGmailScope?: boolean;
+};
+
+async function getGoogleToken(
+  targetEmail: string, keyOwner: { id: string; email: string; clerkUserId: string },
+): Promise<GoogleTokenResult | null> {
   let tokenOwnerClerkId: string;
 
   if (targetEmail.toLowerCase() === keyOwner.email.toLowerCase()) {
@@ -348,9 +367,19 @@ async function getGoogleToken(targetEmail: string, keyOwner: { id: string; email
       CLERK_TOKEN_TIMEOUT_MS,
     );
     addToolCallProps({ token_ms: Date.now() - tokenStarted });
-    const token = tokenResponse.data?.[0]?.token || null;
-    if (!token) addToolCallProps({ google_token_error: 'no_token' });
-    return token;
+    const grant = tokenResponse.data?.[0];
+    if (!grant?.token) {
+      addToolCallProps({ google_token_error: 'no_token' });
+      return null;
+    }
+    // Clerk reports the scopes Google actually granted (the dashboard's
+    // checkGoogleAccess already treats a missing scope here as "not
+    // connected"). Only computed here — gmailScopeDenial does the enforcement
+    // and the analytics, so a sheets-only call by a Gmail-scope-less user
+    // records nothing.
+    const scopes = Array.isArray(grant.scopes) ? grant.scopes : undefined;
+    const hasGmailScope = scopes ? scopes.some(s => GMAIL_SCOPES.includes(s)) : undefined;
+    return { token: grant.token, hasGmailScope };
   } catch (err) {
     // Observability for the "Clerk cannot refresh the Google token" failure
     // mode (Clerk 422: grant stored without a refresh token — seen on the
@@ -566,7 +595,8 @@ const SCOPE_REASONS = new Set([
 ]);
 
 function describe403(detail: string, targetEmail: string, r: GoogleErrorReason): string {
-  const reconnect = `Ask the user to reconnect the account here: ${DASHBOARD_URL}/dashboard/accounts — then retry once after they confirm.`;
+  const reconnect = `Ask the user to reconnect the account with this one-click link (it opens Google's consent screen directly): ` +
+    `${DASHBOARD_URL}/dashboard/accounts?reconnect=1 — then retry once after they confirm.`;
 
   // Throttling. Reconnecting the account does nothing here, and the retry the
   // old text suppressed is exactly the right move.
@@ -595,7 +625,7 @@ function describe403(detail: string, targetEmail: string, r: GoogleErrorReason):
   // retry, rather than asserting the scope cause the way the old text did.
   return `❌ Google denied the request (403${r.reason ? ` ${r.reason}` : ''})${detail ? `: ${detail}` : ''}. ` +
     `This is usually either temporary throttling or a missing/revoked OAuth scope for '${targetEmail}'. ` +
-    `Retry ONCE after a short pause — if it fails again it is the grant, not throttling, and reconnecting is the fix: ${DASHBOARD_URL}/dashboard/accounts`;
+    `Retry ONCE after a short pause — if it fails again it is the grant, not throttling, and reconnecting is the fix: ${DASHBOARD_URL}/dashboard/accounts?reconnect=1`;
 }
 
 function describeGoogleError(status: number, data: unknown, targetEmail: string): string {
@@ -607,7 +637,8 @@ function describeGoogleError(status: number, data: unknown, targetEmail: string)
   switch (status) {
     case 401:
       return `❌ Google authorization expired for '${targetEmail}'. STOP — do not retry; it will keep failing. ` +
-        `Ask the user to reconnect this Google account here: ${DASHBOARD_URL}/dashboard/accounts — then retry once after they confirm.`;
+        `Ask the user to reconnect this Google account with this one-click link (it opens Google's consent screen directly): ` +
+        `${DASHBOARD_URL}/dashboard/accounts?reconnect=1 — then retry once after they confirm.`;
     case 403:
       return describe403(detail, targetEmail, r);
     case 404:
@@ -824,7 +855,7 @@ async function withGrantGrace(
     addToolCallProps({ [`${service}_grace_retries`]: retries, [`${service}_grace_recovered`]: result.ok });
     if (result.ok) {
       // Don't let the first attempt's transient status ride on a success event.
-      addToolCallProps({ error_status: undefined });
+      addToolCallProps({ error_status: undefined, error_reason: undefined, error_domain: undefined });
       console.log(`[MCP] ${service} grace retry recovered after ${retries} attempt(s) (rule age ${grantAgeSeconds()}s)`);
     }
   }
@@ -1125,7 +1156,7 @@ function withToolAnalytics<R extends ToolAnalyticsResult>(
   });
 }
 
-type ResolvedAccount = { targetEmail: string; token: string; proxyKeyId: string };
+type ResolvedAccount = { targetEmail: string; token: string; proxyKeyId: string; hasGmailScope?: boolean };
 type ResolvedError = { error: string };
 
 /**
@@ -1146,7 +1177,8 @@ type ResolveFailureReason =
   | 'no_proxy_key'
   | 'no_accessible_accounts'
   | 'account_not_permitted'
-  | 'google_token_unavailable';
+  | 'google_token_unavailable'
+  | 'gmail_scope_missing';
 
 function resolveFailure(reason: ResolveFailureReason, error: string): ResolvedError {
   addToolCallProps({ failure_reason: reason });
@@ -1180,12 +1212,42 @@ async function resolveAccountAndToken(
     account_delegated: !!access.delegationId,
   });
 
-  const token = await getGoogleToken(targetEmail, conn.user);
-  if (!token) {
-    return resolveFailure('google_token_unavailable', `❌ Could not fetch Google token for '${targetEmail}'. The account owner may need to reconnect Google.`);
+  const googleToken = await getGoogleToken(targetEmail, conn.user);
+  if (!googleToken) {
+    return resolveFailure('google_token_unavailable', `❌ Could not fetch Google token for '${targetEmail}'. The account owner may need to reconnect Google — one-click link: ${DASHBOARD_URL}/dashboard/accounts?reconnect=1`);
   }
 
-  return { targetEmail, token, proxyKeyId: conn.proxyKeyId };
+  return { targetEmail, token: googleToken.token, proxyKeyId: conn.proxyKeyId, hasGmailScope: googleToken.hasGmailScope };
+}
+
+/**
+ * Pre-flight for Gmail surfaces only (sheets/docs/drive don't need the Gmail
+ * scope): a token whose grant lacks the Gmail scope 403s on every Gmail call
+ * until the account is reconnected, so calling Google is pointless and the
+ * generic 403 text used to send agents into retry loops. Deterministic and
+ * never-reached-Google, so it is the `failed` class (textResult), not an
+ * upstream `error` — see the ResolveFailureReason comment above.
+ *
+ * Two signals, same pattern as google_token_identity_fallback: the tool-call
+ * properties attribute the denial to the call; the standalone event is
+ * unsampled and independent of $mcp_tool_call, so `uniq(person)` over it is
+ * exactly the locked-out population (docs/monitoring.md 7.6).
+ */
+function gmailScopeDenial(conn: ConnectionApproved, resolved: ResolvedAccount) {
+  if (resolved.hasGmailScope !== false) return null;
+  addToolCallProps({ failure_reason: 'gmail_scope_missing', google_scope_missing: true });
+  captureServerEvent(conn.user.clerkUserId, 'google_scope_missing', {
+    via: 'mcp',
+    account_delegated: resolved.targetEmail.toLowerCase() !== conn.user.email.toLowerCase(),
+  });
+  return textResult(
+    `❌ The Google account '${resolved.targetEmail}' is connected WITHOUT Gmail permission — ` +
+    `most likely the Gmail checkbox was left unchecked on Google's consent screen when connecting. ` +
+    `STOP — every Gmail call on this account will fail until it is reconnected; retrying will NOT help. ` +
+    `👉 Send the account owner this one-click link — it opens Google's consent screen directly; they must approve Gmail access there: ` +
+    `${DASHBOARD_URL}/dashboard/accounts?reconnect=1 — then retry once after they confirm. ` +
+    `Non-Gmail tools (sheets, docs) are unaffected.`,
+  );
 }
 
 // ─── Raw Google API Execution ───────────────────────────────────────────────
@@ -1222,6 +1284,13 @@ async function executeRawGoogleCall(
   if (cls.kind === 'denied') {
     addToolCallProps({ denial_code: cls.code });
     return textResult(cls.reason);
+  }
+
+  // Raw Gmail calls need the same scope pre-flight as the dedicated Gmail
+  // tools (every gmail/* path classifies into the 'gmail' family).
+  if (family === 'gmail') {
+    const scopeDenial = gmailScopeDenial(conn, resolved);
+    if (scopeDenial) return scopeDenial;
   }
 
   const cleanPath = path.replace(/^\/+/, '');
@@ -1445,6 +1514,8 @@ const handler = createMcpHandler(
 
         const resolved = await resolveAccountAndToken(conn, account);
         if ('error' in resolved) return textResult(resolved.error);
+        const scopeDenial = gmailScopeDenial(conn, resolved);
+        if (scopeDenial) return scopeDenial;
 
         const params = new URLSearchParams();
         if (query) params.set('q', query);
@@ -1470,6 +1541,8 @@ const handler = createMcpHandler(
 
         const resolved = await resolveAccountAndToken(conn, account);
         if ('error' in resolved) return textResult(resolved.error);
+        const scopeDenial = gmailScopeDenial(conn, resolved);
+        if (scopeDenial) return scopeDenial;
 
         // Read-time enforcement: label blacklist/whitelist + content blacklist
         const rules = await loadApplicableRules(conn.user.id, resolved.proxyKeyId, resolved.targetEmail);
@@ -1496,15 +1569,22 @@ const handler = createMcpHandler(
       TOOL_DEFS.gmail_get_attachment.name,
       toolConfig(TOOL_DEFS.gmail_get_attachment, {
         messageId: z.string().describe('Gmail message ID containing the attachment'),
-        attachmentId: z.string().describe('Attachment ID, taken from the `attachments` array of a gmail_read on THIS messageId. Ids are message-scoped and are re-issued when the message is re-indexed — do not reuse one saved from an earlier session; re-read the message first.'),
+        attachmentId: z.string().optional().describe('Attachment ID, taken from the `attachments` array of a gmail_read on THIS messageId. Ids are message-scoped and are re-issued when the message is re-indexed; a stale id is healed automatically when the message has exactly one attachment. Prefer `filename` when you know it — filenames never go stale.'),
+        filename: z.string().optional().describe('Attachment filename as shown in gmail_read `attachments` (case-insensitive), as an alternative to attachmentId. If several attachments share the name, the error lists them so you can pick one by attachmentId.'),
         account: z.string().optional().describe('Email account to use.'),
       }),
-      async ({ messageId, attachmentId, account }, { authInfo }) => {
+      async ({ messageId, attachmentId, filename, account }, { authInfo }) => {
         const conn = await requireApproval(authInfo);
         if ('content' in conn) return conn;
 
+        if (!attachmentId && !filename) {
+          return errorResult('❌ Provide either attachmentId or filename to identify the attachment.');
+        }
+
         const resolved = await resolveAccountAndToken(conn, account);
         if ('error' in resolved) return textResult(resolved.error);
+        const scopeDenial = gmailScopeDenial(conn, resolved);
+        if (scopeDenial) return scopeDenial;
 
         // Read-time enforcement on the parent message (labels + content rules):
         // an attachment is only as readable as the email that carries it
@@ -1518,6 +1598,39 @@ const handler = createMcpHandler(
           return textResult(restriction);
         }
 
+        // The parent read above is FRESH, so its attachment ids are the ones
+        // Gmail currently honours — the list both selector paths resolve
+        // against, and the authority the 404 self-heal below retries from.
+        // (Attachment ids are ephemeral: Gmail re-issues them on re-index,
+        // which is why an id cached from an earlier gmail_read can 404 while
+        // the message stays valid — the dominant failure of this tool per the
+        // 2026-08 directory metrics.)
+        const freshAttachments = parseGmailMessage(parentResult.data as Record<string, unknown>).attachments;
+        const listFresh = () => freshAttachments
+          .map(a => `- '${a.filename}' (${a.mimeType || 'unknown type'}, ~${Math.round((a.sizeBytes || 0) / 1024)} KB, attachmentId: ${a.attachmentId})`)
+          .join('\n');
+
+        let targetId: string;
+        if (attachmentId) {
+          addToolCallProps({ attachment_selector: 'id' });
+          targetId = attachmentId;
+        } else {
+          addToolCallProps({ attachment_selector: 'filename' });
+          const wanted = (filename as string).toLowerCase();
+          const matches = freshAttachments.filter(a => a.filename.toLowerCase() === wanted);
+          if (matches.length === 0) {
+            return errorResult(freshAttachments.length === 0
+              ? `❌ Message '${messageId}' has no attachments.`
+              : `❌ No attachment named '${filename}' on message '${messageId}'. It currently has:\n${listFresh()}\nRetry ONCE with one of these filenames or attachmentIds; if none is the one you need, it is not on this message.`);
+          }
+          if (matches.length > 1) {
+            return errorResult(
+              `❌ ${matches.length} attachments on message '${messageId}' are named '${filename}':\n${listFresh()}\n` +
+              `Retry ONCE with the attachmentId of the one you need.`);
+          }
+          targetId = matches[0].attachmentId;
+        }
+
         // Declared size from the parent's MIME metadata, stamped BEFORE the
         // attachment fetch: if that fetch fails, the event still says how big
         // the attachment was, so error rows are attributable to size vs
@@ -1526,7 +1639,7 @@ const handler = createMcpHandler(
         // property name on purpose.)
         const declaredSize = (function findDeclared(part?: { body?: { attachmentId?: string; size?: number }; parts?: unknown[] }): number | undefined {
           if (!part) return undefined;
-          if (part.body?.attachmentId === attachmentId) return part.body.size;
+          if (part.body?.attachmentId === targetId) return part.body.size;
           for (const child of (part.parts as typeof part[] | undefined) ?? []) {
             const found = findDeclared(child);
             if (found !== undefined) return found;
@@ -1537,13 +1650,57 @@ const handler = createMcpHandler(
           addToolCallProps({ attachment_declared_kb: Math.round(declaredSize / 1024) });
         }
 
-        const attachmentResult = await gmailFetch(
+        let attachmentResult = await gmailFetch(
           resolved.token,
           resolved.targetEmail,
-          `messages/${messageId}/attachments/${attachmentId}`
+          `messages/${messageId}/attachments/${targetId}`
         );
-        // Reaching here means the parent read succeeded, so a 404 now is
-        // provably the attachmentId, not the messageId.
+        // Reaching here means the parent read succeeded, so a failure now is
+        // provably the attachmentId, not the messageId. Google's split
+        // (measured 2026-08-28 against production): a well-formed token it has
+        // invalidated (message re-indexed) → 404; a malformed/truncated token
+        // → 400 "Invalid attachment token". Both mean "this id will never
+        // work, the message is fine", and the recovery is identical — so when
+        // the caller supplied the id themselves, heal it server-side instead
+        // of erroring: the fresh parent already says which ids are current.
+        if (!attachmentResult.ok && (attachmentResult.status === 404 || attachmentResult.status === 400) && attachmentId) {
+          const suppliedIdIsCurrent = freshAttachments.some(a => a.attachmentId === attachmentId);
+          if (freshAttachments.length === 0) {
+            addToolCallProps({ attachment_selfheal: 'no_attachments' });
+            return errorResult(
+              `❌ Message '${messageId}' has no attachments (${attachmentResult.status}). The attachmentId may belong to a different message — ` +
+              `STOP retrying this pair and re-check which message carries the attachment via gmail_read.`);
+          }
+          if (!suppliedIdIsCurrent && freshAttachments.length === 1) {
+            const retry = await gmailFetch(
+              resolved.token,
+              resolved.targetEmail,
+              `messages/${messageId}/attachments/${freshAttachments[0].attachmentId}`
+            );
+            if (retry.ok) {
+              // Transparent recovery: the caller's id was stale, the message
+              // has exactly one attachment, so the fresh id is unambiguously
+              // the one they meant. Counts as a success, not an error — so
+              // the failed first attempt's status/reason must not ride on
+              // the success event (same rule as the sheets grace retry).
+              addToolCallProps({
+                attachment_selfheal: 'recovered',
+                error_status: undefined, error_reason: undefined, error_domain: undefined,
+              });
+              attachmentResult = retry;
+            } else {
+              addToolCallProps({ attachment_selfheal: 'retry_failed' });
+            }
+          } else if (!suppliedIdIsCurrent) {
+            addToolCallProps({ attachment_selfheal: 'ambiguous' });
+            return errorResult(
+              `❌ Gmail rejected that attachmentId (${attachmentResult.status}) — it is stale or invalid; Gmail re-issues ids when a message is re-indexed. Message '${messageId}' currently has:\n${listFresh()}\n` +
+              `Retry ONCE with the matching attachmentId above (or call again with the filename parameter instead). ` +
+              `Do NOT retry the old id — it is guaranteed to fail again.`);
+          }
+          // suppliedIdIsCurrent but Google still 404s: not a staleness case —
+          // fall through to the generic per-site text.
+        }
         if (!attachmentResult.ok) return gmailNotFoundResult('attachment', attachmentResult, messageId);
 
         const attachment = attachmentResult.data as { size?: number; data?: string };
@@ -1576,6 +1733,8 @@ const handler = createMcpHandler(
 
         const resolved = await resolveAccountAndToken(conn, account);
         if ('error' in resolved) return textResult(resolved.error);
+        const scopeDenial = gmailScopeDenial(conn, resolved);
+        if (scopeDenial) return scopeDenial;
 
         // Enforce send whitelist
         const rules = await loadApplicableRules(conn.user.id, resolved.proxyKeyId, resolved.targetEmail);
@@ -1605,6 +1764,8 @@ const handler = createMcpHandler(
 
         const resolved = await resolveAccountAndToken(conn, account);
         if ('error' in resolved) return textResult(resolved.error);
+        const scopeDenial = gmailScopeDenial(conn, resolved);
+        if (scopeDenial) return scopeDenial;
 
         const result = await gmailFetch(resolved.token, resolved.targetEmail, 'labels');
         if (!result.ok) return errorResult(result.error);
