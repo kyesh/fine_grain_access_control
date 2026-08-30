@@ -150,9 +150,13 @@
   not in the drafts/send request body), proving server-side resolution.
   Nothing is sent. Repeat with a draft addressed to a whitelisted recipient
   (e.g. `USER_B_EMAIL`): drafts/send SUCCEEDS and the mail arrives.
-  A drafts/send with a missing/bogus draft id is denied with a
-  could-not-determine message (deny on unresolvable recipients, never
-  forward blind).
+  A drafts/send with a missing or bogus draft id is denied with an FGAC
+  message saying the draft/its recipients could not be determined and
+  nothing was sent (for a bogus id the message may quote Google's 404 as the
+  fetch-failure detail, but it must read as a refused send, not a bare
+  passthrough error) — deny on unresolvable recipients, never forward
+  blind. Resolution-failure denials carry NO approval link (the remedy is
+  the draft id, not a whitelist grant).
 
 ### A12: The two remaining Gmail write refusals are honest about their cause
 - `google_api_modify` PATCH `gmail/v1/users/me/settings/sendAs/<any>` with

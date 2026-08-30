@@ -1549,26 +1549,33 @@ async function executeRawGoogleCall(
     // body carries (drafts.send can update the draft while sending). Every
     // address from either source must be whitelisted; anything unresolvable
     // denies — never forward blind.
+    // Resolution failures deny WITHOUT approval links: the fix is the draft
+    // or its id, not a whitelist grant — a "send to anyone" link here would
+    // point the user at the wrong remedy. Whitelist violations below still
+    // mint links via sendDenialWithLinks.
+    const draftDenial = (detail: string) => {
+      addToolCallProps({ denial_code: 'recipients_undetermined' });
+      return textResult(`🚫 ${detail} Nothing was sent — drafts/send is denied whenever the draft's recipients cannot be determined and verified against the send whitelist.`);
+    };
     const { draftId, bodyRecipients } = extractDraftSendInfo(body);
     if (!draftId) {
-      return sendDenialWithLinks(conn, resolved.proxyKeyId, {
-        message: '🚫 Could not determine which draft to send, so sending was denied. Provide the draft id in the body: {"id": "<draftId>"}.',
-        code: 'recipients_undetermined',
-      });
+      return draftDenial('Could not determine which draft to send. Provide the draft id in the body: {"id": "<draftId>"}.');
     }
     // Query-stripped: the caller's path may carry ?alt=json etc., which would
     // otherwise leave `/send` in place and fetch the wrong URL.
     const draftPath = cleanPath.split(/[?#]/)[0].replace(/\/send$/i, `/${encodeURIComponent(draftId)}`) + '?format=raw';
     const draftResult = await googleFetch(`https://www.googleapis.com/${draftPath}`, resolved.token, 'GET', undefined, resolved.targetEmail);
-    if (!draftResult.ok) return errorResult(draftResult.error);
+    if (!draftResult.ok) {
+      // A bogus id surfaced Google's bare 404 here before (QA finding,
+      // 2026-08-30), which read as "the send endpoint 404ed" — say what was
+      // actually being fetched and that the send was refused.
+      return draftDenial(`The draft could not be fetched to verify its recipients (${draftResult.error}). Confirm the draft id via google_api_get gmail/v1/users/me/drafts and retry.`);
+    }
     const draftRaw = (draftResult.data as { message?: { raw?: unknown } })?.message?.raw;
     const draftRecipients = typeof draftRaw === 'string' ? extractSendRecipients({ raw: draftRaw }) : null;
     const recipients = [...new Set([...(draftRecipients ?? []), ...(bodyRecipients ?? [])])];
     if (recipients.length === 0) {
-      return sendDenialWithLinks(conn, resolved.proxyKeyId, {
-        message: '🚫 Could not determine the draft\'s recipients, so sending was denied. Update the draft with standard To/Cc/Bcc headers first, then retry drafts/send.',
-        code: 'recipients_undetermined',
-      });
+      return draftDenial('The draft has no parseable To/Cc/Bcc recipients. Update the draft with standard recipient headers, then retry drafts/send.');
     }
     const denial = checkSendWhitelist(rules, recipients);
     if (denial) return sendDenialWithLinks(conn, resolved.proxyKeyId, denial);
