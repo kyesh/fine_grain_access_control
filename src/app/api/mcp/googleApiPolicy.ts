@@ -3,10 +3,17 @@
  * (google_api_get / google_api_modify).
  *
  * Enforced families (Gmail, Sheets, Docs) are mapped onto FGAC rule
- * enforcement; batch endpoints and unrecognized Gmail writes are refused
- * before any network call. Unknown Google API families pass through with the
- * account's token (2026-08-19 posture change: classify usage, don't block it —
- * Google's OAuth scopes are the backstop) and are stamped for analytics.
+ * enforcement; HTTP batch endpoints are refused before any network call.
+ * Everything else — Gmail mailbox writes included (2026-08-30 posture change:
+ * empower users, don't block them) — is allowed and classified: unknown
+ * Google API families pass through with the account's token (2026-08-19
+ * posture change: classify usage, don't block it — Google's OAuth scopes are
+ * the backstop) and are stamped for analytics. The only Gmail writes still
+ * refused are the two that can never be right: permanent deletion
+ * (batchDelete — a product guarantee, and legacy mail.google.com grants mean
+ * Google would NOT backstop it) and settings writes (they need
+ * gmail.settings.* scopes FGAC never requests, so they fail at Google
+ * deterministically — the denial names the real cause and stops retry loops).
  *
  * No db/env imports: unit-testable via `npx tsx scripts/test-google-api-policy.ts`.
  */
@@ -18,6 +25,8 @@ export type RawCallClass =
   | { kind: 'docs_create' }
   | { kind: 'gmail_read' }
   | { kind: 'gmail_send' }
+  | { kind: 'gmail_draft_send' }
+  | { kind: 'gmail_write' }
   | { kind: 'file_comments'; fileId: string; isMutating: boolean }
   | { kind: 'passthrough'; family: string; isMutating: boolean }
   | { kind: 'denied'; reason: string; code: DenialCode; family?: string };
@@ -26,7 +35,8 @@ export type RawCallClass =
 export type DenialCode =
   | 'raw_api_batch_unsupported'
   | 'raw_api_family_unsupported'
-  | 'gmail_write_unsupported';
+  | 'gmail_write_unsupported'
+  | 'gmail_settings_unsupported';
 
 /**
  * Google API families FGAC's OAuth grant can never authorize. The grant is
@@ -69,12 +79,21 @@ export function extractDocsDocumentId(path: string): string | null {
  */
 export function classifyGoogleApiCall(rawPath: string, method: string): RawCallClass {
   const path = rawPath.replace(/^\/+/, '').split(/[?#]/)[0];
-  const segments = path.split('/').filter(Boolean).map(s => s.toLowerCase());
+  let segments = path.split('/').filter(Boolean).map(s => s.toLowerCase());
 
-  // Google batch endpoints multiplex many sub-requests (each with its own
-  // method and path) inside one POST body, which would smuggle reads past
-  // read-restriction checks and writes past the deny-by-default policy.
-  if (segments.includes('batch') || segments.some(s => s.startsWith('batch'))) {
+  // Media-upload variants (`upload/gmail/v1/…`, `upload/drive/v3/…`) are the
+  // same endpoints as their non-upload twins and must classify identically —
+  // before this, `upload/gmail/v1/users/me/messages/send` fell through to
+  // unknown-family passthrough and skipped the send whitelist entirely.
+  if (segments[0] === 'upload') segments = segments.slice(1);
+
+  // Google HTTP batch endpoints (`batch/gmail/v1`, `batch/drive/v3`, …)
+  // multiplex many sub-requests (each with its own method and path) inside
+  // one POST body, which would smuggle sends past the whitelist and reads
+  // past read-restriction checks. Exact-segment match only: Gmail's
+  // `messages/batchModify` / `batchDelete` are ordinary endpoints, not batch
+  // multiplexers, and classify in the gmail branch below.
+  if (segments.includes('batch')) {
     return { kind: 'denied', code: 'raw_api_batch_unsupported', reason: '🚫 Access Denied: Google batch endpoints are not supported through FGAC. Call individual endpoints instead.' };
   }
 
@@ -130,13 +149,37 @@ export function classifyGoogleApiCall(rawPath: string, method: string): RawCallC
 
   if (segments[0] === 'gmail') {
     if (!isMutating) return { kind: 'gmail_read' };
-    if (segments[segments.length - 1] === 'send' && segments[segments.length - 2] === 'messages') {
-      return { kind: 'gmail_send' };
+    const last = segments[segments.length - 1];
+    const parent = segments[segments.length - 2];
+    // The two endpoints that deliver mail keep the recipient whitelist:
+    // messages/send carries its recipients in the request body; drafts/send
+    // carries them in the stored draft, which the route resolves before
+    // forwarding.
+    if (last === 'send' && parent === 'messages') return { kind: 'gmail_send' };
+    if (last === 'send' && parent === 'drafts') return { kind: 'gmail_draft_send' };
+    // Permanent deletion stays refused as a product guarantee
+    // (get_my_permissions: "deletion: NEVER available through any tool").
+    // Google would not reliably backstop it: batchDelete needs the full
+    // mail.google.com scope, which legacy grants in GMAIL_SCOPES can carry.
+    if (last === 'batchdelete' && parent === 'messages') {
+      return { kind: 'denied', code: 'gmail_write_unsupported', family: 'gmail', reason: '🚫 Access Denied: permanent deletion is the one Gmail write FGAC refuses — messages/batchDelete destroys mail with no trash recovery. Move messages to trash instead (POST …/messages/{id}/trash, reversible), which is allowed.' };
     }
-    // family kept on the denial: which Gmail writes agents reach for (drafts,
-    // labels, trash, …) is roadmap-prioritization signal, same as the
-    // unsupported-family denials — raw_api_endpoint carries the exact path.
-    return { kind: 'denied', code: 'gmail_write_unsupported', family: 'gmail', reason: '🚫 Access Denied: This Gmail write endpoint is not permitted through FGAC. The only supported Gmail write is messages/send (recipients are checked against the send whitelist).' };
+    // Settings writes (sendAs/aliases, filters, forwarding, vacation,
+    // delegates) need gmail.settings.* scopes FGAC never requests, so they
+    // fail at Google under every grant we accept. Refusing pre-flight names
+    // the real cause once and stops the retry loop (same rationale as the
+    // family-unsupported denials). Settings READS work under gmail.modify
+    // and stay gmail_read above.
+    if (segments.includes('settings')) {
+      return { kind: 'denied', code: 'gmail_settings_unsupported', family: 'gmail', reason: '🚫 Not available: changing Gmail settings (aliases/sendAs, filters, forwarding, vacation responder, delegates) requires Google gmail.settings.* OAuth scopes that FGAC\'s Google grant (gmail.modify) does not include. This is a Google scope limit, not an FGAC rule — no retry or path spelling can succeed. Reading settings still works. If the user needs a Gmail setting changed, tell them to do it in Gmail directly.' };
+    }
+    // Everything else the token can do is allowed (2026-08-30 posture change:
+    // empower users, don't block them — the send whitelist above and Google's
+    // own scopes are the gates): labels, drafts create/update, messages
+    // modify/trash/untrash/batchModify/insert/import, thread writes, watch.
+    // raw_api_endpoint carries the id-stripped path so which writes agents
+    // actually use keeps feeding rule-engine prioritization.
+    return { kind: 'gmail_write' };
   }
 
   // Slides rides drive.file exactly like Sheets/Docs (creates and app-created
@@ -177,8 +220,9 @@ const ID_PARENT_SEGMENTS = new Set([
 // Literal API subresources that follow an id-parent segment without being
 // ids themselves. Without this, `messages/send` templated as `messages/{id}`
 // and send-body 400s were indistinguishable from message-modify probes in
-// the endpoint breakdown.
-const LITERAL_SUBRESOURCES = new Set(['send']);
+// the endpoint breakdown. batchModify/batchDelete/insert/import sit directly
+// under `messages/` the same way.
+const LITERAL_SUBRESOURCES = new Set(['send', 'batchmodify', 'batchdelete', 'insert', 'import']);
 
 /**
  * Id-strip a raw Google API path into a low-cardinality endpoint template for
@@ -232,6 +276,8 @@ export function rawApiFamily(cls: RawCallClass): string | null {
       return 'documents';
     case 'gmail_read':
     case 'gmail_send':
+    case 'gmail_draft_send':
+    case 'gmail_write':
       return 'gmail';
     case 'file_comments':
       return 'drive_comments';
@@ -279,6 +325,29 @@ export function extractSendRecipients(body: unknown): string[] | null {
     }
   }
   return recipients.length > 0 ? recipients : null;
+}
+
+/**
+ * Parse a Gmail drafts/send request body (a Draft resource: `{ id, message? }`).
+ * `draftId` is the stored draft to send; `bodyRecipients` are To/Cc/Bcc parsed
+ * out of an inline `message.raw`, when the caller updates the draft while
+ * sending. The route unions bodyRecipients with the recipients of the FETCHED
+ * draft — every address from either source must pass the send whitelist, so
+ * neither a stale draft nor an inline rewrite can smuggle a recipient past it.
+ */
+export function extractDraftSendInfo(body: unknown): { draftId: string | null; bodyRecipients: string[] | null } {
+  let obj: unknown = body;
+  try {
+    if (typeof body === 'string') obj = JSON.parse(body);
+  } catch {
+    return { draftId: null, bodyRecipients: null };
+  }
+  if (!obj || typeof obj !== 'object') return { draftId: null, bodyRecipients: null };
+  const draft = obj as { id?: unknown; message?: { raw?: unknown } };
+  const draftId = typeof draft.id === 'string' && draft.id.length > 0 ? draft.id : null;
+  const raw = draft.message && typeof draft.message === 'object' ? draft.message.raw : undefined;
+  const bodyRecipients = typeof raw === 'string' ? extractSendRecipients({ raw }) : null;
+  return { draftId, bodyRecipients };
 }
 
 /**
