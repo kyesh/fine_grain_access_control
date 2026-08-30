@@ -1556,7 +1556,9 @@ async function executeRawGoogleCall(
         code: 'recipients_undetermined',
       });
     }
-    const draftPath = cleanPath.replace(/\/send$/i, `/${encodeURIComponent(draftId)}`) + '?format=raw';
+    // Query-stripped: the caller's path may carry ?alt=json etc., which would
+    // otherwise leave `/send` in place and fetch the wrong URL.
+    const draftPath = cleanPath.split(/[?#]/)[0].replace(/\/send$/i, `/${encodeURIComponent(draftId)}`) + '?format=raw';
     const draftResult = await googleFetch(`https://www.googleapis.com/${draftPath}`, resolved.token, 'GET', undefined, resolved.targetEmail);
     if (!draftResult.ok) return errorResult(draftResult.error);
     const draftRaw = (draftResult.data as { message?: { raw?: unknown } })?.message?.raw;
