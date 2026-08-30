@@ -23,7 +23,7 @@
 | 07 | `07_key_lifecycle.md` | Revoke, roll, cross-user isolation |
 | 08 | `08_strict_light_mode.md` | No dark mode leaks regardless of OS preference |
 | 09 | `09_sheets_management.md` | Per-spreadsheet read/write/block rules |
-| 10 | `10_raw_google_api.md` | Deny-by-default raw Google API pair |
+| 10 | `10_raw_google_api.md` | Allow-by-default raw Google API pair (sends whitelisted, honest refusals) |
 | 11 | `11_partner_handoff.md` | Partner OAuth handoff, consent provisioning, bypass fail-safe |
 | 12 | `12_push_notifications.md` | Watch/PubSub pipeline, rule-filtered thin pings, retry/suspend |
 | 13 | `13_default_profile_instant_start.md` | Auto-provisioned default profile, instant-start flow |
