@@ -17,7 +17,11 @@ rather than observed output.
    npx tsx scripts/qa-coverage-check.ts
    ```
    Anything it flags (missing, duplicate, unknown, skip-without-reason,
-   evidence-free rows) goes straight into your findings.
+   evidence-free rows) goes straight into your findings. If it prints a
+   `SCOPED RUN` banner, the results file's `scope` field marks a targeted
+   re-test: audit the scoped capabilities to the same standard, and do NOT
+   report the excluded capabilities as coverage gaps — but do note in your
+   verdict that the run was scoped and to what.
 2. Read `docs/QA_Acceptance_Test/qa-results.json` and, for each capability
    with reported rows, the matching checklist in
    `docs/QA_Acceptance_Test/capabilities/NN_*.md`.
