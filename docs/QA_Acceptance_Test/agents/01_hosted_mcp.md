@@ -299,6 +299,19 @@ curl -s $BASE_URL/api/mcp -X POST \
 
 ---
 
+## Capability: Attachment Reading (→ capabilities/20_attachment_reading.md)
+
+- Fixtures: send between USER_A/USER_B (standing permission) a small CSV, a
+  text-bearing PDF > 160 KB (over the 200k base64-char cap), and a no-text-layer
+  binary (PNG); `gmail_read` for message/attachment ids.
+- A1–A6: `tools/call` via curl on `gmail_get_attachment`, varying `mode` and
+  `offset` per the capability doc. A4's reassembly check: decode each window's
+  `data` with a base64url decoder, concatenate, compare `shasum` + length
+  against the sent file.
+- A7: fold into the Analytics Events queries below (same run window).
+
+---
+
 ## Capability: Analytics Events (→ capabilities/16_analytics_events.md)
 
 > Run LAST — it inspects the PostHog events the capabilities above generated.

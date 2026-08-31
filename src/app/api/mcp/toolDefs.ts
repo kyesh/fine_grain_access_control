@@ -49,7 +49,7 @@ export const TOOL_DEFS = {
   gmail_get_attachment: {
     name: 'gmail_get_attachment',
     title: 'Download a Gmail attachment',
-    description: 'Retrieve an email attachment by message ID plus either attachment ID or filename (allowed unless the parent message matches a read-block rule). Gmail attachment ids go stale when a message is re-indexed — stale ids are healed automatically when unambiguous, and filenames never go stale. Returns Gmail\'s base64url-encoded data (URL-safe alphabet, padded with "=") — decode with a base64url decoder, not standard base64.',
+    description: 'Retrieve an email attachment by message ID plus either attachment ID or filename (allowed unless the parent message matches a read-block rule). Gmail attachment ids go stale when a message is re-indexed — stale ids are healed automatically when unambiguous, and filenames never go stale. Default: files up to ~150 KB return Gmail\'s base64url-encoded data (URL-safe alphabet — decode with a base64url decoder, not standard base64); larger files return extracted text instead when possible (PDF, .docx, text-family types). To READ an attachment of any size cheaply, pass mode:\'text\' for its extracted text; pass mode:\'base64\' for raw bytes, windowed ~75 KB per call when large. Partial responses state the next offset — pass it back as the offset parameter to continue.',
     readOnly: true,
   },
   gmail_send: {

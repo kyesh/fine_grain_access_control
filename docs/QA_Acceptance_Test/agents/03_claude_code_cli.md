@@ -190,6 +190,19 @@ No tmux sessions to clean up. Results are saved to `test/qa-envs/cc-cli/evals/re
 
 ---
 
+## Capability: Attachment Reading (→ capabilities/20_attachment_reading.md)
+
+- Fixtures: send between USER_A/USER_B (standing permission) a small CSV, a
+  text-bearing PDF > 160 KB, and a no-text-layer binary (PNG); `gmail_read`
+  for ids.
+- A1–A6: headless `claude -p` evals invoking `gmail_get_attachment` with the
+  capability doc's `mode`/`offset` matrix; grade on the response markers
+  (`📎 … chars X–Y of TOTAL`, `next_offset`, ⚠️/❌ guidance). A4 reassembly:
+  script the windows via the eval harness and compare decoded length/hash.
+- A7: fold into the Analytics Events queries below (same run window).
+
+---
+
 ## Capability: Analytics Events (→ capabilities/16_analytics_events.md)
 
 > Run LAST — it inspects the PostHog events the capabilities above generated.

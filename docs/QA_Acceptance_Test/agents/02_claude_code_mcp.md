@@ -222,6 +222,20 @@ tmux kill-session -t fgac-qa
 
 ---
 
+## Capability: Attachment Reading (→ capabilities/20_attachment_reading.md)
+
+- Fixtures: send between USER_A/USER_B (standing permission) a small CSV, a
+  text-bearing PDF > 160 KB, and a no-text-layer binary (PNG); `gmail_read`
+  for ids.
+- A1–A6: drive `gmail_get_attachment` through the tmux Claude Code MCP session,
+  varying `mode`/`offset` per the capability doc. For A4, have the agent save
+  each window's decoded bytes to files and verify concatenated length/hash; if
+  the runtime can't hash, assert `total_bytes` equals the sum of
+  `bytes_returned` across windows and the final `next_offset` is null.
+- A7: fold into the Analytics Events queries below (same run window).
+
+---
+
 ## Capability: Analytics Events (→ capabilities/16_analytics_events.md)
 
 > Run LAST — it inspects the PostHog events the capabilities above generated.

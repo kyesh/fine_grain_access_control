@@ -169,6 +169,19 @@ docker compose -f test/qa-envs/openclaw/docker-compose.yml down
 
 ---
 
+## Capability: Attachment Reading (→ capabilities/20_attachment_reading.md)
+
+- Fixtures: send between USER_A/USER_B (standing permission) a small CSV, a
+  text-bearing PDF > 160 KB, and a no-text-layer binary (PNG); `gmail_read`
+  for ids.
+- A1–A6: drive `gmail_get_attachment` through the OpenClaw gateway, varying
+  `mode`/`offset` per the capability doc; assert on response markers, and for
+  A4 assert `total_bytes` equals the sum of `bytes_returned` with a null final
+  `next_offset` (hash locally when the gateway lets you extract the windows).
+- A7: fold into the Analytics Events queries below (same run window).
+
+---
+
 ## Capability: Analytics Events (→ capabilities/16_analytics_events.md)
 
 > Run LAST — it inspects the PostHog events the capabilities above generated.

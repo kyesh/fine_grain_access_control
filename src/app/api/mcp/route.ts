@@ -27,6 +27,7 @@ import { filterLiveDelegatedAccess } from '@/db/delegationQueries';
 import { clerkClient } from '@clerk/nextjs/server';
 import { resolveDbUser } from '@/db/userHelpers';
 import { loadApplicableRules, checkReadRestrictions, type ApplicableRules } from '@/lib/gmailRules';
+import { extractAttachmentText } from '@/lib/attachmentText';
 import { compileRulePattern } from '@/lib/rulePatterns';
 import { captureServerEvent } from '@/lib/posthogServer';
 import { runWithToolCallProps, addToolCallProps, getToolCallProps } from '@/lib/toolCallContext';
@@ -1129,6 +1130,13 @@ const COMMENT_LIST_FIELDS = 'nextPageToken,comments(id,content,resolved,createdT
 
 const MAX_BODY_CHARS = 20_000;
 const MAX_ATTACHMENT_CHARS = 200_000; // base64url chars ≈ 150 KB decoded
+// Large-attachment windows (plan gmail-attachment-pagination_v1). Sized so one
+// window stays under MCP clients' own tool-result caps (Claude Code rejects
+// ~25k tokens): 50k chars of prose ≈ 12k tokens; 75 KB of bytes re-encodes to
+// 100k base64url chars ≈ 25k tokens — deliberately the byte path is the
+// fallback, extracted text the primary (base64 is ~30× worse per useful byte).
+const ATTACHMENT_TEXT_WINDOW_CHARS = 50_000;
+const ATTACHMENT_BYTES_WINDOW = 75_000;
 
 function decodeB64Url(s: string): string {
   try { return Buffer.from(s, 'base64url').toString('utf8'); } catch { return ''; }
@@ -1894,8 +1902,10 @@ const handler = createMcpHandler(
         attachmentId: z.string().optional().describe('Attachment ID, taken from the `attachments` array of a gmail_read on THIS messageId. Ids are message-scoped and are re-issued when the message is re-indexed; a stale id is healed automatically when the message has exactly one attachment. Prefer `filename` when you know it — filenames never go stale.'),
         filename: z.string().optional().describe('Attachment filename as shown in gmail_read `attachments` (case-insensitive), as an alternative to attachmentId. If several attachments share the name, the error lists them so you can pick one by attachmentId.'),
         account: z.string().optional().describe('Email account to use.'),
+        mode: z.enum(['auto', 'text', 'base64']).optional().describe("auto (default): full base64url when the file fits ~150 KB, extracted text for larger extractable files. 'text': return the attachment's extracted text (PDF, .docx, text-family types) — the cheap way to READ an attachment of any size. 'base64': raw bytes, windowed when large."),
+        offset: z.number().int().min(0).optional().describe('Continuation offset from a previous partial response — chars into the extracted text, or decoded bytes for base64 windows. Start at 0; each partial response states the next offset.'),
       }),
-      async ({ messageId, attachmentId, filename, account }, { authInfo }) => {
+      async ({ messageId, attachmentId, filename, account, mode, offset }, { authInfo }) => {
         const conn = await requireApproval(authInfo);
         if ('content' in conn) return conn;
 
@@ -2010,6 +2020,7 @@ const handler = createMcpHandler(
                 error_status: undefined, error_reason: undefined, error_domain: undefined,
               });
               attachmentResult = retry;
+              targetId = freshAttachments[0].attachmentId; // so filename/mime metadata below resolves
             } else {
               addToolCallProps({ attachment_selfheal: 'retry_failed' });
             }
@@ -2033,10 +2044,113 @@ const handler = createMcpHandler(
         const attachmentChars = attachment.data?.length ?? 0;
         const approxKb = Math.round((attachmentChars * 3) / 4 / 1024);
         addToolCallProps({ attachment_chars: attachmentChars, attachment_kb: approxKb });
-        if (attachmentChars > MAX_ATTACHMENT_CHARS) {
-          return textResult(`⚠️ Attachment is ~${approxKb} KB, which exceeds the ~150 KB limit for MCP responses. Ask the user to retrieve it directly from Gmail.`);
+
+        // Large-attachment reading (plan gmail-attachment-pagination_v1):
+        // measured demand is bimodal — most capped files are 200–350 KB
+        // documents, a tail is 13–18 MB — and the intent is almost always
+        // "read it", so extracted text is the primary path and stateless
+        // decoded-byte windows the fallback. Gmail's attachments.get has no
+        // partial fetch, so every windowed call re-downloads the full body
+        // server-side; fine at observed volume.
+        const readMode = mode ?? 'auto';
+        const windowOffset = offset ?? 0;
+        if (readMode !== 'auto' || windowOffset > 0) {
+          addToolCallProps({ attachment_mode: readMode, attachment_offset: windowOffset });
         }
-        return jsonResult(attachment);
+
+        // Legacy path, byte-for-byte: whole body fits and no windowing asked.
+        if (readMode !== 'text' && windowOffset === 0 && attachmentChars <= MAX_ATTACHMENT_CHARS) {
+          return jsonResult(attachment);
+        }
+
+        const attMeta = freshAttachments.find(a => a.attachmentId === targetId);
+        const attName = attMeta?.filename || filename || 'attachment';
+        const attMime = attMeta?.mimeType || '';
+        const bytes = Buffer.from(attachment.data ?? '', 'base64url');
+
+        const byteWindow = () => {
+          if (windowOffset >= bytes.length) {
+            return textResult(
+              `❌ offset ${windowOffset} is at or beyond the end of '${attName}' (${bytes.length} bytes total). ` +
+              `Do not retry this offset — the previous window was the final one, or restart from offset 0.`);
+          }
+          const slice = bytes.subarray(windowOffset, windowOffset + ATTACHMENT_BYTES_WINDOW);
+          const nextOffset = windowOffset + slice.length < bytes.length ? windowOffset + slice.length : null;
+          addToolCallProps({ attachment_window: 'bytes' });
+          return jsonResult({
+            filename: attName,
+            mimeType: attMime || undefined,
+            encoding: 'base64url',
+            total_bytes: bytes.length,
+            offset: windowOffset,
+            bytes_returned: slice.length,
+            next_offset: nextOffset,
+            note: nextOffset === null
+              ? 'Final window. Decode each window with a base64url decoder and concatenate the DECODED bytes in offset order.'
+              : `Partial content — call again with offset: ${nextOffset} for the next window, then concatenate the DECODED bytes in offset order.`,
+            data: slice.toString('base64url'),
+          });
+        };
+
+        if (readMode === 'base64') return byteWindow();
+
+        // mode 'text', or 'auto' past the legacy path: extraction first.
+        let extracted: Awaited<ReturnType<typeof extractAttachmentText>> = null;
+        let extractFailed = false;
+        try {
+          extracted = await extractAttachmentText(bytes, attMime, attName);
+        } catch (err) {
+          extractFailed = true;
+          addToolCallProps({ attachment_extract_error: 'failed' });
+          console.error('[MCP] attachment text extraction failed:', err instanceof Error ? err.message : err);
+        }
+        let extractEmpty = false;
+        if (extracted && extracted.text.trim().length === 0) {
+          // A text layer that extracts to nothing (scanned-image PDF) reads as
+          // unsupported, not as a successful empty window.
+          extracted = null;
+          extractEmpty = true;
+          addToolCallProps({ attachment_extract_error: 'empty' });
+        }
+
+        if (extracted) {
+          addToolCallProps({
+            attachment_window: 'text',
+            attachment_text_kind: extracted.kind,
+            attachment_text_chars: extracted.text.length,
+          });
+          if (windowOffset >= extracted.text.length) {
+            return textResult(
+              `❌ offset ${windowOffset} is at or beyond the end of the extracted text (${extracted.text.length} chars total). ` +
+              `Do not retry this offset — the previous window was the final one, or restart from offset 0.`);
+          }
+          const win = extracted.text.slice(windowOffset, windowOffset + ATTACHMENT_TEXT_WINDOW_CHARS);
+          const end = windowOffset + win.length;
+          const more = end < extracted.text.length;
+          return textResult(
+            `📎 ${attName} (${attMime || 'unknown type'}, ~${approxKb} KB) — extracted ${extracted.kind} text, chars ${windowOffset}–${end} of ${extracted.text.length}.` +
+            (more ? ` More remains: call again with offset: ${end}.` : ' End of text.') +
+            ` For the raw bytes instead, use mode: 'base64'.` +
+            `\n---\n${win}`);
+        }
+
+        if (!extractFailed && !extractEmpty) {
+          addToolCallProps({ attachment_extract_error: 'unsupported' });
+        }
+
+        if (readMode === 'text') {
+          return textResult(
+            `❌ No text could be extracted from '${attName}' (${attMime || 'unknown type'}) — text mode covers PDFs and .docx with a text layer plus text-family types` +
+            `${extractFailed ? ', and this file defeated its extractor (corrupt or password-protected?)' : ' (a scanned/image-only PDF has no text layer)'}. ` +
+            `Use mode: 'base64' to page through the raw bytes (~${ATTACHMENT_BYTES_WINDOW / 1000} KB per call), or ask the user to open it in Gmail.`);
+        }
+
+        // mode 'auto', nothing extractable.
+        if (windowOffset > 0) return byteWindow();
+        return textResult(
+          `⚠️ Attachment is ~${approxKb} KB, which exceeds the ~150 KB limit for MCP responses, and no text could be extracted from it (${attMime || 'unknown type'}). ` +
+          `Retrieve the raw bytes in windows with mode: 'base64', offset: 0 (~${ATTACHMENT_BYTES_WINDOW / 1000} KB per call; each response states the next offset), ` +
+          `or ask the user to retrieve it directly from Gmail.`);
       }
     );
 
