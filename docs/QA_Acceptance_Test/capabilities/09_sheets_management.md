@@ -33,6 +33,29 @@ events do not route into the iframe — tiles cannot be clicked from this harnes
    for release-level verification of the actual pick interaction, including the
    real first-time drive.file consent round-trip (also verified live).
 
+## Harness note — mutating the fixture file AS the owner (renames, A10)
+No Drive UI, Picker, or extra connector is needed to act on a granted file as
+USER_A: the signed-in dashboard session can mint the owner's own Google token via
+`GET /api/auth/google-picker-token` (`accessToken`; requires `hasDriveFileScope:
+true`), and that token's per-file `drive.file` grant covers writes to the granted
+fixture. Rename from the page context (keeps the token out of transcripts):
+
+```js
+const { accessToken } = await (await fetch('/api/auth/google-picker-token')).json();
+await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${SID}:batchUpdate`, {
+  method: 'POST',
+  headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+  body: JSON.stringify({ requests: [{ updateSpreadsheetProperties:
+    { properties: { title: NEW_TITLE }, fields: 'title' } }] }),
+});
+```
+
+This is the real user flow (an owner renaming their file in Drive), not a DB
+shortcut, so Database Rule 7 is satisfied. **Always rename back to the fixture
+title afterwards** — the Google file is shared by every environment (dev branches,
+previews, prod QA), even though `resource_name` write-backs stay in the current
+environment's DB branch. Verified end to end on a Vercel preview 2026-08-30.
+
 ## Assertions
 
 ### A1: "+ Expose a sheet" on a profile opens the Google Picker directly
@@ -100,6 +123,25 @@ events do not route into the iframe — tiles cannot be clicked from this harnes
   Cleanup: delete the QA tab (`deleteSheet` request) and restore **Read Only**.
   The success response of a values write (`sheets_update_range`) carries an
   `fgac_hint` naming `sheets_edit` (capability 10 A10 cross-check).
+
+### A10: Drive renames surface live in the rule list and write back to FGAC
+- With the Demo Spreadsheet exposed and its Google grant healthy
+  (`/api/rules/verify-sheets-access` → `state: "ok"`), rename the file at Google
+  as the owner (see the "mutating the fixture file AS the owner" harness note —
+  picker-token + `updateSpreadsheetProperties`; no FGAC edit of any kind), then
+  reload the profile's dashboard page.
+- **Expected**: (a) the rule row shows the NEW title without any FGAC-side edit —
+  the verify endpoint's `grants` map carries `title` and the UI prefers it over
+  the stored `resource_name`; (b) the verify call also writes the new title back:
+  `/api/rules/grant-sheets-access` (and `get_my_permissions`) now return the new
+  name as `resourceName`; (c) a grant in `missing`/`unknown` state changes NO
+  stored name (write-back only runs on `state: "ok"` with a title). Rename the
+  fixture back to `Demo Spreadsheet` and confirm both the row and the stored name
+  restore — the restore is itself a second write-back check.
+- **Regression**: 2026-08-30 support report — renames in Drive never propagated;
+  the live title was fetched on every dashboard load and discarded client-side,
+  so the rule list, `get_my_permissions`, and approval-page copy showed the
+  grant-time name forever.
 
 ### A7: Drive listing is Google-native; per-file Drive access respects sheet rules
 - `GET {proxy}/drive/v3/files` with the profile's bearer token, then
