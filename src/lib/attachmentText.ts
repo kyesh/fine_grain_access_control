@@ -60,8 +60,13 @@ export async function extractAttachmentText(
   filename: string,
 ): Promise<ExtractedText | null> {
   const mime = (mimeType || '').toLowerCase().split(';')[0].trim();
+  // Metadata can be absent entirely (a caller-supplied attachment id often
+  // matches nothing in the fresh parent read, leaving no filename/mime), so
+  // magic bytes get a vote alongside mime and extension.
+  const generic = mime === '' || mime === 'application/octet-stream';
 
-  if (mime === 'application/pdf' || (mime === 'application/octet-stream' && PDF_EXT.test(filename)) || PDF_EXT.test(filename)) {
+  if (mime === 'application/pdf' || PDF_EXT.test(filename)
+      || (generic && bytes.subarray(0, 5).toString('latin1') === '%PDF-')) {
     const { extractText } = await import('unpdf');
     const { text } = await extractText(new Uint8Array(bytes), { mergePages: true });
     return { text: text.trim(), kind: 'pdf' };
@@ -71,14 +76,32 @@ export async function extractAttachmentText(
     const { unzipSync } = await import('fflate');
     return { text: docxToText(new Uint8Array(bytes), unzipSync), kind: 'docx' };
   }
+  // Sniffed ZIP under a generic mime: docx only if the marker entry exists —
+  // an xlsx/pptx/plain zip is NOT extractable here, and must not throw.
+  if ((generic || mime === 'application/zip') && bytes[0] === 0x50 && bytes[1] === 0x4b) {
+    const { unzipSync } = await import('fflate');
+    let files: Record<string, Uint8Array>;
+    try { files = unzipSync(new Uint8Array(bytes)); } catch { return null; }
+    if (!files['word/document.xml']) return null;
+    return { text: docxToText(new Uint8Array(bytes), unzipSync), kind: 'docx' };
+  }
 
-  if (TEXT_MIME.test(mime) || ((mime === '' || mime === 'application/octet-stream') && TEXT_EXT.test(filename))) {
+  if (TEXT_MIME.test(mime) || (generic && TEXT_EXT.test(filename))) {
     const text = bytes.toString('utf8');
     // A mislabeled binary decodes into a soup of U+FFFD — treat as unsupported
     // rather than returning garbage the agent might trust.
     const bad = (text.match(/�/g) ?? []).length;
     if (text.length > 0 && bad / text.length > 0.05) return null;
     return { text: text.replace(/^﻿/, ''), kind: 'text' };
+  }
+  // Last resort for metadata-less payloads: accept as text only when the
+  // decode is essentially clean — a stricter bar than the labeled path above.
+  if (generic && bytes.length > 0) {
+    const text = bytes.toString('utf8');
+    const bad = (text.match(/\uFFFD/g) ?? []).length;
+    if (bad / text.length < 0.005 && !text.includes('\u0000')) {
+      return { text: text.replace(/^﻿/, ''), kind: 'text' };
+    }
   }
 
   return null;

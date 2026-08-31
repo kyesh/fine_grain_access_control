@@ -2063,7 +2063,15 @@ const handler = createMcpHandler(
           return jsonResult(attachment);
         }
 
-        const attMeta = freshAttachments.find(a => a.attachmentId === targetId);
+        // Gmail re-issues attachment ids on every parent read, so a
+        // caller-supplied id routinely matches NOTHING in the fresh list even
+        // though the fetch it fed succeeded — fall back to the only
+        // attachment, or to the caller's filename, before giving up on
+        // metadata (verified against a live mailbox 2026-08-31: without this,
+        // id-selected text extraction saw 'unknown type' every time).
+        const attMeta = freshAttachments.find(a => a.attachmentId === targetId)
+          ?? (freshAttachments.length === 1 ? freshAttachments[0] : undefined)
+          ?? (filename ? freshAttachments.find(a => a.filename.toLowerCase() === (filename as string).toLowerCase()) : undefined);
         const attName = attMeta?.filename || filename || 'attachment';
         const attMime = attMeta?.mimeType || '';
         const bytes = Buffer.from(attachment.data ?? '', 'base64url');
