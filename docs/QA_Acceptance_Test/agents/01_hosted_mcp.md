@@ -116,6 +116,12 @@ curl -s $BASE_URL/api/mcp -X POST \
 ### A6: list_accounts shows delegated emails
 - [ ] Returns both own and delegated email
 
+### A8: list_accounts reports per-account scope state
+- [ ] Same call: `account_details` present with `email`/`delegated` and
+  three-state `gmail`/`drive_file` (`granted` on healthy QA accounts);
+  `reconnect_url` only on accounts with a definitive problem, bound with
+  `&for=<email>`
+
 ---
 
 ## Capability: Connection Lifecycle (→ capabilities/06_connection_lifecycle.md)

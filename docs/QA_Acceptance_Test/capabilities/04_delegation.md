@@ -39,3 +39,17 @@
   delegation alone attaches it to the Default Profile. After the owner
   revokes, the same calls are denied and the mailbox disappears from
   `list_accounts` (custom profiles remain per-mailbox opt-in at creation)
+
+### A8: list_accounts reports per-account Google scope state
+- Agent calls list_accounts on a key with at least one own and one delegated
+  mailbox
+- **Expected**: The response carries `account_details` alongside the
+  unchanged `accounts` string array — one entry per account with `email`,
+  `delegated`, and three-state `gmail` / `drive_file` values
+  (`granted`/`missing`/`unknown`; a scope Clerk cannot report is `unknown`,
+  never coerced to `missing`). A healthy QA account reports both scopes
+  `granted` with no `reconnect_url`; an account with a missing scope carries
+  a `reconnect_url` ending in `?reconnect=1&for=<that account's email>`
+  (URL-encoded — the link is bound to the account it repairs), and
+  `next_steps.sheets`/`next_steps.docs` point at that link when `drive_file`
+  is `missing`

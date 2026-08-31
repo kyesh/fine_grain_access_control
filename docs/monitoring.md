@@ -332,3 +332,13 @@ tool error now delivers; watch whether the same person persists across days
 with `error_reason` in (`insufficientPermissions`,
 `ACCESS_TOKEN_SCOPE_INSUFFICIENT`) trend to zero on `$mcp_tool_call` — the
 pre-flight should absorb them before Google is called.
+
+**Quiet-probe caveat (2026-08-30):** `list_accounts` now probes every
+accessible account's token to report per-account scope state
+(`account_details`). Those probes run `getGoogleToken` in **quiet mode** —
+they fire NO `google_token_identity_fallback` / `google_token_fetch_failed`
+events and stamp no `google_token_error`/`token_ms` tool-call props — so the
+§7.4 and §7.6-adjacent counts above keep meaning "a real tool call hit this",
+not "someone listed accounts". `google_scope_missing` itself never fired from
+list_accounts (it comes from the denial pre-flights, which list_accounts does
+not run).

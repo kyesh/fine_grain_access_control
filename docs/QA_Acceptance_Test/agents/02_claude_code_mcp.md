@@ -114,6 +114,14 @@ tmux send-keys -t fgac-qa "List my email accounts" Enter
 ```
 - [ ] Shows both own and delegated emails (if delegation configured)
 
+### A8: List accounts reports per-account scope state
+```bash
+tmux send-keys -t fgac-qa "List my email accounts and tell me each account's Google scope state verbatim from account_details" Enter
+```
+- [ ] `account_details` reports three-state `gmail`/`drive_file` per account
+  (`granted` on healthy QA accounts); any `reconnect_url` is bound with
+  `&for=<email>`
+
 ---
 
 ## Capability: Connection Lifecycle (→ capabilities/06_connection_lifecycle.md)
