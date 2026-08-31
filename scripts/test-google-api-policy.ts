@@ -1,9 +1,9 @@
 /**
- * Unit tests for the raw Google API deny-by-default policy
+ * Unit tests for the raw Google API classification policy
  * (src/app/api/mcp/googleApiPolicy.ts). Run: npx tsx scripts/test-google-api-policy.ts
  */
 import {
-  classifyGoogleApiCall, extractSendRecipients, collectLabelIds,
+  classifyGoogleApiCall, extractSendRecipients, extractDraftSendInfo, collectLabelIds,
   sheetsApprovalAction, docsApprovalAction, extractDocsDocumentId,
   templateGoogleApiPath, rawApiFamily, extractGoogleErrorReason,
 } from '../src/app/api/mcp/googleApiPolicy';
@@ -31,18 +31,65 @@ expect('gmail send POST → gmail_send',
 expect('gmail send with query → gmail_send',
   classifyGoogleApiCall('gmail/v1/users/me/messages/send?alt=json', 'POST'),
   (c: { kind: string }) => c.kind === 'gmail_send');
-expect('gmail modify POST → denied',
+// ── Gmail writes: allow-by-default (2026-08-30 posture change) ──
+expect('gmail message modify POST → gmail_write (archive/mark-read allowed)',
   classifyGoogleApiCall('gmail/v1/users/me/messages/abc/modify', 'POST'),
-  (c: { kind: string }) => c.kind === 'denied');
-expect('gmail settings forwarding POST → denied',
-  classifyGoogleApiCall('gmail/v1/users/me/settings/forwardingAddresses', 'POST'),
-  (c: { kind: string }) => c.kind === 'denied');
-expect('gmail drafts POST → denied',
-  classifyGoogleApiCall('gmail/v1/users/me/drafts', 'POST'),
-  (c: { kind: string }) => c.kind === 'denied');
-expect('gmail trash DELETE-ish POST → denied',
+  (c: { kind: string }) => c.kind === 'gmail_write');
+expect('gmail trash POST → gmail_write (reversible, allowed)',
   classifyGoogleApiCall('gmail/v1/users/me/messages/abc/trash', 'POST'),
-  (c: { kind: string }) => c.kind === 'denied');
+  (c: { kind: string }) => c.kind === 'gmail_write');
+expect('gmail untrash POST → gmail_write',
+  classifyGoogleApiCall('gmail/v1/users/me/messages/abc/untrash', 'POST'),
+  (c: { kind: string }) => c.kind === 'gmail_write');
+expect('gmail draft create POST → gmail_write',
+  classifyGoogleApiCall('gmail/v1/users/me/drafts', 'POST'),
+  (c: { kind: string }) => c.kind === 'gmail_write');
+expect('gmail draft update PUT → gmail_write',
+  classifyGoogleApiCall('gmail/v1/users/me/drafts/r123abc', 'PUT'),
+  (c: { kind: string }) => c.kind === 'gmail_write');
+expect('gmail label create POST → gmail_write',
+  classifyGoogleApiCall('gmail/v1/users/me/labels', 'POST'),
+  (c: { kind: string }) => c.kind === 'gmail_write');
+expect('gmail label update PATCH → gmail_write',
+  classifyGoogleApiCall('gmail/v1/users/me/labels/Label_7', 'PATCH'),
+  (c: { kind: string }) => c.kind === 'gmail_write');
+expect('gmail thread modify POST → gmail_write',
+  classifyGoogleApiCall('gmail/v1/users/me/threads/abc/modify', 'POST'),
+  (c: { kind: string }) => c.kind === 'gmail_write');
+expect('gmail batchModify POST → gmail_write (bulk labels are NOT an HTTP batch endpoint)',
+  classifyGoogleApiCall('gmail/v1/users/me/messages/batchModify', 'POST'),
+  (c: { kind: string }) => c.kind === 'gmail_write');
+expect('gmail messages insert POST → gmail_write (writes to own mailbox, delivers nothing)',
+  classifyGoogleApiCall('gmail/v1/users/me/messages/insert', 'POST'),
+  (c: { kind: string }) => c.kind === 'gmail_write');
+expect('gmail messages import POST → gmail_write',
+  classifyGoogleApiCall('gmail/v1/users/me/messages/import', 'POST'),
+  (c: { kind: string }) => c.kind === 'gmail_write');
+expect('gmail drafts/send POST → gmail_draft_send (whitelist via server-side draft fetch)',
+  classifyGoogleApiCall('gmail/v1/users/me/drafts/send', 'POST'),
+  (c: { kind: string }) => c.kind === 'gmail_draft_send');
+expect('gmail batchDelete POST → denied (permanent deletion, honest reason)',
+  classifyGoogleApiCall('gmail/v1/users/me/messages/batchDelete', 'POST'),
+  (c: { kind: string; code?: string; family?: string; reason?: string }) =>
+    c.kind === 'denied' && c.code === 'gmail_write_unsupported' && c.family === 'gmail' &&
+    !!c.reason && /permanent/i.test(c.reason) && c.reason.includes('trash'));
+expect('gmail settings sendAs PATCH → denied with honest scope reason (not a policy denial)',
+  classifyGoogleApiCall('gmail/v1/users/me/settings/sendAs/alias@example.com', 'PATCH'),
+  (c: { kind: string; code?: string; family?: string; reason?: string }) =>
+    c.kind === 'denied' && c.code === 'gmail_settings_unsupported' && c.family === 'gmail' &&
+    !!c.reason && c.reason.includes('gmail.settings') && /scope/i.test(c.reason));
+expect('gmail settings forwarding POST → denied (scope, same code)',
+  classifyGoogleApiCall('gmail/v1/users/me/settings/forwardingAddresses', 'POST'),
+  (c: { kind: string; code?: string }) => c.kind === 'denied' && c.code === 'gmail_settings_unsupported');
+expect('gmail settings READ stays gmail_read (gmail.modify covers settings reads)',
+  classifyGoogleApiCall('gmail/v1/users/me/settings/sendAs', 'GET'),
+  (c: { kind: string }) => c.kind === 'gmail_read');
+expect('upload-variant messages/send → gmail_send (whitelist, not passthrough bypass)',
+  classifyGoogleApiCall('upload/gmail/v1/users/me/messages/send', 'POST'),
+  (c: { kind: string }) => c.kind === 'gmail_send');
+expect('upload-variant drafts create → gmail_write',
+  classifyGoogleApiCall('upload/gmail/v1/users/me/drafts', 'POST'),
+  (c: { kind: string }) => c.kind === 'gmail_write');
 expect('sheets GET values → sheets read',
   classifyGoogleApiCall('v4/spreadsheets/1BxiM/values/Sheet1', 'GET'),
   (c: { kind: string; spreadsheetId?: string; isMutating?: boolean }) =>
@@ -84,6 +131,9 @@ expect('no id → null', extractDocsDocumentId('v1/documents'), (id: string | nu
 
 expect('unknown API (drive) → passthrough with family (classify, not block)',
   classifyGoogleApiCall('drive/v3/files', 'GET'),
+  (c: { kind: string; family?: string }) => c.kind === 'passthrough' && c.family === 'drive/v3');
+expect('drive media upload → passthrough (upload/ prefix normalized, drive family kept)',
+  classifyGoogleApiCall('upload/drive/v3/files?uploadType=media', 'POST'),
   (c: { kind: string; family?: string }) => c.kind === 'passthrough' && c.family === 'drive/v3');
 expect('drive comments GET → file_comments (per-file rule, not passthrough)',
   classifyGoogleApiCall('drive/v3/files/1BxiM2doc-ID_x/comments?fields=comments', 'GET'),
@@ -152,6 +202,26 @@ const foldedRaw = Buffer.from(
 expect('unfolds continuation lines',
   extractSendRecipients({ raw: foldedRaw }),
   (r: string[] | null) => !!r && r.includes('bob@example.org'));
+
+console.log('extractDraftSendInfo:');
+expect('draft id alone',
+  extractDraftSendInfo({ id: 'r-draft123' }),
+  (d: { draftId: string | null; bodyRecipients: string[] | null }) =>
+    d.draftId === 'r-draft123' && d.bodyRecipients === null);
+expect('JSON string body works',
+  extractDraftSendInfo(JSON.stringify({ id: 'r-draft123' })),
+  (d: { draftId: string | null }) => d.draftId === 'r-draft123');
+expect('inline message.raw recipients parsed (update-while-sending)',
+  extractDraftSendInfo({ id: 'r1', message: { raw } }),
+  (d: { draftId: string | null; bodyRecipients: string[] | null }) =>
+    d.draftId === 'r1' && !!d.bodyRecipients && d.bodyRecipients.includes('alice@example.com'));
+expect('missing id → null draftId (route denies, never forwards blind)',
+  extractDraftSendInfo({ message: { raw } }),
+  (d: { draftId: string | null }) => d.draftId === null);
+expect('garbage body → nulls',
+  extractDraftSendInfo('not json'),
+  (d: { draftId: string | null; bodyRecipients: string[] | null }) =>
+    d.draftId === null && d.bodyRecipients === null);
 
 console.log('collectLabelIds:');
 expect('top-level labels',
@@ -238,6 +308,15 @@ expect('short literal segments survive (me, v4, about)',
 expect('messages/send is a literal subresource, not an id',
   templateGoogleApiPath('gmail/v1/users/me/messages/send'),
   (t: string) => t === 'gmail/v1/users/me/messages/send');
+expect('messages/batchModify is a literal subresource, not an id',
+  templateGoogleApiPath('gmail/v1/users/me/messages/batchModify'),
+  (t: string) => t === 'gmail/v1/users/me/messages/batchModify');
+expect('messages/import is a literal subresource, not an id',
+  templateGoogleApiPath('gmail/v1/users/me/messages/import'),
+  (t: string) => t === 'gmail/v1/users/me/messages/import');
+expect('message trash keeps id-strip + literal verb tail',
+  templateGoogleApiPath('gmail/v1/users/me/messages/18c8f2ab91d004a7/trash'),
+  (t: string) => t === 'gmail/v1/users/me/messages/{id}/trash');
 
 console.log('extractGoogleErrorReason:');
 expect('legacy errors[] shape (Gmail/Drive)',
@@ -305,8 +384,17 @@ expect('batch denied → null (denial_code identifies it)',
 expect('family-unsupported denied keeps family visible (per-family demand analytics)',
   rawApiFamily(classifyGoogleApiCall('people/v1/people:createContact', 'POST')),
   (f: string | null) => f === 'people');
-expect('gmail-write denied keeps gmail family (which writes agents want is roadmap signal)',
+expect('gmail_write → gmail (which writes agents use is rule-engine demand signal)',
   rawApiFamily(classifyGoogleApiCall('gmail/v1/users/me/drafts', 'POST')),
+  (f: string | null) => f === 'gmail');
+expect('gmail_draft_send → gmail',
+  rawApiFamily(classifyGoogleApiCall('gmail/v1/users/me/drafts/send', 'POST')),
+  (f: string | null) => f === 'gmail');
+expect('settings-denied keeps gmail family (settings-scope demand stays visible)',
+  rawApiFamily(classifyGoogleApiCall('gmail/v1/users/me/settings/sendAs/x', 'PATCH')),
+  (f: string | null) => f === 'gmail');
+expect('batchDelete-denied keeps gmail family',
+  rawApiFamily(classifyGoogleApiCall('gmail/v1/users/me/messages/batchDelete', 'POST')),
   (f: string | null) => f === 'gmail');
 
 if (failures > 0) {

@@ -1,4 +1,4 @@
-# Capability: Raw Google API Pair (Deny-by-Default)
+# Capability: Raw Google API Pair (Allow-by-Default)
 
 > Covers the `google_api_get` / `google_api_modify` MCP tools that replaced
 > `raw_google_api_call` for Anthropic Connectors Directory compliance
@@ -6,6 +6,12 @@
 > in `src/app/api/mcp/googleApiPolicy.ts`; enforcement must be identical to
 > the dedicated tools. Hosted-MCP interface only (the REST proxy at
 > `/api/proxy` is a separate surface).
+>
+> Posture (2026-08-30): Gmail writes are ALLOW-BY-DEFAULT — anything the
+> gmail.modify grant can do is forwarded and stamped for analytics. The gates
+> that remain: sending rides the recipient whitelist (messages/send AND
+> drafts/send), settings writes are refused with an honest missing-scope
+> reason, and permanent deletion (batchDelete) is never available.
 
 ## Assertions
 
@@ -27,7 +33,12 @@
   bounded by OAuth scopes, Docs/Sheets `:batchUpdate` on Read & Write files,
   creation via POST `v1/documents` / `v4/spreadsheets` with auto-grant, batch
   denied, DELETE never. They must NOT claim "other Google APIs are denied"
-  (stale pre-2026-08-19 posture).
+  (stale pre-2026-08-19 posture), and — since the 2026-08-30 allow-by-default
+  change — must NOT claim "the only supported Gmail write is messages/send":
+  `google_api_modify`'s description must say Gmail mailbox writes (labels,
+  drafts, modify, trash/untrash, batchModify, insert/import) are allowed by
+  default, that BOTH messages/send and drafts/send ride the send whitelist,
+  and that settings writes and permanent deletion are the exceptions.
 
 ### A2: Raw Gmail read succeeds
 - `google_api_get` with path `gmail/v1/users/me/messages?maxResults=2`
@@ -55,10 +66,23 @@
   `raw_api_passthrough`. Bare `drive/v3/files` (no comments segment) remains
   passthrough as asserted above.
 
-### A4: Non-send Gmail write is denied
-- `google_api_modify` with path `gmail/v1/users/me/messages/<any-id>/modify`
-- **Expected**: Denied with a message that only `messages/send` is a
-  supported Gmail write
+### A4: Non-send Gmail mailbox writes are allowed by default
+- `google_api_modify` POST to `gmail/v1/users/me/messages/<real-id>/modify`
+  with body `{"removeLabelIds":["UNREAD"]}` (use a real id from `gmail_list`);
+  then POST `gmail/v1/users/me/labels` with body
+  `{"name":"QA allow-by-default"}`; then POST
+  `gmail/v1/users/me/messages/batchModify` with body
+  `{"ids":["<real-id>"],"addLabelIds":["<new-label-id>"]}`
+- **Expected** (2026-08-30 posture change — empower, don't block): all three
+  succeed with real Gmail JSON — the message is marked read, the label
+  exists, batchModify applies it (`batchModify` is a bulk-label endpoint,
+  NOT an HTTP batch multiplexer, and must not hit the batch denial). Each
+  call's `$mcp_tool_call` event carries `raw_api_kind: 'gmail_write'`,
+  `raw_api_family: 'gmail'`, `raw_api_mutating: true`, and an id-stripped
+  `raw_api_endpoint` (e.g. `POST gmail/v1/users/me/messages/{id}/modify`,
+  `POST gmail/v1/users/me/messages/batchModify`). Clean up: delete the QA
+  label via the Gmail UI or leave it (harmless); `messages/<id>/trash` +
+  `untrash` may be used as an extra reversible-write probe.
 
 ### A5: Raw send to non-whitelisted recipient is denied
 - `google_api_modify` to `gmail/v1/users/me/messages/send` with a base64url
@@ -113,3 +137,36 @@
   `tools/list` (removed 2026-08-23; `docs_edit` replaces them). Rationale:
   2026-08-23 field failure — an agent shipped a pipe-character text table
   because nothing at its decision point referenced the raw fallback.
+
+### A11: drafts/send rides the send whitelist via server-side recipient resolution
+- Create a draft addressed to `blocked@untrusted.com`:
+  `google_api_modify` POST `gmail/v1/users/me/drafts` with body
+  `{"message":{"raw":"<base64url RFC 2822 to blocked@untrusted.com>"}}`
+  (the create itself must SUCCEED — drafting is a plain mailbox write).
+  Then `google_api_modify` POST `gmail/v1/users/me/drafts/send` with body
+  `{"id":"<draftId>"}`.
+- **Expected**: the send is DENIED with the unauthorized-recipient message
+  and approval links — the recipients came from the STORED draft (they are
+  not in the drafts/send request body), proving server-side resolution.
+  Nothing is sent. Repeat with a draft addressed to a whitelisted recipient
+  (e.g. `USER_B_EMAIL`): drafts/send SUCCEEDS and the mail arrives.
+  A drafts/send with a missing or bogus draft id is denied with an FGAC
+  message saying the draft/its recipients could not be determined and
+  nothing was sent (for a bogus id the message may quote Google's 404 as the
+  fetch-failure detail, but it must read as a refused send, not a bare
+  passthrough error) — deny on unresolvable recipients, never forward
+  blind. Resolution-failure denials carry NO approval link (the remedy is
+  the draft id, not a whitelist grant).
+
+### A12: The two remaining Gmail write refusals are honest about their cause
+- `google_api_modify` PATCH `gmail/v1/users/me/settings/sendAs/<any>` with
+  body `{"displayName":"QA"}`; and `google_api_modify` POST
+  `gmail/v1/users/me/messages/batchDelete` with body `{"ids":["x"]}`
+- **Expected**: the settings write is refused with a message naming the REAL
+  cause — Google `gmail.settings.*` scopes FGAC's grant does not include, "a
+  Google scope limit, not an FGAC rule" — stamped
+  `denial_code: 'gmail_settings_unsupported'`; it must NOT read as an FGAC
+  policy denial and must NOT mint an approval link. batchDelete is refused
+  as permanent deletion with trash named as the reversible alternative,
+  stamped `denial_code: 'gmail_write_unsupported'` (that code now means ONLY
+  permanent deletion). Settings READS (GET `settings/sendAs`) still succeed.

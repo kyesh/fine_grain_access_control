@@ -61,7 +61,8 @@ attributable to it.
   Gmail read, a raw Sheets call, and an unknown-family passthrough).
 - **Expected**: every such event carries `raw_api_kind` (one of `sheets`,
   `sheets_create`, `docs`, `docs_create`, `gmail_read`, `gmail_send`,
-  `passthrough`, `denied`), `raw_api_mutating`, and `raw_api_endpoint` whose
+  `gmail_draft_send`, `gmail_write`, `passthrough`, `denied`),
+  `raw_api_mutating`, and `raw_api_endpoint` whose
   value is the HTTP method plus an **id-stripped** path template — it must
   contain `{id}`/`{range}` placeholders where the call used real identifiers
   and must NOT contain any actual spreadsheet/message/document id.

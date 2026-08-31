@@ -86,8 +86,21 @@ in `src/app/api/mcp/googleApiPolicy.ts`:
 - Gmail GETs are forwarded, then the **full response** passes the same
   label/content read-restriction checks as `gmail_read` (labels are collected
   recursively, so thread/list responses are covered).
-- The only Gmail write is `messages/send`, with recipients parsed out of the
-  RFC 2822 payload and checked against the send whitelist (unparseable → deny).
+- Gmail writes are **allow-by-default** (2026-08-30 posture change: empower
+  users, don't block them): labels, drafts create/update, `messages/modify`
+  (archive/mark-read), trash/untrash, `batchModify`, insert/import all forward
+  under the `gmail.modify` grant, stamped `raw_api_kind: 'gmail_write'` for
+  rule-engine demand data. Sending stays whitelisted: `messages/send` parses
+  recipients out of the RFC 2822 payload; `drafts/send` resolves the STORED
+  draft's recipients server-side (fetch `drafts/{id}?format=raw`, union with
+  any inline `message.raw`) — unparseable/unresolvable → deny, never forward
+  blind. Media-upload path variants (`upload/gmail/…`) classify like their
+  non-upload twins, so the whitelist cannot be bypassed via the upload host
+  path. Still refused: settings writes (`gmail_settings_unsupported` — needs
+  gmail.settings.* scopes FGAC never requests; the denial says so honestly)
+  and `messages/batchDelete` (`gmail_write_unsupported`, now meaning ONLY
+  permanent deletion — legacy `mail.google.com` grants mean Google would not
+  reliably backstop it).
 - Sheets and Docs calls with a file id require a per-file rule; writes require
   Read & Write. Any write endpoint on a permitted file passes (including
   `:batchUpdate` — Docs tables/styles, Sheets formatting/charts).

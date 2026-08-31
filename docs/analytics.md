@@ -259,7 +259,8 @@ is unchanged.
 `google_api_get` / `google_api_modify` call stamps four props at
 classification time, denials included — `raw_api_kind` (the
 `classifyGoogleApiCall` result: `sheets`, `sheets_create`, `docs`,
-`docs_create`, `gmail_read`, `gmail_send`, `passthrough`, `denied`),
+`docs_create`, `gmail_read`, `gmail_send`, `gmail_draft_send`, `gmail_write`,
+`passthrough`, `denied`),
 `raw_api_family` (Google product: `gmail`, `spreadsheets`, `documents`,
 `slides`, or the classifier's first-two-segments family for passthroughs;
 omitted on denials, which carry `denial_code` — except
@@ -283,6 +284,19 @@ pre-flight with `denial_code: 'raw_api_family_unsupported'` (outcome
 and surfacing an opaque 403/404 error; Slides paths route to
 `slides.googleapis.com` as passthrough family `slides` (they previously hit
 `www.googleapis.com`, which does not serve Slides, and 404ed unconditionally).
+
+Since gmail-write-allow-by-default (2026-08-30): non-send Gmail writes are no
+longer denied — they land as `raw_api_kind: 'gmail_write'` (family `gmail`,
+`raw_api_mutating: true`, id-stripped endpoint), which is the demand feed for
+the future Gmail-write rule engine. `drafts/send` lands as `gmail_draft_send`
+and rides the send whitelist. `denial_code: 'gmail_write_unsupported'` now
+means ONLY a permanent-deletion attempt (`messages/batchDelete`) — historical
+events with that code (pre-2026-08-30) cover ALL non-send Gmail writes, so
+trend queries must not compare across the deploy. New code
+`gmail_settings_unsupported` = a Gmail settings write refused for missing
+`gmail.settings.*` scopes (family `gmail` kept on both, like the
+family-unsupported denials). `messages/batchModify`, `batchDelete`, `insert`,
+and `import` are new literal template values (previously `messages/{id}`).
 
 **`client_name`:** populated from the MCP `initialize` handshake's
 clientInfo — the auth layer parses it (the only request that carries it in

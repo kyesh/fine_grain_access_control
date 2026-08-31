@@ -257,6 +257,28 @@ curl -s $BASE_URL/api/mcp -X POST \
   capability 16 "How to query"): events `sheets_grant_verification` and
   `sheets_grant_recovered` scoped to the run window.
 
+## Capability: Raw Google API Pair (→ capabilities/10_raw_google_api.md)
+
+> Allow-by-default posture (2026-08-30): Gmail mailbox writes succeed; sends
+> (messages/send AND drafts/send) ride the whitelist; settings writes and
+> batchDelete are refused with honest reasons.
+
+- A1, A10: `tools/list` + `initialize` via curl — check annotations, absence
+  of `raw_google_api_call`, and the description/instructions claims (must NOT
+  say "the only supported Gmail write is messages/send").
+- A2–A9: `tools/call` via curl on `google_api_get` / `google_api_modify`,
+  using ids from a prior `gmail_list` and the setup doc's sheets fixtures.
+- A4: three writes that must SUCCEED — `messages/<id>/modify`
+  (removeLabelIds UNREAD), `labels` create, `messages/batchModify` applying
+  the new label. Verify event props via capability 16's query path.
+- A11: `drafts` create addressed to `blocked@untrusted.com` (must succeed),
+  then `drafts/send` with that draft id (must be DENIED with approval
+  links — recipients came from the stored draft). Whitelisted-draft variant
+  sends for real (standing permission covers QA-account mail).
+- A12: `PATCH settings/sendAs/<alias>` → `gmail_settings_unsupported` scope
+  message (no approval link); `messages/batchDelete` →
+  permanent-deletion refusal; `GET settings/sendAs` still succeeds.
+
 ## Capability: Docs Management (→ capabilities/19_docs_management.md)
 
 - A5–A10, A13: `tools/call` via curl on `docs_read_document` / `docs_edit` /

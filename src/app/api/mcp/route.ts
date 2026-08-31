@@ -9,8 +9,8 @@
  *
  * Tool metadata (names, titles, annotations) lives in ./toolDefs.ts and is
  * linted by scripts/mcp-tool-lint.ts against the Anthropic Connectors
- * Directory requirements. Raw Google API calls are classified deny-by-default
- * in ./googleApiPolicy.ts.
+ * Directory requirements. Raw Google API calls are classified (allow-by-default,
+ * with sends whitelisted and scopes as the backstop) in ./googleApiPolicy.ts.
  */
 import { createMcpHandler, experimental_withMcpAuth } from 'mcp-handler';
 import type { JWTVerifyGetKey } from 'jose';
@@ -38,7 +38,7 @@ import { mintApprovalLink, type ApprovalAction } from '@/lib/approvalLinks';
 import { recordApprovalMint } from '@/lib/approvalRequests';
 import { TOOL_DEFS, toolAnnotations, type FgacToolDef } from './toolDefs';
 import {
-  classifyGoogleApiCall, extractSendRecipients, sheetsApprovalAction, docsApprovalAction,
+  classifyGoogleApiCall, extractSendRecipients, extractDraftSendInfo, sheetsApprovalAction, docsApprovalAction,
   templateGoogleApiPath, rawApiFamily, extractGoogleErrorReason,
   type RawCallClass, type GoogleErrorReason,
 } from './googleApiPolicy';
@@ -1375,8 +1375,9 @@ function passthroughErrorResult(result: { error: string; status?: number }) {
 /**
  * Shared executor for google_api_get / google_api_modify. `cls` comes from
  * classifyAndStampRawCall in the tool handler; classification is
- * deny-by-default (see googleApiPolicy.ts) and every allowed family maps onto
- * the same FGAC enforcement the dedicated tools use.
+ * allow-by-default (see googleApiPolicy.ts — sends ride the recipient
+ * whitelist, Google's OAuth scopes backstop the rest) and every enforced
+ * family maps onto the same FGAC enforcement the dedicated tools use.
  */
 async function executeRawGoogleCall(
   conn: ConnectionApproved,
@@ -1540,6 +1541,46 @@ async function executeRawGoogleCall(
     if (denial) return sendDenialWithLinks(conn, resolved.proxyKeyId, denial);
   }
 
+  if (cls.kind === 'gmail_draft_send') {
+    // drafts/send delivers mail, so it rides the same recipient whitelist as
+    // messages/send — but the recipients live in the STORED draft, not the
+    // request body. Resolve them server-side: fetch the draft (format=raw)
+    // and parse To/Cc/Bcc out of it, unioned with any inline message.raw the
+    // body carries (drafts.send can update the draft while sending). Every
+    // address from either source must be whitelisted; anything unresolvable
+    // denies — never forward blind.
+    // Resolution failures deny WITHOUT approval links: the fix is the draft
+    // or its id, not a whitelist grant — a "send to anyone" link here would
+    // point the user at the wrong remedy. Whitelist violations below still
+    // mint links via sendDenialWithLinks.
+    const draftDenial = (detail: string) => {
+      addToolCallProps({ denial_code: 'recipients_undetermined' });
+      return textResult(`🚫 ${detail} Nothing was sent — drafts/send is denied whenever the draft's recipients cannot be determined and verified against the send whitelist.`);
+    };
+    const { draftId, bodyRecipients } = extractDraftSendInfo(body);
+    if (!draftId) {
+      return draftDenial('Could not determine which draft to send. Provide the draft id in the body: {"id": "<draftId>"}.');
+    }
+    // Query-stripped: the caller's path may carry ?alt=json etc., which would
+    // otherwise leave `/send` in place and fetch the wrong URL.
+    const draftPath = cleanPath.split(/[?#]/)[0].replace(/\/send$/i, `/${encodeURIComponent(draftId)}`) + '?format=raw';
+    const draftResult = await googleFetch(`https://www.googleapis.com/${draftPath}`, resolved.token, 'GET', undefined, resolved.targetEmail);
+    if (!draftResult.ok) {
+      // A bogus id surfaced Google's bare 404 here before (QA finding,
+      // 2026-08-30), which read as "the send endpoint 404ed" — say what was
+      // actually being fetched and that the send was refused.
+      return draftDenial(`The draft could not be fetched to verify its recipients (${draftResult.error}). Confirm the draft id via google_api_get gmail/v1/users/me/drafts and retry.`);
+    }
+    const draftRaw = (draftResult.data as { message?: { raw?: unknown } })?.message?.raw;
+    const draftRecipients = typeof draftRaw === 'string' ? extractSendRecipients({ raw: draftRaw }) : null;
+    const recipients = [...new Set([...(draftRecipients ?? []), ...(bodyRecipients ?? [])])];
+    if (recipients.length === 0) {
+      return draftDenial('The draft has no parseable To/Cc/Bcc recipients. Update the draft with standard recipient headers, then retry drafts/send.');
+    }
+    const denial = checkSendWhitelist(rules, recipients);
+    if (denial) return sendDenialWithLinks(conn, resolved.proxyKeyId, denial);
+  }
+
   const url = `https://www.googleapis.com/${cleanPath}`;
   const result = await googleFetch(url, resolved.token, method, serializeBody(body), resolved.targetEmail);
   if (!result.ok) return errorResult(result.error);
@@ -1602,7 +1643,7 @@ const handler = createMcpHandler(
             sheets: 'Spreadsheet access is granted per sheet: call sheets_get_spreadsheet with a spreadsheetId, or request_access — a denial returns a one-click approval link for the user.',
             docs: 'Google Docs access is granted per document: call docs_read_document with a documentId, or request_access — a denial returns a one-click approval link for the user.',
             sending: 'Email sending is off by default; the first gmail_send returns a one-click approval link the user can use to whitelist the recipient.',
-            raw_api: "Anything the typed tools can't express — Gmail threads/drafts, Drive listing and export, creating new docs, sheets, or slides — is reachable via google_api_get / google_api_modify under the same rules (see their descriptions). The Google grant covers ONLY Gmail plus per-file Drive access (Sheets/Docs/Slides/Drive files the user picked or this agent created); People/Contacts, Calendar, Tasks, and other Google APIs are not available and calls to them are refused.",
+            raw_api: "Anything the typed tools can't express — Gmail mailbox writes (labels, drafts, archive/mark-read, trash) and threads, Drive listing and export, creating new docs, sheets, or slides — is reachable via google_api_get / google_api_modify under the same rules (see their descriptions). The Google grant covers ONLY Gmail plus per-file Drive access (Sheets/Docs/Slides/Drive files the user picked or this agent created); People/Contacts, Calendar, Tasks, and other Google APIs are not available and calls to them are refused.",
           },
           add_more_accounts: {
             // Every extra mailbox — the user's own second account included —
@@ -2295,7 +2336,8 @@ const handler = createMcpHandler(
           // what the key can reach by default (tester finding, 2026-08-15).
           defaults: {
             gmailRead: 'ALLOWED by default for every accessible email; read-block rules (label/content) below restrict it',
-            gmailSend: 'DENIED unless a send_whitelist rule matches the recipient',
+            gmailSend: 'DENIED unless a send_whitelist rule matches the recipient (applies to messages/send AND drafts/send — draft recipients are resolved server-side)',
+            gmailWrite: 'ALLOWED by default via google_api_modify: labels, drafts, messages modify/trash/untrash/batchModify, insert/import — everything the gmail.modify grant covers except sending (whitelisted above), settings writes (Google scopes FGAC does not hold), and permanent deletion (below)',
             sheets: 'DENIED unless a per-spreadsheet rule below exposes the sheet',
             docs: 'DENIED unless a per-document rule below exposes the document',
             deletion: 'NEVER available through any tool',
@@ -2346,8 +2388,8 @@ const handler = createMcpHandler(
       'FGAC proxies Google Workspace behind per-user access rules enforced upstream at the proxy — every tool passes through the same enforcement. ' +
       'The typed tools are shortcuts for common operations: docs_edit and sheets_edit accept native Google batchUpdate requests (tables, text styles, ' +
       'cell formatting, charts, sheet tabs), comments_read and comments_add cover Drive-API comments on docs and sheets, and the values/gmail tools ' +
-      'handle the simple cases. The full Google API surface is available through google_api_get (reads) and google_api_modify (writes) — Gmail threads ' +
-      'and drafts, Drive file listing and export, creating new documents or spreadsheets. Fall back to them instead of treating an operation as ' +
+      'handle the simple cases. The full Google API surface is available through google_api_get (reads) and google_api_modify (writes) — Gmail threads, ' +
+      'drafts, labels, and mailbox organization (archive, mark read, trash), Drive file listing and export, creating new documents or spreadsheets. Fall back to them instead of treating an operation as ' +
       'unsupported. A denied call is not a dead end: it returns a one-click approval link — show it to the user and retry after they approve.',
   },
   {

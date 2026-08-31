@@ -16,8 +16,8 @@ with `account: '<operator mailbox from local memory>'`; full threads via
 **Hard rules:**
 
 - **Never send email.** Every message is a draft the operator reviews and
-  sends. The FGAC proxy blocks Gmail draft creation (`messages/send` is its
-  only Gmail write), so create drafts with the operator's direct Gmail MCP —
+  sends. FGAC's MCP surface can create Gmail drafts too (allow-by-default
+  writes since 2026-08-30), but keep using the operator's direct Gmail MCP —
   they land in that MCP's authenticated personal account; remind the
   operator to switch From to support@fgac.ai (or move the copy into the
   support mailbox) at send time.
