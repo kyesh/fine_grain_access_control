@@ -1,49 +1,69 @@
 import { currentUser, clerkClient } from '@clerk/nextjs/server';
 
-const REQUIRED_SCOPE = 'https://www.googleapis.com/auth/gmail.modify';
+const GMAIL_MODIFY_SCOPE = 'https://www.googleapis.com/auth/gmail.modify';
+// The broader legacy Gmail grant also covers every Gmail call — mirror of the
+// MCP route's GMAIL_SCOPES so dashboard and tool layer never disagree.
+const GMAIL_FULL_SCOPE = 'https://mail.google.com/';
+const DRIVE_FILE_SCOPE = 'https://www.googleapis.com/auth/drive.file';
+const DRIVE_FULL_SCOPE = 'https://www.googleapis.com/auth/drive';
 
 type ClerkUser = NonNullable<Awaited<ReturnType<typeof currentUser>>>;
 
+export type GoogleAccess = {
+  /** Token is live and carries a Gmail scope. */
+  gmail: boolean;
+  /** Token is live and carries drive.file (or full drive). */
+  driveFile: boolean;
+};
+
+const NO_ACCESS: GoogleAccess = { gmail: false, driveFile: false };
+
 /**
- * Whether the signed-in user's Google connection is actually usable right now.
+ * Which of the Google scopes FGAC needs are actually usable right now.
  *
  * Clerk's cached token can sit in a "limbo" state — still present in Clerk's DB
  * after the user revoked it on Google's side — so a scope check against Clerk
  * alone is not enough. We ping Google's tokeninfo endpoint to confirm the token
- * is both live and carries the scope we need.
+ * is both live and carries the scopes, and report each scope independently:
+ * Google's granular consent lets a user grant one checkbox and not the other,
+ * and a single combined boolean once rendered a green drive.file badge on a
+ * Drive-blind account (2026-08-30 support case).
  *
  * Shared by the Agent Profiles and Accounts pages so the two never disagree
  * about connection health.
  */
-export async function checkGoogleAccess(user: ClerkUser): Promise<boolean> {
+export async function checkGoogleAccess(user: ClerkUser): Promise<GoogleAccess> {
   const googleAccount = user.externalAccounts.find(acc =>
     (acc.provider === 'oauth_google' || acc.provider === 'google') &&
     acc.verification?.status === 'verified'
   );
 
-  if (!googleAccount) return false;
+  if (!googleAccount) return NO_ACCESS;
 
   try {
     const clerk = await clerkClient();
     // Provider takes no `oauth_` prefix — the prefixed form is deprecated and
     // removed in Clerk's next major.
     const oauthTokens = await clerk.users.getUserOauthAccessToken(user.id, 'google');
-    if (oauthTokens.data.length === 0) return false;
+    if (oauthTokens.data.length === 0) return NO_ACCESS;
 
     const tokenInfo = oauthTokens.data[0];
-    const hasScopesInClerk = tokenInfo.scopes?.includes(REQUIRED_SCOPE) ?? false;
-    if (!hasScopesInClerk || !tokenInfo.token) return false;
+    if (!tokenInfo.token) return NO_ACCESS;
 
     const ping = await fetch(`https://oauth2.googleapis.com/tokeninfo?access_token=${tokenInfo.token}`);
     if (!ping.ok) {
       console.error('Token rejected by Google (likely revoked or expired in limbo state).', ping.status);
-      return false;
+      return NO_ACCESS;
     }
 
     const tokenData = await ping.json();
-    return tokenData.scope?.includes(REQUIRED_SCOPE) ?? false;
+    const scopes: string[] = typeof tokenData.scope === 'string' ? tokenData.scope.split(' ') : [];
+    return {
+      gmail: scopes.includes(GMAIL_MODIFY_SCOPE) || scopes.includes(GMAIL_FULL_SCOPE),
+      driveFile: scopes.includes(DRIVE_FILE_SCOPE) || scopes.includes(DRIVE_FULL_SCOPE),
+    };
   } catch (error) {
     console.error('Failed to validate Google OAuth token. Account is likely disconnected in Clerk.', error);
-    return false;
+    return NO_ACCESS;
   }
 }

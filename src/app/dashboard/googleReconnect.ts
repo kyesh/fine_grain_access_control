@@ -29,6 +29,8 @@ export type ClerkUserLike = {
   createExternalAccount: (opts: {
     strategy: 'oauth_google';
     redirectUrl?: string;
+    additionalScopes?: string[];
+    oidcPrompt?: string;
   }) => Promise<{ verification?: { externalVerificationRedirectURL?: { href?: string } | null } | null }>;
 };
 
@@ -53,9 +55,14 @@ export async function startGoogleReconnect(
     if (existing) {
       await existing.destroy();
     }
+    // Same scopes and forced consent as the reauthorize branch — a recreated
+    // grant that silently omitted drive.file was one leg of the 2026-08-30
+    // scope-lockout incident class.
     const response = await user.createExternalAccount({
       strategy: 'oauth_google',
       redirectUrl,
+      additionalScopes,
+      oidcPrompt: 'consent',
     });
     verificationUrl = response.verification?.externalVerificationRedirectURL?.href;
   }
