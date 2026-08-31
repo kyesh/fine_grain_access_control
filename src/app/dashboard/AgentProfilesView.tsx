@@ -60,6 +60,13 @@ interface AccessibleEmail {
   hasCompleteGoogleAccess?: boolean;
 }
 
+/** Google-side grant state for one file, from the verify endpoints. */
+interface GrantState {
+  state: string;
+  /** Live Drive filename when state is 'ok' — fresher than resourceName. */
+  title?: string | null;
+}
+
 function timeAgo(date: string | null): string {
   if (!date) return 'Never';
   const seconds = Math.floor((Date.now() - new Date(date).getTime()) / 1000);
@@ -119,11 +126,13 @@ export function AgentProfilesView({
   // Google ever having shared the file (approved via magic link, never
   // picked) — those rows get a "Needs Google access" chip (capability 17
   // A6 names the profile card, not just the Accounts manager). Verification
-  // failing entirely degrades to no chips, never a broken card.
-  const [grantStates, setGrantStates] = useState<{ sheet: Record<string, { state: string }>; doc: Record<string, { state: string }> }>({ sheet: {}, doc: {} });
+  // failing entirely degrades to no chips, never a broken card. `title` is
+  // the LIVE Drive filename, fetched by the same verification call — render
+  // it ahead of the stored (grant-time) resourceName so Drive renames show.
+  const [grantStates, setGrantStates] = useState<{ sheet: Record<string, GrantState>; doc: Record<string, GrantState> }>({ sheet: {}, doc: {} });
   useEffect(() => {
     let cancelled = false;
-    const load = async (path: string): Promise<Record<string, { state: string }>> => {
+    const load = async (path: string): Promise<Record<string, GrantState>> => {
       try {
         const res = await fetch(path);
         const data = await res.json();
@@ -525,7 +534,7 @@ function FilesRulesCard({
   profileId: string;
   rules: Rule[];
   /** fileId → Google-side grant state; missing entries mean "unknown" (no chip). */
-  grantStates: Record<string, { state: string }>;
+  grantStates: Record<string, GrantState>;
   onExpose: () => void;
   pickerError: string | null;
   exposing: boolean;
@@ -562,7 +571,11 @@ function FilesRulesCard({
             {copy.empty}
           </EmptyState>
         ) : (
-          rules.map(rule => (
+          rules.map(rule => {
+            const displayName =
+              (rule.targetResourceId && grantStates[rule.targetResourceId]?.title) ||
+              rule.resourceName || rule.ruleName;
+            return (
             <div
               key={rule.id}
               className="flex flex-wrap items-center justify-between gap-3 rounded-sm border border-border bg-card px-4 py-3"
@@ -570,12 +583,12 @@ function FilesRulesCard({
               <div className="min-w-0">
                 <div className="flex items-center gap-2">
                   <span className="truncate text-[13px] font-semibold text-foreground">
-                    {rule.resourceName || rule.ruleName}
+                    {displayName}
                   </span>
                   {isGlobal(rule) && <Badge tone="neutral">Global</Badge>}
                   {rule.targetResourceId && grantStates[rule.targetResourceId]?.state === 'missing' && (
                     <a
-                      href={`${setup.path}?${setup.idParam}=${encodeURIComponent(rule.targetResourceId)}${rule.resourceName ? `&name=${encodeURIComponent(rule.resourceName)}` : ''}`}
+                      href={`${setup.path}?${setup.idParam}=${encodeURIComponent(rule.targetResourceId)}${displayName !== rule.ruleName ? `&name=${encodeURIComponent(displayName)}` : ''}`}
                       className="inline-flex shrink-0 items-center gap-1 rounded-full border border-warning-foreground/30 bg-warning px-2 py-0.5 text-[11px] font-semibold text-warning-foreground hover:opacity-80"
                       title={`FGAC has this rule, but Google hasn't shared the ${setup.noun} with FGAC yet — agents get errors until you pick it in the Google Picker.`}
                     >
@@ -591,11 +604,12 @@ function FilesRulesCard({
               </div>
 
               <div className="flex shrink-0 items-center gap-3">
-                <FilePermissionSelect kind={kind} rule={rule} />
+                <FilePermissionSelect kind={kind} rule={rule} displayName={displayName} />
                 {!isGlobal(rule) && <DetachRuleButton profileId={profileId} rule={rule} />}
               </div>
             </div>
-          ))
+            );
+          })
         )}
       </div>
     </Card>
@@ -606,7 +620,7 @@ function FilesRulesCard({
  * Saves on change. The select is recolored to match the permission so the
  * access level of every file is legible at a glance without reading labels.
  */
-function FilePermissionSelect({ kind, rule }: { kind: 'sheet' | 'doc'; rule: Rule }) {
+function FilePermissionSelect({ kind, rule, displayName }: { kind: 'sheet' | 'doc'; rule: Rule; displayName?: string }) {
   const [value, setValue] = useState(rule.actionType);
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
@@ -626,7 +640,7 @@ function FilePermissionSelect({ kind, rule }: { kind: 'sheet' | 'doc'; rule: Rul
       <select
         value={value}
         disabled={busy}
-        aria-label={`Permission for ${rule.resourceName || rule.ruleName}`}
+        aria-label={`Permission for ${displayName || rule.resourceName || rule.ruleName}`}
         onChange={async e => {
           const next = e.target.value;
           const previous = value;
