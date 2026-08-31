@@ -65,6 +65,13 @@
   the event carries `raw_api_family: 'drive_comments'`, never
   `raw_api_passthrough`. Bare `drive/v3/files` (no comments segment) remains
   passthrough as asserted above.
+- **Bare Drive spelling (2026-08-31)**: `v3/files/…` without the `drive/`
+  prefix canonicalizes to `drive/v3/…` before classification and routing
+  (mirroring the accepted `v4/spreadsheets` / `v1/documents` / mis-routed
+  `v1/presentations` spellings) — so `v3/files/<id>/comments` classifies as
+  `file_comments`, is enforced per-file, and reaches
+  `www.googleapis.com/drive/v3/…` instead of 404ing on a nonexistent path.
+  The stamped `raw_api_endpoint` shows the canonical spelling.
 
 ### A4: Non-send Gmail mailbox writes are allowed by default
 - `google_api_modify` POST to `gmail/v1/users/me/messages/<real-id>/modify`

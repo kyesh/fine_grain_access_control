@@ -63,6 +63,26 @@ const UNSUPPORTED_GOOGLE_APIS: Record<string, string> = {
   groups: 'Google Groups',
 };
 
+/**
+ * Drive is the one enforced-adjacent family whose bare spelling agents use
+ * (`v3/files/…`, mirroring Sheets' accepted `v4/spreadsheets` and Docs'
+ * `v1/documents`) that Google does NOT serve: Drive lives only under
+ * `drive/v3/…` on www.googleapis.com, so the bare spelling routes to a
+ * nonexistent path and every call 404s regardless of grants. Observed
+ * 2026-08-31: a `v3/files/{id}/comments` probe 404ed, was answered with the
+ * per-file-grant explanation (the wrong diagnosis — the URL was bad, not the
+ * grant), and succeeded only after the agent guessed the `drive/` prefix —
+ * which also skipped the failed attempts' per-file comments classification.
+ * Canonicalizing up front makes classification, per-file enforcement, host
+ * routing, and the analytics endpoint template all agree on one spelling.
+ */
+const DRIVE_BARE_PATH = /^v[23]\/(files|drives|about|changes)([/?#:]|$)/i;
+
+export function canonicalizeGoogleApiPath(rawPath: string): string {
+  const path = rawPath.replace(/^\/+/, '');
+  return DRIVE_BARE_PATH.test(path) ? `drive/${path}` : path;
+}
+
 export function extractSheetsSpreadsheetId(path: string): string | null {
   const match = path.match(/(?:v4\/spreadsheets|sheets\/v4\/spreadsheets|spreadsheets)\/([^/?:#]+)/);
   return match ? decodeURIComponent(match[1]) : null;
@@ -78,7 +98,7 @@ export function extractDocsDocumentId(path: string): string | null {
  * (query string allowed); `method` is the HTTP method the tool forwards.
  */
 export function classifyGoogleApiCall(rawPath: string, method: string): RawCallClass {
-  const path = rawPath.replace(/^\/+/, '').split(/[?#]/)[0];
+  const path = canonicalizeGoogleApiPath(rawPath).split(/[?#]/)[0];
   let segments = path.split('/').filter(Boolean).map(s => s.toLowerCase());
 
   // Media-upload variants (`upload/gmail/v1/…`, `upload/drive/v3/…`) are the
@@ -235,7 +255,7 @@ const LITERAL_SUBRESOURCES = new Set(['send', 'batchmodify', 'batchdelete', 'ins
  * are kept because they carry the action semantics.
  */
 export function templateGoogleApiPath(rawPath: string): string {
-  const path = rawPath.replace(/^\/+/, '').split(/[?#]/)[0];
+  const path = canonicalizeGoogleApiPath(rawPath).split(/[?#]/)[0];
   const segments = path.split('/').filter(Boolean);
   return segments.map((seg, i) => {
     // A trailing `:verb` (letters only, ≥4 chars) is API surface, not data —
