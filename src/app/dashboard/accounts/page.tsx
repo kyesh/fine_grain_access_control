@@ -108,7 +108,7 @@ export default async function AccountsPage({
                 <p className="mt-1">
                   The link you opened repairs Google access for{' '}
                   <strong>{intendedFor}</strong>, but you&apos;re signed in as{' '}
-                  <strong>{dbUser.email}</strong> — reconnecting here would change
+                  <strong>{dbUser.email}</strong>{' — '}reconnecting here would change
                   this account&apos;s Google grant and leave{' '}
                   <strong>{intendedFor}</strong> exactly as broken as before.
                   Sign out, sign back in as <strong>{intendedFor}</strong>, then
