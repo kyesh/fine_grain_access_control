@@ -342,3 +342,25 @@ events and stamp no `google_token_error`/`token_ms` tool-call props — so the
 not "someone listed accounts". `google_scope_missing` itself never fired from
 list_accounts (it comes from the denial pre-flights, which list_accounts does
 not run).
+
+**7.7 — Wrong-account reconnect opens.** A reconnect link is bound to the
+account it repairs (`?reconnect=1&for=<email>`, 2026-08-30); opened by a
+different signed-in FGAC user, the Accounts page suppresses the auto-fire and
+warns instead. Suppression also removed the old forensic signature (the wrong
+user's `google_reconnect_started` seconds after another user's
+`google_scope_missing`), so the card fires this client event to keep the
+population countable:
+
+```sql
+SELECT toDate(timestamp) AS day, count() AS opens, uniq(person_id) AS users,
+       uniq(properties.intended_for) AS intended_accounts
+FROM events
+WHERE event = 'google_reconnect_wrong_account'
+  AND timestamp > now() - INTERVAL 30 DAY
+GROUP BY day ORDER BY day
+```
+
+Recovery check: for each `intended_for`, look for a later
+`google_reconnect_started` by the person whose identity matches that address —
+present means the right user eventually ran the repair; absent means the
+affected account is still stranded and worth proactive outreach.

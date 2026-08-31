@@ -68,9 +68,11 @@
   Google's consent), and a warning card renders naming both accounts: the
   link is for USER_B, the session is USER_A, reconnecting here would repair
   the wrong account — sign out and sign back in as USER_B. The manual
-  "Reconnect Google" button remains available. With `for=<USER_A_EMAIL>` (or
-  any address on USER_A's Clerk account) the auto-fire behaves exactly as
-  before — no warning
+  "Reconnect Google" button remains available. A
+  `google_reconnect_wrong_account` event fires (once) carrying
+  `intended_for: <USER_B_EMAIL>`, and no `google_reconnect_started` fires.
+  With `for=<USER_A_EMAIL>` (or any address on USER_A's Clerk account) the
+  auto-fire behaves exactly as before — no warning, no wrong-account event
 
 ### A7: Post-reconnect success is verified, not assumed
 - Land on `/dashboard/accounts?reconnected=1` while the Google grant is still

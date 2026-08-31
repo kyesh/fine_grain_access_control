@@ -68,8 +68,21 @@ export function ReconnectGoogleButton({
   const [verify, setVerify] = useState<VerifyState | null>(null);
   const autoFired = useRef(false);
   const verifyStarted = useRef(false);
+  const mismatchCaptured = useRef(false);
   const justReconnected = params.get("reconnected") === "1";
   const autoRequested = params.get("reconnect") === "1";
+
+  // Make the wrong-account card countable: suppressing the auto-fire also
+  // removes the google_reconnect_started signature these opens used to leave
+  // in analytics, so without this event the mismatch population would be
+  // invisible (docs/monitoring.md §7.7).
+  useEffect(() => {
+    if (!autoRequested || !blockAutoReconnect || !isLoaded || mismatchCaptured.current) return;
+    mismatchCaptured.current = true;
+    posthog?.capture("google_reconnect_wrong_account", {
+      intended_for: params.get("for"),
+    });
+  }, [autoRequested, blockAutoReconnect, isLoaded, posthog, params]);
 
   const start = async (source: string) => {
     if (!user || busy) return;
