@@ -60,6 +60,37 @@ Affected users self-heal: their next dashboard visit re-syncs `users.email`
 to the primary address, which already matches their key access rows. Until
 then, fix 3 alone makes their MCP calls work.
 
+## Follow-up (2026-08-31): MCP-only users never reached the dashboard heal
+
+The "next dashboard visit re-syncs" assumption above has a hole: a connector
+user who signed up through Clerk's hosted OAuth and only ever talks to the
+MCP endpoint **never loads the dashboard**. On the MCP path,
+`resolveConnection` runs `resolveDbUser` only inside its missing-row
+auto-create branch — an *existing* drifted row is loaded by `clerkUserId`
+and never re-synced. Result observed in production: one user (drift formed
+in the window after the email sync existed but before the access-row
+re-point, i.e. pre-`4b55101`) fired the identity fallback on every single
+call for six days. All calls succeeded — fix 3 worked as designed — but the
+drift itself was permanent, costing an extra Clerk `getUser` round-trip per
+call and keeping monitoring 7.4 permanently non-zero.
+
+Note the fallback matcher needs no secondary email: the user's Clerk account
+held exactly one address (verified, primary) plus the matching Google
+external account, and a *stale* `users.email` against a *clean* Clerk
+profile satisfies `ownClerkEmailMatch` via the primary address itself.
+Removing secondary addresses from Clerk profiles therefore cannot end the
+fallback — and must never be attempted as a "fix" while a key's own-mailbox
+access row targets the address in question, since that address is exactly
+what the rescue matches on.
+
+**Fix**: the fallback branch of `getGoogleToken` now heals the drift it just
+proved — when the Clerk primary differs from `users.email`, it runs the same
+`resolveDbUser` heal the dashboard uses (email sync + own-mailbox access-row
+re-point), so the next call takes the happy path. Pure matcher extracted to
+`src/lib/identityDrift.ts`; tests in `scripts/test-identity-drift.ts`
+(wired into `mcp:lint`). Monitoring 7.4 documents how the counter reads
+post-fix.
+
 ## Related
 
 - docs/bug_reports/duplicate_user_rows_break_delegation.md — same lesson

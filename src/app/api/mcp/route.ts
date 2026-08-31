@@ -45,6 +45,7 @@ import {
 } from './googleApiPolicy';
 import { DRIVE_FILE_KINDS, ACTIVE_DRIVE_FILE_KINDS, type DriveFileKind } from '@/lib/driveFileKinds';
 import { clerkPrimaryEmail } from '@/lib/clerkPrimaryEmail';
+import { ownClerkEmailMatch } from '@/lib/identityDrift';
 import { slugifyProfileLabel } from '@/lib/profileSlugs';
 import { logAndSanitize, describeErrorForLog, toolErrorResult } from '@/lib/serverErrors';
 
@@ -335,23 +336,23 @@ async function checkEmailAccess(proxyKeyId: string, targetEmail: string) {
  * can legitimately name an address that no longer equals `users.email`
  * (support case 2026-08-24). Only consulted after the delegation lookup
  * fails, so it costs nothing on the happy paths.
+ *
+ * Also returns the account's primary email so the caller can heal the drift
+ * it just confirmed, without a second Clerk fetch.
  */
-async function isOwnClerkEmail(clerkUserId: string, email: string): Promise<boolean> {
+async function checkOwnClerkEmail(
+  clerkUserId: string, email: string,
+): Promise<{ own: boolean; primaryEmail?: string }> {
   try {
     const client = await clerkClient();
     const clerkUser = await client.users.getUser(clerkUserId);
-    const target = email.toLowerCase();
-    const ownVerified = clerkUser.emailAddresses.some(
-      e => e.emailAddress.toLowerCase() === target && e.verification?.status === 'verified',
-    );
-    const ownGoogle = clerkUser.externalAccounts.some(
-      e => (e.provider === 'oauth_google' || (e.provider as string) === 'google') &&
-        e.emailAddress?.toLowerCase() === target,
-    );
-    return ownVerified || ownGoogle;
+    return {
+      own: ownClerkEmailMatch(clerkUser, email),
+      primaryEmail: clerkPrimaryEmail(clerkUser),
+    };
   } catch (err) {
     console.error('[MCP] Clerk lookup failed while checking own-email fallback:', err);
-    return false;
+    return { own: false };
   }
 }
 
@@ -411,7 +412,11 @@ async function getGoogleToken(
 
     if (emailOwner && delegation) {
       tokenOwnerClerkId = emailOwner.clerkUserId;
-    } else if (await isOwnClerkEmail(keyOwner.clerkUserId, targetEmail)) {
+    } else {
+      const own = await checkOwnClerkEmail(keyOwner.clerkUserId, targetEmail);
+      if (!own.own) {
+        return null;
+      }
       // Not a delegation — the address is the key owner's own mailbox under a
       // drifted `users.email`. Use their token and record that the fallback
       // fired so analytics can watch the drift population shrink.
@@ -428,9 +433,24 @@ async function getGoogleToken(
           via: 'mcp',
         });
       }
+      // Heal the drift this branch just proved: `resolveDbUser` syncs
+      // `users.email` to the Clerk primary and re-points own-mailbox access
+      // rows, exactly as a dashboard load would — but an MCP-only connector
+      // user never loads the dashboard, and `resolveConnection` only calls
+      // resolveDbUser for brand-new rows, so without this the drift (and the
+      // fallback's Clerk round-trip) persisted on every call indefinitely
+      // (observed in production, 2026-08-25 → 08-31). Runs on `quiet` scope
+      // probes too — quiet suppresses analytics, not repair. On failure the
+      // fallback still serves this call; the next one retries the heal.
+      if (own.primaryEmail && own.primaryEmail.toLowerCase() !== keyOwner.email.toLowerCase()) {
+        try {
+          await resolveDbUser(keyOwner.clerkUserId, own.primaryEmail);
+          console.log(`[MCP] Healed drifted identity email for ${keyOwner.clerkUserId}`);
+        } catch (err) {
+          console.error('[MCP] Identity drift heal failed (fallback still serving):', describeErrorForLog(err));
+        }
+      }
       tokenOwnerClerkId = keyOwner.clerkUserId;
-    } else {
-      return null;
     }
   }
 

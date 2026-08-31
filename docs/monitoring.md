@@ -278,6 +278,34 @@ rule, a rising count means drift is being *created* again (a
 `clerkPrimaryEmail` / `resolveDbUser` regression), and is open for
 investigation.
 
+**Resolved 2026-08-31.** The non-zero count was one user, not new drift: a
+pre-`4b551018` split (`users.email` synced to a changed Clerk primary before
+the access-row re-point existed) that could never self-heal, because the
+2026-08-25 "healed through the dashboard re-sync path" assumption does not
+hold for **MCP-only connector users** — the MCP request path runs
+`resolveDbUser` only when auto-creating a missing row, so an existing drifted
+row is never re-synced there, and a user who never loads the dashboard stays
+drifted forever (this user fired the fallback on every call across 6 days,
+all rescued successfully). Fixed by healing inside the fallback branch
+itself: when `checkOwnClerkEmail` confirms the target address belongs to the
+key owner and the Clerk primary differs from `users.email`, the route now
+runs the same `resolveDbUser` heal the dashboard uses, so the next call takes
+the happy path.
+
+**Reading this counter after the self-heal fix:** any one person should fire
+the fallback for at most one call (or one short burst, if the heal races
+concurrent calls) before going quiet. Watch `uniq(person_id)`:
+
+- occasional single-person, single-burst blips = drift created and
+  immediately healed — log-worthy, not alarming;
+- the **same person recurring across days** = the heal is not landing for
+  them (regression, or a genuinely multi-address account routinely calling a
+  verified non-primary address — a supported state the heal deliberately
+  leaves alone because the Clerk primary already equals `users.email`);
+- **growing `uniq(person_id)`** = drift is being created faster than a
+  one-shot heal event per user, i.e. a `clerkPrimaryEmail`/`resolveDbUser`
+  regression. Investigate.
+
 **7.5 — Install-funnel unique installers.** Raw
 `connector_install_started{mcp_401}` counts are per-request identical to
 `mcp_auth_attempt` failures (same code path) — they measure 401/retry volume,
