@@ -15,6 +15,7 @@
  * {
  *   "run_id": "2026-07-26T14:00:00Z-cc-mcp",
  *   "environment": "02_claude_code_mcp",
+ *   "scope": ["10"],            // optional — scoped re-test (see below)
  *   "results": [
  *     { "cap": "01", "assertion": "A1", "status": "pass",
  *       "evidence": "HTTP 403 with whitelist error text" }
@@ -23,6 +24,12 @@
  * status: "pass" | "fail" | "skip". A "skip" requires a "reason". A "pass" or
  * "fail" requires "evidence". Evidence strings must be masked per CLAUDE.md →
  * "This Repository Is Public" (USER_A/USER_B, never real addresses/ids/keys).
+ *
+ * "scope": optional list of capability ids. When present, this is a targeted
+ * re-test (CLAUDE.md → "QA Subagent Architecture") and complete coverage is
+ * required for the scoped capabilities only; assertions of excluded
+ * capabilities are not demanded (rows for them are still validated if
+ * present). When absent, the full suite is expected — unchanged behavior.
  */
 import { readdirSync, readFileSync, existsSync } from 'fs';
 import { join } from 'path';
@@ -68,17 +75,37 @@ if (!existsSync(RESULTS_FILE)) {
 
 let results: ResultRow[];
 let runId = '?', environment = '?';
+let scopeRaw: unknown;
 try {
   const parsed = JSON.parse(readFileSync(RESULTS_FILE, 'utf8'));
   results = parsed.results ?? [];
   runId = parsed.run_id ?? '?';
   environment = parsed.environment ?? '?';
+  scopeRaw = parsed.scope;
 } catch (e) {
   console.error(`${RESULTS_FILE} is not valid JSON: ${(e as Error).message}`);
   process.exit(2);
 }
 
 const problems: string[] = [];
+
+// ── Scope (optional): targeted re-test covering a subset of capabilities ────
+let scope: Set<string> | null = null; // null = full-suite expectation
+if (scopeRaw !== undefined) {
+  if (!Array.isArray(scopeRaw) || scopeRaw.length === 0) {
+    console.error(`"scope" must be a non-empty array of capability ids (e.g. ["10"]), got: ${JSON.stringify(scopeRaw)}`);
+    process.exit(2);
+  }
+  scope = new Set<string>();
+  for (const s of scopeRaw) {
+    const cap = String(s).padStart(2, '0'); // tolerate "10", "04", 4
+    if (!inventory.has(cap)) {
+      problems.push(`scope entry "${s}": no capability "${cap}" in ${CAPS_DIR}`);
+      continue;
+    }
+    scope.add(cap);
+  }
+}
 const seen = new Map<string, string>(); // "cap/assertion" → status
 
 for (const [i, row] of results.entries()) {
@@ -106,9 +133,10 @@ for (const [i, row] of results.entries()) {
   }
 }
 
-// Missing assertions.
+// Missing assertions. With a scope, only the scoped capabilities are required.
 const missing: string[] = [];
 for (const [cap, assertions] of inventory) {
+  if (scope && !scope.has(cap)) continue;
   for (const a of assertions) {
     if (!seen.has(`${cap}/${a}`)) missing.push(`${cap}/${a}`);
   }
@@ -122,6 +150,13 @@ const counts = { pass: 0, fail: 0, skip: 0 };
 for (const status of seen.values()) if (status in counts) counts[status as keyof typeof counts]++;
 
 console.log(`QA coverage — run ${runId} (${environment})`);
+if (scope) {
+  const inScope = [...scope].sort();
+  const excluded = [...inventory.keys()].filter((c) => !scope!.has(c)).sort();
+  const scopedAssertions = inScope.reduce((n, c) => n + (inventory.get(c)?.size ?? 0), 0);
+  console.log(`  SCOPED RUN — capabilities ${inScope.join(', ')} (${scopedAssertions} assertions required)`);
+  console.log(`  excluded from coverage: ${excluded.length > 0 ? excluded.join(', ') : '(none)'}`);
+}
 console.log(`  inventory: ${totalAssertions} assertions across ${inventory.size} capabilities`);
 console.log(`  reported:  ${seen.size}  (pass ${counts.pass} / fail ${counts.fail} / skip ${counts.skip})`);
 
@@ -136,4 +171,4 @@ if (counts.fail > 0) {
   process.exit(0); // coverage is this script's job; failures are the orchestrator's
 }
 
-console.log('\nAll assertions accounted for.');
+console.log(scope ? '\nAll in-scope assertions accounted for (scoped run).' : '\nAll assertions accounted for.');

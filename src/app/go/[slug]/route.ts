@@ -92,6 +92,12 @@ export async function GET(
       channel: link?.channel,
       destination: destination.toString(),
       device: deviceClass(ua),
+      // Without a UA on the event, PostHog's virtual traffic classification
+      // marks every scan $virt_is_bot (no_user_agent) and web-analytics views
+      // that filter bots drop all real scans. $raw_user_agent is what the
+      // classifier reads; $useragent additionally feeds $browser/$os parsing.
+      $raw_user_agent: ua,
+      $useragent: ua,
       geo_city: geoCity,
       geo_country: request.headers.get('x-vercel-ip-country'),
       // Anonymous scans must not mint PostHog person profiles (a billed

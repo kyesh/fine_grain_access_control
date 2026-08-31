@@ -75,6 +75,7 @@ the other way around):
 {
   "run_id": "2026-07-26T14:00:00Z-cc-mcp",
   "environment": "02_claude_code_mcp",
+  "scope": ["10"],
   "results": [
     { "cap": "01", "assertion": "A1", "status": "pass",
       "evidence": "HTTP 200; message id returned; recipient USER_B" },
@@ -88,6 +89,13 @@ Rules:
 
 - `status` is `pass` | `fail` | `skip`. A `skip` **requires** `reason`; a `pass`/`fail`
   **requires** `evidence` citing observed output.
+- `scope` (optional, non-empty array of capability ids) marks a **targeted re-test**
+  (CLAUDE.md → "QA Subagent Architecture"): the coverage checker then requires complete
+  coverage of the scoped capabilities only, and prints a `SCOPED RUN` banner naming
+  what was excluded. Missing/duplicate/under-evidenced assertions within scope still
+  fail; rows for out-of-scope capabilities may be present (e.g. carried over from a
+  prior full run) and are still validated. Omit `scope` on full-suite runs — the full
+  inventory is then required, exactly as before.
 - `evidence` strings must be masked per CLAUDE.md → "This Repository Is Public": refer
   to test accounts as `USER_A`/`USER_B`, never paste real email addresses, Clerk user
   ids, or proxy keys.
