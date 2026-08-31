@@ -35,6 +35,7 @@ import { installFingerprint, parseInitializeClientInfo, type McpClientInfo } fro
 import { inSuccessSample, AUTH_SUCCESS_SAMPLE } from '@/lib/authSampling';
 import { ensureDefaultProfile } from '@/db/defaultProfile';
 import { mintApprovalLink, type ApprovalAction } from '@/lib/approvalLinks';
+import { connectionsDeepLink } from '@/lib/dashboardAgentLinks';
 import { recordApprovalMint } from '@/lib/approvalRequests';
 import { TOOL_DEFS, toolAnnotations, type FgacToolDef } from './toolDefs';
 import {
@@ -226,7 +227,7 @@ async function resolveConnection(
       authorized: false,
       reason: 'pending_approval',
       connectionId: connection.id,
-      dashboardUrl: `${DASHBOARD_URL}/dashboard?tab=connections&highlight=${connection.id}`,
+      dashboardUrl: await connectionsDeepLink(DASHBOARD_URL, user.id),
     };
   }
 

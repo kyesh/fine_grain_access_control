@@ -14,6 +14,7 @@ import { agentConnections, users, proxyKeys, keyEmailAccess } from '@/db/schema'
 import { and, eq } from 'drizzle-orm';
 import { verifyClerkOauthToken } from '@/lib/partner/clerkOauth';
 import { filterLiveDelegatedAccess } from '@/db/delegationQueries';
+import { connectionsDeepLink } from '@/lib/dashboardAgentLinks';
 
 const DASHBOARD_URL = process.env.NEXT_PUBLIC_APP_URL
   || (process.env.VERCEL_PROJECT_PRODUCTION_URL ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}` : null)
@@ -48,7 +49,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       status: 'pending',
       message: '⏳ This connection is awaiting user approval.',
-      dashboard_url: `${DASHBOARD_URL}/dashboard?tab=connections`,
+      dashboard_url: await connectionsDeepLink(DASHBOARD_URL, user.id),
     });
   }
   if (connection.status === 'blocked') {

@@ -15,6 +15,17 @@ import * as jose from "jose";
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 /**
+ * Every dashboard mutation must refresh /dashboard AND the per-profile
+ * routes under /dashboard/agents/[slug] (plus /dashboard/accounts) — the
+ * 'layout' scope covers the whole segment. A plain
+ * revalidatePath("/dashboard") would leave the slug routes stale, which
+ * silently breaks every mutation now that profiles live on their own routes.
+ */
+function revalidateDashboard() {
+  revalidatePath("/dashboard", "layout");
+}
+
+/**
  * getDbUser() throws for two reasons a PUBLIC-facing page must not 500 on:
  * signed out ("Unauthorized"), and Clerk-authenticated but with no users row
  * yet ("User not found in DB" — a bystander who has a Clerk session but has
@@ -91,7 +102,7 @@ export async function createDelegation(formData: FormData) {
     // Self-heal: re-materialize onto the delegate's Default Profile in case a
     // prior sync was missed (e.g. the profile didn't exist yet).
     await syncDefaultProfileDelegatedAccess(delegateUser.email);
-    revalidatePath("/dashboard");
+    revalidateDashboard();
     return;
   }
 
@@ -122,7 +133,7 @@ export async function createDelegation(formData: FormData) {
     reactivated: existing?.status === 'revoked',
   });
 
-  revalidatePath("/dashboard");
+  revalidateDashboard();
 }
 
 /**
@@ -150,7 +161,7 @@ export async function revokeDelegation(delegationId: string) {
   // the delegation too, but the rows should not linger regardless.
   await db.delete(keyEmailAccess).where(eq(keyEmailAccess.delegationId, delegationId));
 
-  revalidatePath("/dashboard");
+  revalidateDashboard();
 }
 
 // ─── Proxy Keys ─────────────────────────────────────────────────────────────
@@ -230,7 +241,7 @@ export async function createProxyKey(formData: FormData) {
     });
   }
 
-  revalidatePath("/dashboard");
+  revalidateDashboard();
 
   // We return the private key and proxy key string so the UI can construct the generated JSON
   return {
@@ -246,7 +257,7 @@ export async function revokeProxyKey(keyId: string) {
   if (!key || key.userId !== dbUser.id) throw new Error("Unauthorized");
 
   await db.update(proxyKeys).set({ revokedAt: new Date() }).where(eq(proxyKeys.id, keyId));
-  revalidatePath("/dashboard");
+  revalidateDashboard();
 }
 
 export async function rollProxyKey(keyId: string) {
@@ -288,7 +299,7 @@ export async function rollProxyKey(keyId: string) {
   // Revoke old key
   await db.update(proxyKeys).set({ revokedAt: new Date() }).where(eq(proxyKeys.id, keyId));
 
-  revalidatePath("/dashboard");
+  revalidateDashboard();
 }
 
 // ─── Access Rules ───────────────────────────────────────────────────────────
@@ -379,7 +390,7 @@ export async function createRule(formData: FormData): Promise<RuleActionResult> 
     } : {}),
   });
 
-  revalidatePath("/dashboard");
+  revalidateDashboard();
   return { ok: true };
 }
 
@@ -458,7 +469,7 @@ export async function updateRule(formData: FormData): Promise<RuleActionResult> 
     } : {}),
   });
 
-  revalidatePath("/dashboard");
+  revalidateDashboard();
   return { ok: true };
 }
 
@@ -471,7 +482,7 @@ export async function deleteRule(id: string) {
   }
 
   await db.delete(accessRules).where(eq(accessRules.id, id));
-  revalidatePath("/dashboard");
+  revalidateDashboard();
 }
 
 const SHEET_ACTION_TYPES = ['sheet_read', 'sheet_read_write', 'sheet_block'] as const;
@@ -554,7 +565,7 @@ async function exposeFilesFromPicker(
     }
   }
 
-  revalidatePath("/dashboard");
+  revalidateDashboard();
   revalidatePath("/dashboard/accounts");
 }
 
@@ -597,7 +608,7 @@ export async function setSheetRulePermission(ruleId: string, actionType: string)
     .set({ actionType, updatedAt: new Date() })
     .where(eq(accessRules.id, ruleId));
 
-  revalidatePath("/dashboard");
+  revalidateDashboard();
 }
 
 /**
@@ -626,7 +637,7 @@ export async function assignRulesToKey(keyId: string, ruleIds: string[]) {
       .onConflictDoNothing();
   }
 
-  revalidatePath("/dashboard");
+  revalidateDashboard();
 }
 
 /**
@@ -647,7 +658,7 @@ export async function unassignRuleFromKey(keyId: string, ruleId: string) {
     eq(keyRuleAssignments.accessRuleId, ruleId),
   ));
 
-  revalidatePath("/dashboard");
+  revalidateDashboard();
 }
 
 export async function applyRecommendedSecurityRules() {
@@ -661,7 +672,7 @@ export async function applyRecommendedSecurityRules() {
       eq(accessRules.actionType, 'read_blacklist'),
     ));
   if (existing.length > 0) {
-    revalidatePath("/dashboard");
+    revalidateDashboard();
     return;
   }
 
@@ -702,7 +713,7 @@ export async function applyRecommendedSecurityRules() {
   await db.insert(accessRules).values(rulesToInsert);
   const { captureServerEvent } = await import("@/lib/posthogServer");
   captureServerEvent(dbUser.clerkUserId, "shield_enabled", { rules: rulesToInsert.length });
-  revalidatePath("/dashboard");
+  revalidateDashboard();
 }
 
 // ─── Send to Anyone ────────────────────────────────────────────────────────
@@ -768,7 +779,7 @@ export async function enableSendToAnyone(keyId: string) {
     const { captureServerEvent } = await import("@/lib/posthogServer");
     captureServerEvent(dbUser.clerkUserId, "send_all_enabled", { source: "dashboard" });
   }
-  revalidatePath("/dashboard");
+  revalidateDashboard();
 }
 
 // ─── Magic-Link Approvals (connector-growth Phase C) ───────────────────────
@@ -1047,7 +1058,7 @@ async function applyFileGrantApproval(opts: {
     captureServerEvent(dbUser.clerkUserId, "approval_link_approved", {
       action: p.action, substituted, granted_count: verified.length, request_id: p.requestId,
     });
-    revalidatePath("/dashboard");
+    revalidateDashboard();
     const names = verified.map(v => v.name || v.id).join(", ");
     const level = readWrite ? "read & write" : "read-only";
     return grantedResult(
@@ -1076,7 +1087,7 @@ async function applyFileGrantApproval(opts: {
   if (grant.state === "missing") {
     await markApprovalRequestApproved(p.requestId);
     captureServerEvent(dbUser.clerkUserId, "approval_link_approved", { action: p.action, request_id: p.requestId });
-    revalidatePath("/dashboard");
+    revalidateDashboard();
     return {
       ok: true,
       description: describe(),
@@ -1087,7 +1098,7 @@ async function applyFileGrantApproval(opts: {
   }
   await markApprovalRequestApproved(p.requestId);
   captureServerEvent(dbUser.clerkUserId, "approval_link_approved", { action: p.action, request_id: p.requestId });
-  revalidatePath("/dashboard");
+  revalidateDashboard();
   return grantedResult(fileId, describe());
 }
 
@@ -1210,6 +1221,6 @@ export async function approveMagicLink(
 
   await markApprovalRequestApproved(p.requestId);
   captureServerEvent(dbUser.clerkUserId, "approval_link_approved", { action: p.action, request_id: p.requestId });
-  revalidatePath("/dashboard");
+  revalidateDashboard();
   return { ok: true, description: describeApproval(p) };
 }
