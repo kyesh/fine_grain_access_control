@@ -161,7 +161,14 @@ intentionally differs, the assertion says so.
      `docs_verify_outcome='mismatch'` with `docs_verify_expected/actual`.
      If Google instead rejects the request outright, record the observed
      status verbatim — the semantics are Google's; the assertion is that
-     SUCCESS RESPONSES ARE NEVER SILENT about a partial delete.
+     SUCCESS RESPONSES ARE NEVER SILENT about a partial delete. In that case
+     report this sub-case as **`blocked`** with reason "upstream: Google
+     rejected the cross-table delete instead of partially applying" (README →
+     skip vs blocked) — it is upstream-dependent and identical across
+     local/preview/prod, so re-running elsewhere does not help. Function-level
+     verification of the mismatch branch (warning format + analytics stamps,
+     tested against the shipped code) is the accepted fallback evidence; never
+     mark the live mismatch sub-case `pass` when the mismatch never fired.
 - Tier 2 spot-check: a delete mixed with a non-deterministic op (e.g.
   `replaceAllText`) returns `body end <after> (was <before>)` and stamps
   `docs_verify_outcome='reported'`.

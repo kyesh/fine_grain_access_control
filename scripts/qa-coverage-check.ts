@@ -124,11 +124,13 @@ for (const [i, row] of results.entries()) {
   }
   seen.set(key, row.status);
 
-  if (!['pass', 'fail', 'skip'].includes(row.status)) {
-    problems.push(`${key}: unknown status "${row.status}" (pass|fail|skip)`);
-  } else if (row.status === 'skip' && !row.reason?.trim()) {
-    problems.push(`${key}: skipped without a reason — every skip needs one`);
-  } else if (row.status !== 'skip' && !row.evidence?.trim()) {
+  if (!['pass', 'fail', 'skip', 'blocked'].includes(row.status)) {
+    problems.push(`${key}: unknown status "${row.status}" (pass|fail|skip|blocked)`);
+  } else if ((row.status === 'skip' || row.status === 'blocked') && !row.reason?.trim()) {
+    problems.push(`${key}: ${row.status} without a reason — every ${row.status} needs one`);
+  } else if (row.status === 'blocked' && !/USER ACTION|upstream/i.test(row.reason ?? '')) {
+    problems.push(`${key}: blocked reason must name what unblocks it — a "USER ACTION" (e.g. re-auth) or an "upstream" dependency`);
+  } else if (row.status !== 'skip' && row.status !== 'blocked' && !row.evidence?.trim()) {
     problems.push(`${key}: ${row.status} with no evidence — cite the observed output`);
   }
 }
@@ -146,7 +148,7 @@ if (missing.length > 0) {
 }
 
 // ── Report ──────────────────────────────────────────────────────────────────
-const counts = { pass: 0, fail: 0, skip: 0 };
+const counts = { pass: 0, fail: 0, skip: 0, blocked: 0 };
 for (const status of seen.values()) if (status in counts) counts[status as keyof typeof counts]++;
 
 console.log(`QA coverage — run ${runId} (${environment})`);
@@ -158,7 +160,19 @@ if (scope) {
   console.log(`  excluded from coverage: ${excluded.length > 0 ? excluded.join(', ') : '(none)'}`);
 }
 console.log(`  inventory: ${totalAssertions} assertions across ${inventory.size} capabilities`);
-console.log(`  reported:  ${seen.size}  (pass ${counts.pass} / fail ${counts.fail} / skip ${counts.skip})`);
+console.log(`  reported:  ${seen.size}  (pass ${counts.pass} / fail ${counts.fail} / skip ${counts.skip} / blocked ${counts.blocked})`);
+
+// Blocked assertions are never buried in a count: each one is listed with the
+// action that unblocks it, so the user is explicitly flagged (e.g. to re-auth
+// a QA account) instead of reading "skipped" and moving on.
+if (counts.blocked > 0) {
+  console.log(`\n⛔ BLOCKED (${counts.blocked}) — these should have run and could not; action required:`);
+  for (const row of results) {
+    if (row.status === 'blocked' && seen.get(`${row.cap}/${row.assertion}`) === 'blocked') {
+      console.log(`  - ${row.cap}/${row.assertion}: ${row.reason}`);
+    }
+  }
+}
 
 if (problems.length > 0) {
   console.log(`\nPROBLEMS (${problems.length}):`);

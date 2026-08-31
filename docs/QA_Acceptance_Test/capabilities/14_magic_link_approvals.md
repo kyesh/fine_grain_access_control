@@ -50,6 +50,19 @@
   the full address) and the profile label, states which account the visitor
   is signed in as, and offers a sign-out control that returns to the same
   approve URL. Only forged/tampered links (A7) get the generic invalid card
+- **Harness — this IS runnable with the two QA accounts; do not skip it.**
+  Both local and PR-preview deployments work. Two ways to get the link:
+  (a) mint a denial as the OTHER account (an MCP `gmail_send` to a
+  non-whitelisted recipient from that account's connection), or (b) mint it
+  deterministically — links are stateless HMAC URLs, so
+  `mintApprovalLink(baseUrl, ownerUserId, ownerProxyKeyId, action)` with the
+  deployment's own `CLERK_SECRET_KEY` produces a byte-identical URL (ids via
+  read-only DB lookup; see `scripts/test-approval-links.ts` for the pattern).
+  Always run the control first: opened as the OWNER the link must render the
+  genuine approve page (proves the signature matches the deployment's key).
+  If either account hits a sign-in wall (institutional SSO, expired Google
+  session), report the assertion as **`blocked`** with "USER ACTION REQUIRED:
+  re-auth <account>" — never `skip` (README → skip vs blocked).
 
 ### A6: Unauthenticated click requires the owner's sign-in
 - Open a valid link in a signed-out browser
