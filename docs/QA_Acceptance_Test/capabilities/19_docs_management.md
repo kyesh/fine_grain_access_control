@@ -143,9 +143,34 @@ intentionally differs, the assertion says so.
   `denial_code=file_not_exposed` and NO approval link (service unknown for
   an unruled bare file id).
 
+### A14: docs_edit deletes are read-back verified; delete-free edits add nothing
+- On a Read & Write doc, three `docs_edit` shapes:
+  1. **Tier 0 — no delete** (e.g. a single `insertText` append): the response
+     is Google's batchUpdate reply ONLY — no `verified`, no `body end` line,
+     byte-parity with the pre-verification behavior.
+  2. **Tier 1 — deterministic delete** (`deleteContentRange` of a known span,
+     optionally with `insertText`/style ops in the same array, no tables in
+     range): response carries Google's reply plus the single word `verified`;
+     `$mcp_tool_call` stamps `docs_verify_outcome='verified'`.
+  3. **Tier 1 mismatch — table-boundary repro**: on a doc containing a table,
+     a single `deleteContentRange` spanning from index 1 across the table to
+     the body end. If Google partially applies it (the 2026-08-30 incident
+     shape), the response's second text block reads
+     `body end <after>, expected <expected> — delete may have partially
+     applied; read the document back.` and stamps
+     `docs_verify_outcome='mismatch'` with `docs_verify_expected/actual`.
+     If Google instead rejects the request outright, record the observed
+     status verbatim — the semantics are Google's; the assertion is that
+     SUCCESS RESPONSES ARE NEVER SILENT about a partial delete.
+- Tier 2 spot-check: a delete mixed with a non-deterministic op (e.g.
+  `replaceAllText`) returns `body end <after> (was <before>)` and stamps
+  `docs_verify_outcome='reported'`.
+
 ## Analytics hooks
 `docs_grant_verification`, `docs_grant_recovered`, `agent_doc_created`,
 `approval_link_minted` with `action=docs_expose|docs_write`, denial codes
 `docs_not_exposed|docs_read_only|docs_blocked|file_not_exposed`, grace props
-`docs_grace_*`, `raw_api_family='drive_comments'` on raw comment calls,
+`docs_grace_*`, `docs_verify_outcome` (`verified|mismatch|reported|unavailable`)
+with `docs_verify_expected`/`docs_verify_actual` on mismatch,
+`raw_api_family='drive_comments'` on raw comment calls,
 and universal `response_chars`/`response_kb` (capability 16).

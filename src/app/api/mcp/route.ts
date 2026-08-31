@@ -903,6 +903,97 @@ const withSheetsGrace = (perm: FilePermission, doFetch: () => Promise<GoogleFetc
 const withDocsGrace = (perm: FilePermission, doFetch: () => Promise<GoogleFetchResult>) =>
   withGrantGrace('doc', perm, doFetch);
 
+// ─── docs_edit delete verification ──────────────────────────────────────────
+//
+// Google can apply a deleteContentRange only partially and still return 200
+// (observed 2026-08-30 when a range crossed a table boundary: ~190 chars of a
+// body-wide delete survived, response indicated success). The write stays a
+// byte-faithful passthrough; when a request array contains a delete we read
+// the body end index back and report facts — never our interpretation of the
+// content. Verification is best-effort: it can degrade to "unavailable" but
+// never turns a successful write into an error.
+
+/** Requests that never move body indices. */
+const DOCS_ZERO_DELTA_OPS = new Set([
+  'updateParagraphStyle', 'updateTextStyle', 'updateDocumentStyle',
+  'updateTableCellStyle', 'updateTableRowStyle', 'updateTableColumnProperties',
+  'updateSectionStyle',
+]);
+
+type DocsDeleteVerifyPlan =
+  | { hasDelete: false }
+  | { hasDelete: true; deterministic: boolean; expectedDelta: number };
+
+/**
+ * Decide whether a batchUpdate needs read-back verification and whether the
+ * net body-length change is exactly computable from the requests alone.
+ * Deterministic ops: deleteContentRange removes (endIndex - startIndex)
+ * indices, insertText adds the UTF-16 length of its text (JS string .length),
+ * style updates move nothing. Anything else — or any op targeting a non-body
+ * segment (segmentId) — makes the outcome non-deterministic; we then report
+ * before/after indices without an expectation.
+ */
+function planDocsDeleteVerification(requests: Record<string, unknown>[]): DocsDeleteVerifyPlan {
+  let hasDelete = false;
+  let deterministic = true;
+  let expectedDelta = 0;
+  for (const request of requests) {
+    for (const [op, rawArgs] of Object.entries(request)) {
+      const args = (rawArgs ?? {}) as Record<string, any>;
+      if (op === 'deleteContentRange') {
+        hasDelete = true;
+        const range = args.range as Record<string, any> | undefined;
+        if (range && typeof range.startIndex === 'number' && typeof range.endIndex === 'number' && !range.segmentId) {
+          expectedDelta -= range.endIndex - range.startIndex;
+        } else {
+          deterministic = false;
+        }
+      } else if (op === 'insertText') {
+        const targetsBody = !args.location?.segmentId && !args.endOfSegmentLocation?.segmentId;
+        if (typeof args.text === 'string' && targetsBody) {
+          expectedDelta += args.text.length;
+        } else {
+          deterministic = false;
+        }
+      } else if (!DOCS_ZERO_DELTA_OPS.has(op)) {
+        deterministic = false;
+      }
+    }
+  }
+  return hasDelete ? { hasDelete, deterministic, expectedDelta } : { hasDelete: false };
+}
+
+/** End index of the document body's last structural element, or null when the
+ * read fails — callers treat null as "verification unavailable". */
+async function fetchDocsBodyEndIndex(token: string, documentId: string, targetEmail: string): Promise<number | null> {
+  const result = await docsFetch(token, `${encodeURIComponent(documentId)}?fields=body(content(endIndex))`, 'GET', undefined, targetEmail);
+  if (!result.ok) return null;
+  const content = (result.data as { body?: { content?: Array<{ endIndex?: number }> } })?.body?.content;
+  const last = Array.isArray(content) && content.length > 0 ? content[content.length - 1] : null;
+  return typeof last?.endIndex === 'number' ? last.endIndex : null;
+}
+
+/** Verification line appended to the docs_edit result, or null for tier 0. */
+function docsDeleteVerifyNote(plan: DocsDeleteVerifyPlan, before: number | null, after: number | null): string | null {
+  if (!plan.hasDelete) return null;
+  if (before === null || after === null) {
+    addToolCallProps({ docs_verify_outcome: 'unavailable' });
+    return 'verification unavailable';
+  }
+  if (!plan.deterministic) {
+    addToolCallProps({ docs_verify_outcome: 'reported' });
+    return `body end ${after} (was ${before})`;
+  }
+  const expected = before + plan.expectedDelta;
+  if (after === expected) {
+    addToolCallProps({ docs_verify_outcome: 'verified' });
+    return 'verified';
+  }
+  addToolCallProps({ docs_verify_outcome: 'mismatch', docs_verify_expected: expected, docs_verify_actual: after });
+  console.warn(`[MCP] docs_edit delete verification mismatch: body end ${after}, expected ${expected}`);
+  return `body end ${after}, expected ${expected} — delete may have partially applied; read the document back.`;
+}
+
 async function checkFilePermission(kind: DriveFileKind, userId: string, proxyKeyId: string, fileId: string, isMutating: boolean) {
   const d = DRIVE_FILE_KINDS[kind];
   const allRules = await db.select().from(accessRules).where(eq(accessRules.userId, userId));
@@ -2121,9 +2212,22 @@ const handler = createMcpHandler(
         if (!perm.allowed) return policyDenialWithLink(conn, resolved.proxyKeyId, perm.reason, docsDenialAction(perm, documentId, true));
 
         const body = JSON.stringify({ requests });
+        const verifyPlan = planDocsDeleteVerification(requests);
+        const endBefore = verifyPlan.hasDelete
+          ? await fetchDocsBodyEndIndex(resolved.token, documentId, resolved.targetEmail)
+          : null;
         const result = await withDocsGrace(perm, () => docsFetch(resolved.token, `${encodeURIComponent(documentId)}:batchUpdate`, 'POST', body, resolved.targetEmail));
         if (!result.ok) return docsErrorResult(result, documentId);
-        return jsonResult(result.data);
+        if (!verifyPlan.hasDelete) return jsonResult(result.data);
+
+        const endAfter = await fetchDocsBodyEndIndex(resolved.token, documentId, resolved.targetEmail);
+        const note = docsDeleteVerifyNote(verifyPlan, endBefore, endAfter);
+        return {
+          content: [
+            { type: 'text' as const, text: JSON.stringify(result.data, null, 2) },
+            ...(note ? [{ type: 'text' as const, text: note }] : []),
+          ],
+        };
       }
     );
 
