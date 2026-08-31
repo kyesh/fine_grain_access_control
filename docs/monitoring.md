@@ -356,9 +356,14 @@ SELECT toDate(timestamp) AS day, count() AS opens, uniq(person_id) AS users,
        uniq(properties.intended_for) AS intended_accounts
 FROM events
 WHERE event = 'google_reconnect_wrong_account'
+  AND properties.environment = 'production'
   AND timestamp > now() - INTERVAL 30 DAY
 GROUP BY day ORDER BY day
 ```
+
+Verified end-to-end 2026-08-31 (pre-merge): QA opens from the preview and local
+dev environments landed with `intended_for` populated, one event per open —
+which is why the environment filter above matters for this event in particular.
 
 Recovery check: for each `intended_for`, look for a later
 `google_reconnect_started` by the person whose identity matches that address —
