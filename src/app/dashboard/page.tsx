@@ -10,12 +10,28 @@ import { loadDashboardData, defaultProfileSlug } from './loadDashboard';
  * to redirect to: no active profiles yet (the empty state creates the first
  * one), or only legacy labels that produce no usable slug.
  */
-export default async function DashboardPage() {
+export default async function DashboardPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
   const data = await loadDashboardData();
   if (!data) redirect('/');
 
   const slug = defaultProfileSlug(data.profiles);
-  if (slug) redirect(`/dashboard/agents/${slug}`);
+  if (slug) {
+    // Forward the query string — pre-existing deep links (?autoOpenPicker=1,
+    // OAuth return legs minted before the slug routes shipped) target
+    // /dashboard and must keep working after the redirect.
+    const params = new URLSearchParams();
+    for (const [key, value] of Object.entries(await searchParams)) {
+      for (const v of Array.isArray(value) ? value : value !== undefined ? [value] : []) {
+        params.append(key, v);
+      }
+    }
+    const query = params.toString();
+    redirect(`/dashboard/agents/${slug}${query ? `?${query}` : ''}`);
+  }
 
   return (
     <>
