@@ -39,7 +39,7 @@ keep internal/QA traffic out of the numbers.
 | `delegation_created` | server (dashboard action) | `delegate_email`, `reactivated` |
 | `account_linked` | server (dashboard action) | `target_email`, `delegated`, `via` |
 | `approval_link_minted` | server (`/api/mcp` — policy denial, send denial, `request_access`) | `action`, `request_id`, `target_hash`, `mint_count`, `via` (`send_denial`/`request_access`; absent for policy denials). **Fires once per mint ATTEMPT**, so `uniq(request_id)` is demand and `count()` is retry pressure |
-| `approval_link_opened` | server (approve-page load, `/dashboard/approve`) | `status` (`fresh`/`already_granted`/`invalid`), `request_id`, `action`, `agent_driven`, `user_agent` |
+| `approval_link_opened` | server (approve-page load, `/dashboard/approve`) | `status` (`fresh`/`already_granted`/`wrong_account`/`invalid`), `request_id` (real id for `wrong_account` — recomputed against the resolved owner; `undefined` only for `invalid`), `action`, `agent_driven`, `user_agent` |
 | `approval_link_approved` | server (`actions.ts`, all approval paths) | `action`, `request_id`; per-file grants add `substituted` and `granted_count` |
 | `read_restriction_enforced` | server (`/api/mcp`) | `via` (tool name), `restriction` |
 | `sheets_grant_verification` | server (approve-page load via `/api/rules/verify-sheets-access`, and approval in `actions.ts`) | `result` (`ok`/`missing`/`unknown`), `via` (`link_open`/`magic_link`/`post_approval`), `spreadsheet_id` |

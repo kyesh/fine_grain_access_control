@@ -23,7 +23,7 @@
 > for this client, new OAuth flows will auto-match to the existing connection
 > and its bound proxy key — which may be the wrong key (e.g., "Restricted Agent"
 > with no email access instead of "QA-Agent-A"). **Before running tests:**
-> 1. Navigate to `http://localhost:3000/dashboard?tab=connections`
+> 1. Navigate to `http://localhost:3000/dashboard#connected-agents`
 > 2. Find any existing approved connection for this Claude Code client
 > 3. Verify it is bound to `QA-Agent-A` (or the intended test key)
 > 4. If bound to the wrong key: **Block** it, then re-approve with the correct key
@@ -49,7 +49,7 @@
    tmux capture-pane -t fgac-qa -p | grep "Authentication successful"
    ```
 7. Approve connection via `/browser-agent`:
-   - Navigate to `http://localhost:3000/dashboard?tab=connections`
+   - Navigate to `http://localhost:3000/dashboard#connected-agents`
    - Find the pending connection for this client
    - Select a proxy key from the dropdown and click **Approve**
    - ⚠️ **NEVER approve connections via direct DB writes — always use the Web UI**
