@@ -15,7 +15,11 @@ import { ReconnectGoogleButton } from './ReconnectGoogleButton';
 import { checkGoogleAccess } from '../googleAccess';
 import { clerkPrimaryEmail } from '@/lib/clerkPrimaryEmail';
 
-export default async function AccountsPage() {
+export default async function AccountsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
+}) {
   const user = await currentUser();
 
   if (!user) {
@@ -25,7 +29,30 @@ export default async function AccountsPage() {
   const currentEmail = clerkPrimaryEmail(user) ?? 'unknown';
   const dbUser = await resolveDbUser(user.id, currentEmail);
 
-  const hasCompleteGoogleAccess = await checkGoogleAccess(user);
+  const googleAccess = await checkGoogleAccess(user);
+  const hasCompleteGoogleAccess = googleAccess.gmail && googleAccess.driveFile;
+
+  // Reconnect links minted into agent-facing errors carry `for=<email>` — the
+  // account whose grant needs repair. If this browser is signed in to a
+  // DIFFERENT FGAC user, auto-firing reconnect would "fix" the wrong account
+  // while telling everyone it succeeded (the 2026-08-30 incident): warn and
+  // hold instead. The comparison is against every address this user could
+  // legitimately be — identity drift between users.email and the Clerk/Google
+  // records must not false-alarm.
+  const rawFor = (await searchParams).for;
+  const intendedFor = typeof rawFor === 'string' && rawFor.includes('@') ? rawFor : null;
+  const viewerEmails = new Set(
+    [
+      dbUser.email,
+      ...user.emailAddresses.map(e => e.emailAddress),
+      ...user.externalAccounts
+        .filter(acc => acc.provider === 'oauth_google' || (acc.provider as string) === 'google')
+        .map(acc => acc.emailAddress)
+        .filter((e): e is string => !!e),
+    ].map(e => e.toLowerCase()),
+  );
+  const intendedAccountMismatch =
+    intendedFor !== null && !viewerEmails.has(intendedFor.toLowerCase());
 
   // The card below must show the account Google actually issued the grant
   // for — not `dbUser.email`. The two can differ (multiple addresses on one
@@ -66,8 +93,29 @@ export default async function AccountsPage() {
             <CardHeader
               title="Connected Google Account"
               subtitle="FGAC uses this account's OAuth grant to act on your behalf."
-              action={<ReconnectGoogleButton prominent={!hasCompleteGoogleAccess} />}
+              action={
+                <ReconnectGoogleButton
+                  prominent={!hasCompleteGoogleAccess}
+                  blockAutoReconnect={intendedAccountMismatch}
+                />
+              }
             />
+            {intendedAccountMismatch && (
+              <div className="mx-5 mb-3 rounded-sm border border-warning-foreground bg-warning px-4 py-3 text-[13px] text-warning-foreground">
+                <p className="font-semibold">
+                  This reconnect link is for a different account
+                </p>
+                <p className="mt-1">
+                  The link you opened repairs Google access for{' '}
+                  <strong>{intendedFor}</strong>, but you&apos;re signed in as{' '}
+                  <strong>{dbUser.email}</strong>{' — '}reconnecting here would change
+                  this account&apos;s Google grant and leave{' '}
+                  <strong>{intendedFor}</strong> exactly as broken as before.
+                  Sign out, sign back in as <strong>{intendedFor}</strong>, then
+                  open the link again.
+                </p>
+              </div>
+            )}
             <div className="px-5 pb-5">
               <div className="flex flex-wrap items-center justify-between gap-3 rounded-sm border border-border bg-card px-4 py-3">
                 <div className="flex items-center gap-3 min-w-0">
@@ -87,14 +135,15 @@ export default async function AccountsPage() {
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2">
-                  {hasCompleteGoogleAccess ? (
-                    <>
-                      <Badge tone="success">gmail.modify</Badge>
-                      <Badge tone="sheets">drive.file</Badge>
-                    </>
-                  ) : (
-                    <Badge tone="error">Scopes missing or revoked</Badge>
-                  )}
+                  {/* One badge per scope — Google's granular consent can grant
+                      one checkbox and not the other, and a combined badge once
+                      showed drive.file green on a Drive-blind account. */}
+                  {googleAccess.gmail
+                    ? <Badge tone="success">gmail.modify</Badge>
+                    : <Badge tone="error">gmail.modify missing</Badge>}
+                  {googleAccess.driveFile
+                    ? <Badge tone="sheets">drive.file</Badge>
+                    : <Badge tone="error">drive.file missing</Badge>}
                 </div>
               </div>
 

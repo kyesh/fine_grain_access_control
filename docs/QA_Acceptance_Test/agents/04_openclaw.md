@@ -93,6 +93,11 @@ curl -X POST http://localhost:18790/api/chat \
 ### A6: List accounts shows delegated
 - [ ] accounts.js returns both own and delegated emails through gateway
 
+### A8: List accounts reports per-account scope state
+- [ ] Gateway response includes `account_details` with three-state
+  `gmail`/`drive_file` per account (`granted` on healthy QA accounts); any
+  `reconnect_url` is bound with `&for=<email>`
+
 ---
 
 ## Capability: Connection Lifecycle (→ capabilities/06_connection_lifecycle.md)

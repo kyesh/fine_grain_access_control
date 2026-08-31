@@ -22,17 +22,67 @@ import {
  * `?reconnect=1` (minted into MCP tool errors) auto-fires the flow on load so
  * the agent's link is one click from Google's consent screen — but ONLY on
  * the safe reauthorize branch: a non-verified account takes the
- * destroy+recreate leg, which must stay behind an explicit click.
+ * destroy+recreate leg, which must stay behind an explicit click. The page
+ * additionally passes `blockAutoReconnect` when the link's `for=` account is
+ * not the signed-in user — auto-firing there would repair the wrong account
+ * while reporting success (2026-08-30 incident).
+ *
+ * On return (?reconnected=1) success is VERIFIED, not assumed: the token
+ * bridge does a real tokeninfo call, and Google's granular consent means a
+ * completed flow can still be missing a checkbox. Clerk propagates fresh
+ * scopes with a lag, so we poll the same way useGooglePicker does before
+ * declaring failure.
  */
-export function ReconnectGoogleButton({ prominent = false }: { prominent?: boolean }) {
+
+type VerifyState =
+  | { phase: "checking" }
+  | { phase: "verified" }
+  | { phase: "failed"; missing: string[] };
+
+const SCOPE_POLL_ATTEMPTS = 4;
+const SCOPE_POLL_INTERVAL_MS = 1500;
+
+function missingScopes(scopes: string[]): string[] {
+  const missing: string[] = [];
+  if (!scopes.includes(GMAIL_MODIFY_SCOPE) && !scopes.includes("https://mail.google.com/")) {
+    missing.push("gmail.modify");
+  }
+  if (!scopes.includes(DRIVE_FILE_SCOPE) && !scopes.includes("https://www.googleapis.com/auth/drive")) {
+    missing.push("drive.file");
+  }
+  return missing;
+}
+
+export function ReconnectGoogleButton({
+  prominent = false,
+  blockAutoReconnect = false,
+}: {
+  prominent?: boolean;
+  blockAutoReconnect?: boolean;
+}) {
   const { user, isLoaded } = useUser();
   const posthog = usePostHog();
   const params = useSearchParams();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [verify, setVerify] = useState<VerifyState | null>(null);
   const autoFired = useRef(false);
+  const verifyStarted = useRef(false);
+  const mismatchCaptured = useRef(false);
   const justReconnected = params.get("reconnected") === "1";
   const autoRequested = params.get("reconnect") === "1";
+
+  // Make the wrong-account card countable: suppressing the auto-fire also
+  // removes the google_reconnect_started signature these opens used to leave
+  // in analytics, so without this event the mismatch population would be
+  // invisible (docs/monitoring.md §7.7).
+  useEffect(() => {
+    if (!autoRequested || !blockAutoReconnect || !isLoaded || mismatchCaptured.current) return;
+    mismatchCaptured.current = true;
+    posthog?.capture("google_reconnect_wrong_account", {
+      intended_for: params.get("for"),
+    });
+  }, [autoRequested, blockAutoReconnect, isLoaded, posthog, params]);
 
   const start = async (source: string) => {
     if (!user || busy) return;
@@ -59,6 +109,7 @@ export function ReconnectGoogleButton({ prominent = false }: { prominent?: boole
 
   useEffect(() => {
     if (!autoRequested || autoFired.current || !isLoaded || !user || justReconnected) return;
+    if (blockAutoReconnect) return;
     const google = user.externalAccounts.find(
       acc => acc.provider === "google" || (acc.provider as string) === "oauth_google",
     );
@@ -66,7 +117,44 @@ export function ReconnectGoogleButton({ prominent = false }: { prominent?: boole
     autoFired.current = true;
     void start("agent_link");
     // eslint-disable-next-line react-hooks/exhaustive-deps -- fire once when the session hydrates
-  }, [autoRequested, isLoaded, user, justReconnected]);
+  }, [autoRequested, isLoaded, user, justReconnected, blockAutoReconnect]);
+
+  // Post-reconnect verification: poll the token bridge (real tokeninfo call)
+  // until both scopes show up or the attempts run out.
+  useEffect(() => {
+    if (!justReconnected || verifyStarted.current) return;
+    verifyStarted.current = true;
+    let cancelled = false;
+
+    const run = async () => {
+      setVerify({ phase: "checking" });
+      let missing = ["gmail.modify", "drive.file"];
+      for (let attempt = 0; attempt <= SCOPE_POLL_ATTEMPTS; attempt++) {
+        if (attempt > 0) await new Promise(r => setTimeout(r, SCOPE_POLL_INTERVAL_MS));
+        if (cancelled) return;
+        try {
+          const res = await fetch("/api/auth/google-picker-token");
+          const data = await res.json();
+          if (res.ok && Array.isArray(data.scopes)) {
+            missing = missingScopes(data.scopes);
+            if (missing.length === 0) break;
+          }
+        } catch {
+          // Keep polling; the final state reports whatever is still missing.
+        }
+      }
+      if (cancelled) return;
+      if (missing.length === 0) {
+        setVerify({ phase: "verified" });
+      } else {
+        posthog?.capture("google_reconnect_incomplete", { missing_scopes: missing });
+        setVerify({ phase: "failed", missing });
+      }
+    };
+    void run();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- run once on the return leg
+  }, [justReconnected]);
 
   return (
     <div className="flex flex-col items-end gap-1.5">
@@ -81,8 +169,18 @@ export function ReconnectGoogleButton({ prominent = false }: { prominent?: boole
       >
         {busy ? "Opening Google…" : "Reconnect Google"}
       </button>
-      {justReconnected && !error && (
-        <p className="text-[11px] text-success-foreground">✓ Google reconnected.</p>
+      {justReconnected && !error && verify?.phase === "checking" && (
+        <p className="text-[11px] text-muted-foreground">Confirming Google permissions…</p>
+      )}
+      {justReconnected && !error && verify?.phase === "verified" && (
+        <p className="text-[11px] text-success-foreground">✓ Google reconnected — gmail.modify and drive.file confirmed.</p>
+      )}
+      {justReconnected && !error && verify?.phase === "failed" && (
+        <p className="max-w-xs text-right text-[11px] text-destructive [overflow-wrap:anywhere]">
+          Google finished the flow WITHOUT granting {verify.missing.join(" and ")} — the
+          checkbox was likely left unchecked on the consent screen. Click Reconnect
+          Google again and approve every permission.
+        </p>
       )}
       {error && (
         <p className="max-w-xs text-right text-[11px] text-destructive [overflow-wrap:anywhere]">{error}</p>

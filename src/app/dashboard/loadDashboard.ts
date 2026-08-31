@@ -51,7 +51,8 @@ export async function loadDashboardData(): Promise<DashboardData | null> {
   const currentEmail = clerkPrimaryEmail(user) ?? 'unknown';
   const dbUser = await resolveDbUser(user.id, currentEmail);
 
-  const hasCompleteGoogleAccess = await checkGoogleAccess(user);
+  const googleAccess = await checkGoogleAccess(user);
+  const hasCompleteGoogleAccess = googleAccess.gmail && googleAccess.driveFile;
 
   // ─── Emails this user can build profiles against ─────────────────────────
   // Resolved by email rather than user row id: duplicate `users` rows for one
