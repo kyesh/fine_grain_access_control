@@ -60,8 +60,9 @@ export function ExposedFilesManager({ kind, activeKeys = [] }: { kind: 'sheet' |
   // A rule can exist without Google ever having shared the file (approved
   // via magic link, never picked) — those rows get a "Needs Google access"
   // chip. Verification failing entirely degrades to no chips, never a
-  // broken card.
-  const [grantStates, setGrantStates] = useState<Record<string, { state: string }>>({});
+  // broken card. `title` is the LIVE Drive filename from the same call —
+  // rendered ahead of the stored (grant-time) resourceName.
+  const [grantStates, setGrantStates] = useState<Record<string, { state: string; title?: string | null }>>({});
 
   const fetchFileRules = useCallback(async () => {
     try {
@@ -208,16 +209,19 @@ export function ExposedFilesManager({ kind, activeKeys = [] }: { kind: 'sheet' |
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {fileRules.map((rule) => (
+              {fileRules.map((rule) => {
+                const displayName =
+                  grantStates[rule.targetResourceId]?.title || rule.resourceName || rule.ruleName;
+                return (
                 <tr key={rule.id} className="hover:bg-slate-50/80 transition-colors">
                   <td className="py-3 px-4 font-medium text-slate-900 flex items-center gap-2">
                     <svg className={`w-4 h-4 ${accentText} flex-shrink-0`} fill="currentColor" viewBox="0 0 24 24">
                       <path d={ui.iconPath} />
                     </svg>
-                    <span>{rule.resourceName || rule.ruleName}</span>
+                    <span>{displayName}</span>
                     {grantStates[rule.targetResourceId]?.state === 'missing' && (
                       <a
-                        href={`${d.setupPath}?${d.setupIdParam}=${encodeURIComponent(rule.targetResourceId)}${rule.resourceName ? `&name=${encodeURIComponent(rule.resourceName)}` : ''}`}
+                        href={`${d.setupPath}?${d.setupIdParam}=${encodeURIComponent(rule.targetResourceId)}${displayName !== rule.ruleName ? `&name=${encodeURIComponent(displayName)}` : ''}`}
                         className="inline-flex items-center gap-1 rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-800 hover:bg-amber-100 transition-colors flex-shrink-0"
                         title={`FGAC has this rule, but Google hasn't shared the ${ui.noun} with FGAC yet — agents get errors until you pick it in the Google Picker.`}
                       >
@@ -260,7 +264,8 @@ export function ExposedFilesManager({ kind, activeKeys = [] }: { kind: 'sheet' |
                     </button>
                   </td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         </div>

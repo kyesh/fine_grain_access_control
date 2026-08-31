@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Card, CardHeader, Badge, EmptyState, buttonPrimary, buttonSecondary, buttonDanger } from '@/components/ui';
 import { assignRulesToKey, unassignRuleFromKey, revokeProxyKey, setSheetRulePermission, exposeSheetsFromPicker, exposeDocsFromPicker, applyRecommendedSecurityRules, enableSendToAnyone } from './actions';
@@ -60,6 +61,13 @@ interface AccessibleEmail {
   hasCompleteGoogleAccess?: boolean;
 }
 
+/** Google-side grant state for one file, from the verify endpoints. */
+interface GrantState {
+  state: string;
+  /** Live Drive filename when state is 'ok' — fresher than resourceName. */
+  title?: string | null;
+}
+
 function timeAgo(date: string | null): string {
   if (!date) return 'Never';
   const seconds = Math.floor((Date.now() - new Date(date).getTime()) / 1000);
@@ -80,28 +88,22 @@ export function AgentProfilesView({
   accessibleEmails,
   mcpEndpoint,
   hasCompleteGoogleAccess,
+  activeId,
 }: {
   profiles: Profile[];
   rules: Rule[];
   accessibleEmails: AccessibleEmail[];
   mcpEndpoint: string;
   hasCompleteGoogleAccess: boolean;
+  /** Selected profile — owned by the route (/dashboard/agents/[slug]), not
+   *  component state, so tabs are real links and profiles are bookmarkable. */
+  activeId: string | null;
 }) {
   const activeProfiles = useMemo(() => profiles.filter(p => !p.revokedAt), [profiles]);
-  const [activeId, setActiveId] = useState<string | null>(activeProfiles[0]?.id ?? null);
   const [connections, setConnections] = useState<Connection[]>([]);
   const [connectionsLoading, setConnectionsLoading] = useState(true);
   // Bumped by the "Create a new rule…" action inside the Apply-a-rule picker.
   const [createRuleSignal, setCreateRuleSignal] = useState(0);
-
-  // Keep the selected tab valid when profiles are added or revoked.
-  useEffect(() => {
-    if (activeProfiles.length === 0) {
-      setActiveId(null);
-    } else if (!activeProfiles.some(p => p.id === activeId)) {
-      setActiveId(activeProfiles[0].id);
-    }
-  }, [activeProfiles, activeId]);
 
   const fetchConnections = useCallback(async () => {
     try {
@@ -119,11 +121,13 @@ export function AgentProfilesView({
   // Google ever having shared the file (approved via magic link, never
   // picked) — those rows get a "Needs Google access" chip (capability 17
   // A6 names the profile card, not just the Accounts manager). Verification
-  // failing entirely degrades to no chips, never a broken card.
-  const [grantStates, setGrantStates] = useState<{ sheet: Record<string, { state: string }>; doc: Record<string, { state: string }> }>({ sheet: {}, doc: {} });
+  // failing entirely degrades to no chips, never a broken card. `title` is
+  // the LIVE Drive filename, fetched by the same verification call — render
+  // it ahead of the stored (grant-time) resourceName so Drive renames show.
+  const [grantStates, setGrantStates] = useState<{ sheet: Record<string, GrantState>; doc: Record<string, GrantState> }>({ sheet: {}, doc: {} });
   useEffect(() => {
     let cancelled = false;
-    const load = async (path: string): Promise<Record<string, { state: string }>> => {
+    const load = async (path: string): Promise<Record<string, GrantState>> => {
       try {
         const res = await fetch(path);
         const data = await res.json();
@@ -190,7 +194,6 @@ export function AgentProfilesView({
       <ProfileTabs
         profiles={activeProfiles}
         activeId={activeId}
-        onSelect={setActiveId}
         accessibleEmails={accessibleEmails}
         profilesForKeyControls={profiles}
       />
@@ -368,27 +371,30 @@ function RecentConnectionsBanner({ connections, rules }: { connections: Connecti
 function ProfileTabs({
   profiles,
   activeId,
-  onSelect,
   accessibleEmails,
   profilesForKeyControls,
 }: {
   profiles: Profile[];
   activeId: string | null;
-  onSelect: (id: string) => void;
   accessibleEmails: AccessibleEmail[];
   profilesForKeyControls: Profile[];
 }) {
   return (
     <div className="flex items-center gap-2 border-b border-border overflow-x-auto">
+      {/* Tabs are real links to /dashboard/agents/[slug] — back button,
+          middle-click, and bookmarking work for free. */}
       <div role="tablist" className="flex items-center gap-1 min-w-0">
         {profiles.map(p => {
           const isActive = p.id === activeId;
+          const slug = slugifyProfileLabel(p.label);
           return (
-            <button
+            <Link
               key={p.id}
               role="tab"
               aria-selected={isActive}
-              onClick={() => onSelect(p.id)}
+              // A legacy label that slugifies to nothing has no route of its
+              // own; /dashboard renders it inline as the fallback selection.
+              href={slug ? `/dashboard/agents/${slug}` : '/dashboard'}
               className={`whitespace-nowrap px-3.5 py-2.5 text-[13px] font-semibold border-b-2 -mb-px transition-colors ${
                 isActive
                   ? 'border-primary text-primary'
@@ -396,7 +402,7 @@ function ProfileTabs({
               }`}
             >
               {p.label}
-            </button>
+            </Link>
           );
         })}
       </div>
@@ -423,6 +429,7 @@ function ProfileTabs({
 // ─── Profile header ─────────────────────────────────────────────────────────
 
 function ProfileHeader({ profile }: { profile: Profile }) {
+  const router = useRouter();
   const [revoking, setRevoking] = useState(false);
   const [confirming, setConfirming] = useState(false);
 
@@ -456,6 +463,9 @@ function ProfileHeader({ profile }: { profile: Profile }) {
                 setRevoking(true);
                 try {
                   await revokeProxyKey(profile.id);
+                  // This profile's route just stopped existing — land on the
+                  // dashboard, which redirects to the next default profile.
+                  router.push('/dashboard');
                 } finally {
                   setRevoking(false);
                   setConfirming(false);
@@ -525,7 +535,7 @@ function FilesRulesCard({
   profileId: string;
   rules: Rule[];
   /** fileId → Google-side grant state; missing entries mean "unknown" (no chip). */
-  grantStates: Record<string, { state: string }>;
+  grantStates: Record<string, GrantState>;
   onExpose: () => void;
   pickerError: string | null;
   exposing: boolean;
@@ -562,7 +572,11 @@ function FilesRulesCard({
             {copy.empty}
           </EmptyState>
         ) : (
-          rules.map(rule => (
+          rules.map(rule => {
+            const displayName =
+              (rule.targetResourceId && grantStates[rule.targetResourceId]?.title) ||
+              rule.resourceName || rule.ruleName;
+            return (
             <div
               key={rule.id}
               className="flex flex-wrap items-center justify-between gap-3 rounded-sm border border-border bg-card px-4 py-3"
@@ -570,12 +584,12 @@ function FilesRulesCard({
               <div className="min-w-0">
                 <div className="flex items-center gap-2">
                   <span className="truncate text-[13px] font-semibold text-foreground">
-                    {rule.resourceName || rule.ruleName}
+                    {displayName}
                   </span>
                   {isGlobal(rule) && <Badge tone="neutral">Global</Badge>}
                   {rule.targetResourceId && grantStates[rule.targetResourceId]?.state === 'missing' && (
                     <a
-                      href={`${setup.path}?${setup.idParam}=${encodeURIComponent(rule.targetResourceId)}${rule.resourceName ? `&name=${encodeURIComponent(rule.resourceName)}` : ''}`}
+                      href={`${setup.path}?${setup.idParam}=${encodeURIComponent(rule.targetResourceId)}${displayName !== rule.ruleName ? `&name=${encodeURIComponent(displayName)}` : ''}`}
                       className="inline-flex shrink-0 items-center gap-1 rounded-full border border-warning-foreground/30 bg-warning px-2 py-0.5 text-[11px] font-semibold text-warning-foreground hover:opacity-80"
                       title={`FGAC has this rule, but Google hasn't shared the ${setup.noun} with FGAC yet — agents get errors until you pick it in the Google Picker.`}
                     >
@@ -591,11 +605,12 @@ function FilesRulesCard({
               </div>
 
               <div className="flex shrink-0 items-center gap-3">
-                <FilePermissionSelect kind={kind} rule={rule} />
+                <FilePermissionSelect kind={kind} rule={rule} displayName={displayName} />
                 {!isGlobal(rule) && <DetachRuleButton profileId={profileId} rule={rule} />}
               </div>
             </div>
-          ))
+            );
+          })
         )}
       </div>
     </Card>
@@ -606,7 +621,7 @@ function FilesRulesCard({
  * Saves on change. The select is recolored to match the permission so the
  * access level of every file is legible at a glance without reading labels.
  */
-function FilePermissionSelect({ kind, rule }: { kind: 'sheet' | 'doc'; rule: Rule }) {
+function FilePermissionSelect({ kind, rule, displayName }: { kind: 'sheet' | 'doc'; rule: Rule; displayName?: string }) {
   const [value, setValue] = useState(rule.actionType);
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
@@ -626,7 +641,7 @@ function FilePermissionSelect({ kind, rule }: { kind: 'sheet' | 'doc'; rule: Rul
       <select
         value={value}
         disabled={busy}
-        aria-label={`Permission for ${rule.resourceName || rule.ruleName}`}
+        aria-label={`Permission for ${displayName || rule.resourceName || rule.ruleName}`}
         onChange={async e => {
           const next = e.target.value;
           const previous = value;

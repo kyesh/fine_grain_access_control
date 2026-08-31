@@ -1,100 +1,37 @@
-import { proxyKeys, keyEmailAccess, accessRules, keyRuleAssignments } from '@/db/schema';
-import { eq } from 'drizzle-orm';
-import { getActiveDelegationsToEmail, filterLiveDelegatedAccess } from '@/db/delegationQueries';
-import { resolveDbUser } from '@/db/userHelpers';
-import { currentUser } from '@clerk/nextjs/server';
 import { redirect } from 'next/navigation';
-import { db } from '@/db';
 import { ConnectGoogleWarning } from './ConnectGoogleWarning';
 import { AgentProfilesView } from './AgentProfilesView';
-import { checkGoogleAccess } from './googleAccess';
-import { clerkPrimaryEmail } from '@/lib/clerkPrimaryEmail';
+import { loadDashboardData, defaultProfileSlug } from './loadDashboard';
 
+/**
+ * /dashboard is the entry point, but every agent profile lives at its own
+ * route (/dashboard/agents/[slug]) — so this page redirects to the default
+ * (else first) active profile. It renders inline only when there is nothing
+ * to redirect to: no active profiles yet (the empty state creates the first
+ * one), or only legacy labels that produce no usable slug.
+ */
 export default async function DashboardPage() {
-  const user = await currentUser();
+  const data = await loadDashboardData();
+  if (!data) redirect('/');
 
-  if (!user) {
-    redirect('/');
-  }
-
-  // Resolves by Clerk id, adopts an existing row for the same email if Clerk
-  // reissued the id, and keeps the email in sync — all handled in one place.
-  const currentEmail = clerkPrimaryEmail(user) ?? 'unknown';
-  const dbUser = await resolveDbUser(user.id, currentEmail);
-
-  const hasCompleteGoogleAccess = await checkGoogleAccess(user);
-
-  // ─── Emails this user can build profiles against ─────────────────────────
-  // Resolved by email rather than user row id: duplicate `users` rows for one
-  // email (Clerk re-issuing a user id) otherwise hide the delegation entirely,
-  // and the delegate loses access with no error. See delegationQueries.ts.
-  const delegationsToMe = await getActiveDelegationsToEmail(dbUser.email);
-
-  const accessibleEmails = [
-    { email: dbUser.email, type: 'own' as const, hasCompleteGoogleAccess },
-    ...delegationsToMe.map(d => ({
-      email: d.counterpartEmail,
-      type: 'delegated' as const,
-      delegationId: d.id,
-    })),
-  ];
-
-  // ─── Agent profiles (proxy keys) and what each can reach ─────────────────
-  const userProxyKeys = await db.select().from(proxyKeys).where(eq(proxyKeys.userId, dbUser.id));
-  // Stale rows from revoked delegations must not appear as reachable mailboxes.
-  const allKeyEmailAccess = await filterLiveDelegatedAccess(
-    await db.select().from(keyEmailAccess),
-  );
-
-  const profiles = userProxyKeys.map(k => ({
-    id: k.id,
-    key: k.key,
-    label: k.label,
-    isDefault: k.isDefault,
-    createdAt: k.createdAt.toISOString(),
-    revokedAt: k.revokedAt ? k.revokedAt.toISOString() : null,
-    emailAccess: allKeyEmailAccess
-      .filter(kea => kea.proxyKeyId === k.id)
-      .map(kea => kea.targetEmail),
-  }));
-
-  // ─── Rules and their per-profile assignments ─────────────────────────────
-  const userRules = await db.select().from(accessRules).where(eq(accessRules.userId, dbUser.id));
-  const allKeyRuleAssignments = await db.select().from(keyRuleAssignments);
-
-  const rules = userRules.map(rule => ({
-    id: rule.id,
-    ruleName: rule.ruleName,
-    service: rule.service,
-    actionType: rule.actionType,
-    regexPattern: rule.regexPattern,
-    targetResourceId: rule.targetResourceId,
-    resourceName: rule.resourceName,
-    targetEmail: rule.targetEmail,
-    assignedKeyIds: allKeyRuleAssignments
-      .filter(kra => kra.accessRuleId === rule.id)
-      .map(kra => kra.proxyKeyId),
-  }));
-
-  // Trim and strip a trailing slash — the pulled env value carries stray
-  // whitespace, which rendered as "http://localhost:3000 /api/mcp".
-  const appUrl = (process.env.NEXT_PUBLIC_APP_URL ?? 'https://fgac.ai').trim().replace(/\/+$/, '');
-  const mcpEndpoint = `${appUrl}/api/mcp`;
+  const slug = defaultProfileSlug(data.profiles);
+  if (slug) redirect(`/dashboard/agents/${slug}`);
 
   return (
     <>
-      {!hasCompleteGoogleAccess && (
+      {!data.hasCompleteGoogleAccess && (
         <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 pt-8">
           <ConnectGoogleWarning />
         </div>
       )}
 
       <AgentProfilesView
-        profiles={profiles}
-        rules={rules}
-        accessibleEmails={accessibleEmails}
-        mcpEndpoint={mcpEndpoint}
-        hasCompleteGoogleAccess={hasCompleteGoogleAccess}
+        profiles={data.profiles}
+        rules={data.rules}
+        accessibleEmails={data.accessibleEmails}
+        mcpEndpoint={data.mcpEndpoint}
+        hasCompleteGoogleAccess={data.hasCompleteGoogleAccess}
+        activeId={data.profiles.find(p => !p.revokedAt)?.id ?? null}
       />
     </>
   );

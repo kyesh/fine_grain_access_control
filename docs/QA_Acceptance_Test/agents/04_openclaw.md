@@ -23,7 +23,7 @@
      node /home/node/.openclaw/skills/fgac/scripts/auth.js --action login
    ```
    *(Complete OAuth flow via `/browser-agent`, then approve connection in dashboard:*
-   *Navigate to `http://localhost:3000/dashboard?tab=connections`, find the pending connection, select a proxy key and click **Approve**.*
+   *Navigate to `http://localhost:3000/dashboard#connected-agents`, find the pending connection, select a proxy key and click **Approve**.*
    *⚠️ NEVER approve connections via direct DB writes — always use the Web UI)*
 
 ## Proof of Authenticity

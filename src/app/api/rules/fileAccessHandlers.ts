@@ -89,12 +89,48 @@ export async function verifyFileAccessGET(kind: DriveFileKind, request: NextRequ
 
     // Distinct file ids only — several rules can share one file.
     const ids = [...new Set(rules.map(r => r.targetResourceId).filter((v): v is string => !!v))];
-    const entries = await Promise.all(ids.map(async id => {
-      const result: FileGrantState = token
-        ? await verifyFileGrant(kind, token, id)
-        : { state: 'missing' };
-      return [id, result] as const;
-    }));
+    // Capped fan-out: this runs on every dashboard load, so 40 exposed files
+    // must not mean 40 parallel Google calls.
+    const CONCURRENCY = 5;
+    const entries: (readonly [string, FileGrantState])[] = [];
+    for (let i = 0; i < ids.length; i += CONCURRENCY) {
+      const batch = await Promise.all(ids.slice(i, i + CONCURRENCY).map(async id => {
+        const result: FileGrantState = token
+          ? await verifyFileGrant(kind, token, id)
+          : { state: 'missing' };
+        return [id, result] as const;
+      }));
+      entries.push(...batch);
+    }
+
+    // Best-effort write-back of live titles: Drive renames otherwise never
+    // reach access_rules.resource_name, so server-rendered surfaces,
+    // get_my_permissions, and approval-page copy keep the grant-time name
+    // forever. The grants response is the source of truth for the browser
+    // either way — a write-back failure must never fail the response.
+    try {
+      const changed: { id: string; title: string }[] = [];
+      for (const [id, result] of entries) {
+        if (result.state !== 'ok' || !result.title) continue;
+        const title = result.title;
+        if (rules.some(r => r.targetResourceId === id && r.resourceName !== title)) {
+          changed.push({ id, title });
+        }
+      }
+      if (changed.length > 0) {
+        await Promise.all(changed.map(({ id, title }) =>
+          db.update(accessRules)
+            .set({ resourceName: title, updatedAt: new Date() })
+            .where(and(
+              eq(accessRules.userId, dbUser.id),
+              eq(accessRules.service, n.d.service),
+              eq(accessRules.targetResourceId, id),
+            )),
+        ));
+      }
+    } catch (err) {
+      console.error(`Live-title write-back failed for ${n.d.service}:`, err);
+    }
 
     return NextResponse.json({ grants: Object.fromEntries(entries) });
   } catch (error) {

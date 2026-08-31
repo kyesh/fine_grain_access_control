@@ -32,7 +32,7 @@ node .claude/skills/fgac/scripts/auth.js --action login
 ```
 - `[ ]` Browser opens to `https://fgac.ai` OAuth consent
 - `[ ]` Token saved locally after consent
-- `[ ]` Connection approved in production dashboard (`https://fgac.ai/dashboard?tab=connections`)
+- `[ ]` Connection approved in production dashboard (`https://fgac.ai/dashboard#connected-agents`)
 - `[ ]` `node .claude/skills/fgac/scripts/auth.js --action status` returns proxy key
 
 ## Run ALL Capabilities

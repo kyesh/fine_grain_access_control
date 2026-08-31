@@ -21,7 +21,7 @@
    ```
 2. Complete OAuth flow (via `/browser-agent`) to get access token
 3. Approve connection via `/browser-agent`:
-   - Navigate to `$BASE_URL/dashboard?tab=connections`
+   - Navigate to `$BASE_URL/dashboard#connected-agents`
    - Find the pending connection for this client
    - Select a proxy key from the dropdown and click **Approve**
    - ⚠️ **NEVER approve connections via direct DB writes — always use the Web UI**

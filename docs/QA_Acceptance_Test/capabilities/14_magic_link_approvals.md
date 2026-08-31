@@ -44,7 +44,12 @@
 
 ### A5: Another user's session cannot approve
 - Open a USER_A denial link in a browser session signed in as USER_B
-- **Expected**: Rejected — no rule is created on either account
+- **Expected**: Rejected — no rule is created on either account. The page
+  renders the wrong-account card (not the generic "Invalid link" card): it
+  names the **masked** issued-for account (e.g. `k•••••h@gmail.com` — never
+  the full address) and the profile label, states which account the visitor
+  is signed in as, and offers a sign-out control that returns to the same
+  approve URL. Only forged/tampered links (A7) get the generic invalid card
 
 ### A6: Unauthenticated click requires the owner's sign-in
 - Open a valid link in a signed-out browser

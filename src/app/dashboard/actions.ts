@@ -15,6 +15,17 @@ import * as jose from "jose";
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 /**
+ * Every dashboard mutation must refresh /dashboard AND the per-profile
+ * routes under /dashboard/agents/[slug] (plus /dashboard/accounts) — the
+ * 'layout' scope covers the whole segment. A plain
+ * revalidatePath("/dashboard") would leave the slug routes stale, which
+ * silently breaks every mutation now that profiles live on their own routes.
+ */
+function revalidateDashboard() {
+  revalidatePath("/dashboard", "layout");
+}
+
+/**
  * getDbUser() throws for two reasons a PUBLIC-facing page must not 500 on:
  * signed out ("Unauthorized"), and Clerk-authenticated but with no users row
  * yet ("User not found in DB" — a bystander who has a Clerk session but has
@@ -91,7 +102,7 @@ export async function createDelegation(formData: FormData) {
     // Self-heal: re-materialize onto the delegate's Default Profile in case a
     // prior sync was missed (e.g. the profile didn't exist yet).
     await syncDefaultProfileDelegatedAccess(delegateUser.email);
-    revalidatePath("/dashboard");
+    revalidateDashboard();
     return;
   }
 
@@ -122,7 +133,7 @@ export async function createDelegation(formData: FormData) {
     reactivated: existing?.status === 'revoked',
   });
 
-  revalidatePath("/dashboard");
+  revalidateDashboard();
 }
 
 /**
@@ -150,7 +161,7 @@ export async function revokeDelegation(delegationId: string) {
   // the delegation too, but the rows should not linger regardless.
   await db.delete(keyEmailAccess).where(eq(keyEmailAccess.delegationId, delegationId));
 
-  revalidatePath("/dashboard");
+  revalidateDashboard();
 }
 
 // ─── Proxy Keys ─────────────────────────────────────────────────────────────
@@ -230,7 +241,7 @@ export async function createProxyKey(formData: FormData) {
     });
   }
 
-  revalidatePath("/dashboard");
+  revalidateDashboard();
 
   // We return the private key and proxy key string so the UI can construct the generated JSON
   return {
@@ -246,7 +257,7 @@ export async function revokeProxyKey(keyId: string) {
   if (!key || key.userId !== dbUser.id) throw new Error("Unauthorized");
 
   await db.update(proxyKeys).set({ revokedAt: new Date() }).where(eq(proxyKeys.id, keyId));
-  revalidatePath("/dashboard");
+  revalidateDashboard();
 }
 
 export async function rollProxyKey(keyId: string) {
@@ -288,7 +299,7 @@ export async function rollProxyKey(keyId: string) {
   // Revoke old key
   await db.update(proxyKeys).set({ revokedAt: new Date() }).where(eq(proxyKeys.id, keyId));
 
-  revalidatePath("/dashboard");
+  revalidateDashboard();
 }
 
 // ─── Access Rules ───────────────────────────────────────────────────────────
@@ -379,7 +390,7 @@ export async function createRule(formData: FormData): Promise<RuleActionResult> 
     } : {}),
   });
 
-  revalidatePath("/dashboard");
+  revalidateDashboard();
   return { ok: true };
 }
 
@@ -458,7 +469,7 @@ export async function updateRule(formData: FormData): Promise<RuleActionResult> 
     } : {}),
   });
 
-  revalidatePath("/dashboard");
+  revalidateDashboard();
   return { ok: true };
 }
 
@@ -471,7 +482,7 @@ export async function deleteRule(id: string) {
   }
 
   await db.delete(accessRules).where(eq(accessRules.id, id));
-  revalidatePath("/dashboard");
+  revalidateDashboard();
 }
 
 const SHEET_ACTION_TYPES = ['sheet_read', 'sheet_read_write', 'sheet_block'] as const;
@@ -554,7 +565,7 @@ async function exposeFilesFromPicker(
     }
   }
 
-  revalidatePath("/dashboard");
+  revalidateDashboard();
   revalidatePath("/dashboard/accounts");
 }
 
@@ -597,7 +608,7 @@ export async function setSheetRulePermission(ruleId: string, actionType: string)
     .set({ actionType, updatedAt: new Date() })
     .where(eq(accessRules.id, ruleId));
 
-  revalidatePath("/dashboard");
+  revalidateDashboard();
 }
 
 /**
@@ -626,7 +637,7 @@ export async function assignRulesToKey(keyId: string, ruleIds: string[]) {
       .onConflictDoNothing();
   }
 
-  revalidatePath("/dashboard");
+  revalidateDashboard();
 }
 
 /**
@@ -647,7 +658,7 @@ export async function unassignRuleFromKey(keyId: string, ruleId: string) {
     eq(keyRuleAssignments.accessRuleId, ruleId),
   ));
 
-  revalidatePath("/dashboard");
+  revalidateDashboard();
 }
 
 export async function applyRecommendedSecurityRules() {
@@ -661,7 +672,7 @@ export async function applyRecommendedSecurityRules() {
       eq(accessRules.actionType, 'read_blacklist'),
     ));
   if (existing.length > 0) {
-    revalidatePath("/dashboard");
+    revalidateDashboard();
     return;
   }
 
@@ -702,7 +713,7 @@ export async function applyRecommendedSecurityRules() {
   await db.insert(accessRules).values(rulesToInsert);
   const { captureServerEvent } = await import("@/lib/posthogServer");
   captureServerEvent(dbUser.clerkUserId, "shield_enabled", { rules: rulesToInsert.length });
-  revalidatePath("/dashboard");
+  revalidateDashboard();
 }
 
 // ─── Send to Anyone ────────────────────────────────────────────────────────
@@ -768,7 +779,7 @@ export async function enableSendToAnyone(keyId: string) {
     const { captureServerEvent } = await import("@/lib/posthogServer");
     captureServerEvent(dbUser.clerkUserId, "send_all_enabled", { source: "dashboard" });
   }
-  revalidatePath("/dashboard");
+  revalidateDashboard();
 }
 
 // ─── Magic-Link Approvals (connector-growth Phase C) ───────────────────────
@@ -871,6 +882,50 @@ async function grantActiveForApproval(
   return false;
 }
 
+/** What the approve page needs to render the wrong-account card. */
+export interface WrongAccountDetails {
+  maskedOwnerEmail: string;
+  keyLabel: string;
+  action: string;
+  /** The REAL analytics request id, recomputed against the resolved owner. */
+  requestId: string;
+  /** Whoever actually opened the link — their own email, shown unmasked. */
+  signedInEmail: string;
+}
+
+/**
+ * Distinguish "wrong signed-in user" from a forged link. `k` (proxyKeyId) is
+ * in the URL in cleartext, so it resolves the link's true owner:
+ * proxy_keys.id → userId → users.email. Recomputing the HMAC against the
+ * RESOLVED owner proves FGAC authored this exact link for that user —
+ * a tampered link verifies against nobody and stays generically invalid
+ * (QA capability 14 A7). Returning the owner's email is safe only behind
+ * that proof, and it goes out masked regardless.
+ */
+async function resolveWrongAccountLink(
+  params: ApprovalSearchParams,
+): Promise<Omit<WrongAccountDetails, "signedInEmail"> | null> {
+  if (!params.k || !params.a || !params.s) return null;
+  const { verifyApprovalParams } = await import("@/lib/approvalLinks");
+  const { maskEmail } = await import("@/lib/maskEmail");
+  // Revoked keys are deliberately included: the owner should still be told to
+  // switch accounts, and then sees the honest "profile was revoked" message.
+  const row = await db.select({ label: proxyKeys.label, ownerId: users.id, ownerEmail: users.email })
+    .from(proxyKeys)
+    .innerJoin(users, eq(users.id, proxyKeys.userId))
+    .where(eq(proxyKeys.id, params.k))
+    .limit(1).then(r => r[0]);
+  if (!row) return null;
+  const verified = await verifyApprovalParams(row.ownerId, params);
+  if (!verified.ok) return null;
+  return {
+    maskedOwnerEmail: maskEmail(row.ownerEmail),
+    keyLabel: row.label,
+    action: verified.payload.action,
+    requestId: verified.payload.requestId,
+  };
+}
+
 /**
  * Pre-flight state of an approval link, so the approve page can render the
  * truth at load time instead of letting the user click into an error.
@@ -880,18 +935,32 @@ async function grantActiveForApproval(
  * only question that matters is whether the grant it describes is ALREADY
  * ACTIVE. `used_inactive` and `expired` are gone, and with them both dead
  * ends the launch cohort rage-clicked.
+ *
+ * `wrong_account` re-added 2026-08-30: the pre-08-25 JWT links had an
+ * explicit different-account branch, and folding userId into the HMAC made a
+ * wrong-account open indistinguishable from a forged link — a support-visible
+ * regression. No approval is possible from this state; it is purely the
+ * diagnosis the user needs to switch accounts.
  */
 export async function resolveApprovalLink(params: ApprovalSearchParams): Promise<
   | { status: "invalid" }
+  | { status: "wrong_account"; details: WrongAccountDetails }
   | { status: "fresh" | "already_granted"; payload: ApprovalPayload }
 > {
   const { verifyApprovalParams } = await import("@/lib/approvalLinks");
   // A visitor with no FGAC account (or none yet) is not the owner of any link,
-  // so this is exactly the "invalid" case — never a 500.
+  // so this is exactly the "invalid" case — never a 500. Kept distinct from
+  // wrong_account: with no users row there is no signed-in FGAC identity to
+  // contrast the owner against, and the generic card already says to sign in
+  // as the account the agent is connected to.
   const dbUser = await tryGetDbUser();
   if (!dbUser) return { status: "invalid" };
   const verified = await verifyApprovalParams(dbUser.id, params);
-  if (!verified.ok) return { status: "invalid" };
+  if (!verified.ok) {
+    const wrong = await resolveWrongAccountLink(params);
+    if (wrong) return { status: "wrong_account", details: { ...wrong, signedInEmail: dbUser.email } };
+    return { status: "invalid" };
+  }
   const p = verified.payload;
   const active = await grantActiveForApproval(p, p.proxyKeyId);
   return { status: active ? "already_granted" : "fresh", payload: p };
@@ -989,7 +1058,7 @@ async function applyFileGrantApproval(opts: {
     captureServerEvent(dbUser.clerkUserId, "approval_link_approved", {
       action: p.action, substituted, granted_count: verified.length, request_id: p.requestId,
     });
-    revalidatePath("/dashboard");
+    revalidateDashboard();
     const names = verified.map(v => v.name || v.id).join(", ");
     const level = readWrite ? "read & write" : "read-only";
     return grantedResult(
@@ -1018,7 +1087,7 @@ async function applyFileGrantApproval(opts: {
   if (grant.state === "missing") {
     await markApprovalRequestApproved(p.requestId);
     captureServerEvent(dbUser.clerkUserId, "approval_link_approved", { action: p.action, request_id: p.requestId });
-    revalidatePath("/dashboard");
+    revalidateDashboard();
     return {
       ok: true,
       description: describe(),
@@ -1029,7 +1098,7 @@ async function applyFileGrantApproval(opts: {
   }
   await markApprovalRequestApproved(p.requestId);
   captureServerEvent(dbUser.clerkUserId, "approval_link_approved", { action: p.action, request_id: p.requestId });
-  revalidatePath("/dashboard");
+  revalidateDashboard();
   return grantedResult(fileId, describe());
 }
 
@@ -1076,6 +1145,15 @@ export async function approveMagicLink(
 
   const verified = await verifyApprovalParams(dbUser.id, params);
   if (!verified.ok) {
+    // Stale form POST from a session that switched accounts after the page
+    // rendered: give the same wrong-account diagnosis the page itself shows.
+    const wrong = await resolveWrongAccountLink(params);
+    if (wrong) {
+      return {
+        ok: false,
+        reason: `This link was issued for ${wrong.maskedOwnerEmail} (profile "${wrong.keyLabel}"), but you are signed in as ${dbUser.email}. Sign out, sign back in as ${wrong.maskedOwnerEmail}, then open the link again — it stays valid.`,
+      };
+    }
     return {
       ok: false,
       reason: "This approval link is not valid for your account. If an agent gave it to you, make sure you are signed in as the account the agent is connected to.",
@@ -1143,6 +1221,6 @@ export async function approveMagicLink(
 
   await markApprovalRequestApproved(p.requestId);
   captureServerEvent(dbUser.clerkUserId, "approval_link_approved", { action: p.action, request_id: p.requestId });
-  revalidatePath("/dashboard");
+  revalidateDashboard();
   return { ok: true, description: describeApproval(p) };
 }

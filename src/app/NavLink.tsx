@@ -6,11 +6,15 @@ import { usePathname } from 'next/navigation';
 /**
  * Top-nav link. The active route is marked with the primary color and a heavier
  * weight, matching the design — `/dashboard` only counts as active on an exact
- * match so it does not stay lit while you are on `/dashboard/accounts`.
+ * match so it does not stay lit while you are on `/dashboard/accounts`. The
+ * exception is the per-profile routes (/dashboard/agents/[slug]), which ARE
+ * the Agent Profiles surface, so they keep that nav item lit.
  */
 export function NavLink({ href, children }: { href: string; children: React.ReactNode }) {
   const pathname = usePathname();
-  const isActive = pathname === href;
+  const isActive =
+    pathname === href ||
+    (href === '/dashboard' && pathname.startsWith('/dashboard/agents/'));
 
   return (
     <Link
