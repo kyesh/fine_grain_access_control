@@ -7,6 +7,7 @@ import { markApprovalRequestOpened } from "@/lib/approvalRequests";
 import { captureServerEvent } from "@/lib/posthogServer";
 import { approveMagicLink, resolveApprovalLink } from "../actions";
 import { ApproveSubmitButton } from "./ApproveSubmitButton";
+import { SignOutAndReturn } from "./SignOutAndReturn";
 import { FileApprovalFlow } from "./FileApprovalFlow";
 import { ApprovedSettling } from "./ApprovedSettling";
 
@@ -145,12 +146,45 @@ export default async function ApprovePage({
   const client = await clientClassification();
   captureServerEvent(clerkUserId ?? "anonymous-approve", "approval_link_opened", {
     status: resolved.status,
-    request_id: resolved.status === "invalid" ? undefined : resolved.payload.requestId,
-    action: resolved.status === "invalid" ? peekApprovalParams(link).action : resolved.payload.action,
+    // wrong_account carries the REAL request id (recomputed against the
+    // resolved owner), so these opens join the funnel instead of vanishing
+    // into request_id: undefined — recovery becomes measurable.
+    request_id:
+      resolved.status === "invalid" ? undefined
+        : resolved.status === "wrong_account" ? resolved.details.requestId
+          : resolved.payload.requestId,
+    action:
+      resolved.status === "invalid" ? peekApprovalParams(link).action
+        : resolved.status === "wrong_account" ? resolved.details.action
+          : resolved.payload.action,
     ...client,
   });
-  if (resolved.status !== "invalid") {
+  if (resolved.status === "fresh" || resolved.status === "already_granted") {
+    // Not marked for wrong_account: the OWNER hasn't seen the link yet, and
+    // "opened" gating any reminder logic must keep meaning the owner did.
     await markApprovalRequestOpened(resolved.payload.requestId);
+  }
+
+  if (resolved.status === "wrong_account") {
+    const w = resolved.details;
+    return (
+      <Card>
+        <h1 className="mb-2 text-xl font-bold text-foreground">
+          This link belongs to a different account
+        </h1>
+        <div className="mb-4 rounded-md border border-warning-foreground/30 bg-warning px-4 py-3 text-sm text-warning-foreground [overflow-wrap:anywhere]" data-testid="wrong-account-notice">
+          This approval link was issued for <strong>{w.maskedOwnerEmail}</strong>{" "}
+          (profile &ldquo;{w.keyLabel}&rdquo;), but you are signed in as{" "}
+          <strong>{w.signedInEmail}</strong>.
+        </div>
+        <p className="text-sm text-muted-foreground">
+          Approval links only work for the account they were issued for.
+          Sign out and sign back in as <strong>{w.maskedOwnerEmail}</strong> —
+          this link stays valid and will bring you right back here.
+        </p>
+        <SignOutAndReturn returnTo={`/dashboard/approve?${linkQuery(link)}`} />
+      </Card>
+    );
   }
 
   if (resolved.status === "invalid") {

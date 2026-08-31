@@ -87,8 +87,17 @@ the other way around):
 
 Rules:
 
-- `status` is `pass` | `fail` | `skip`. A `skip` **requires** `reason`; a `pass`/`fail`
-  **requires** `evidence` citing observed output.
+- `status` is `pass` | `fail` | `skip` | `blocked`. A `skip` or `blocked` **requires**
+  `reason`; a `pass`/`fail` **requires** `evidence` citing observed output.
+- **`skip` vs `blocked` — these are different claims.** `skip` means the assertion does
+  not apply in this environment by design (e.g. a dashboard-only assertion in a headless
+  run). `blocked` means the assertion SHOULD have run and could not — the reason must
+  name what unblocks it: a **USER ACTION** (e.g. "USER ACTION REQUIRED: re-auth USER_B —
+  institutional SSO wall") or an **upstream** dependency (e.g. "upstream: Google no
+  longer produces the partial-apply shape"). The coverage checker prints every blocked
+  row with its reason in a dedicated ⛔ section so the user is explicitly flagged.
+  Runners: a sign-in wall, an expired grant, or a missing credential is ALWAYS
+  `blocked`, never `skip` — the user can often fix it in one minute if told plainly.
 - `scope` (optional, non-empty array of capability ids) marks a **targeted re-test**
   (CLAUDE.md → "QA Subagent Architecture"): the coverage checker then requires complete
   coverage of the scoped capabilities only, and prints a `SCOPED RUN` banner naming

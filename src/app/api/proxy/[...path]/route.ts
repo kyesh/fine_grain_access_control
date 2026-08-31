@@ -715,7 +715,9 @@ async function handleProxyRequest(request: NextRequest, params: { path: string[]
       return NextResponse.json({
         error: `The Google account '${targetEmail}' is connected WITHOUT Gmail permission — most likely the Gmail checkbox was left unchecked on Google's consent screen. ` +
           `Every Gmail call will fail until the account owner reconnects and approves Gmail access; retrying will not help. ` +
-          `One-click fix (opens Google's consent screen directly): ${DASHBOARD_URL}/dashboard/accounts?reconnect=1`,
+          // for= binds the link to the account it repairs — the Accounts page
+          // refuses to auto-fire reconnect for a different signed-in user.
+          `One-click fix (opens Google's consent screen directly): ${DASHBOARD_URL}/dashboard/accounts?reconnect=1&for=${encodeURIComponent(targetEmail)}`,
       }, { status: 403 });
     }
 

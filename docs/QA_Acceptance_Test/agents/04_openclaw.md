@@ -23,7 +23,7 @@
      node /home/node/.openclaw/skills/fgac/scripts/auth.js --action login
    ```
    *(Complete OAuth flow via `/browser-agent`, then approve connection in dashboard:*
-   *Navigate to `http://localhost:3000/dashboard?tab=connections`, find the pending connection, select a proxy key and click **Approve**.*
+   *Navigate to `http://localhost:3000/dashboard#connected-agents`, find the pending connection, select a proxy key and click **Approve**.*
    *⚠️ NEVER approve connections via direct DB writes — always use the Web UI)*
 
 ## Proof of Authenticity
@@ -92,6 +92,11 @@ curl -X POST http://localhost:18790/api/chat \
 
 ### A6: List accounts shows delegated
 - [ ] accounts.js returns both own and delegated emails through gateway
+
+### A8: List accounts reports per-account scope state
+- [ ] Gateway response includes `account_details` with three-state
+  `gmail`/`drive_file` per account (`granted` on healthy QA accounts); any
+  `reconnect_url` is bound with `&for=<email>`
 
 ---
 

@@ -18,7 +18,7 @@ for skill testing. Phase 1 handles interactive auth, Phase 2 uses `claude -p` he
    FGAC_ROOT_URL=http://localhost:3000 node test/qa-envs/cc-cli/.claude/skills/fgac/scripts/auth.js --action login
    ```
    Complete OAuth in browser via `/browser-agent`, then approve connection in dashboard:
-   Navigate to `http://localhost:3000/dashboard?tab=connections`, find the pending connection,
+   Navigate to `http://localhost:3000/dashboard#connected-agents`, find the pending connection,
    select a proxy key and click **Approve**.
    ⚠️ NEVER approve connections via direct DB writes — always use the Web UI.
 3. **Retrieve proxy key**:
@@ -101,6 +101,11 @@ claude -p "Using the fgac skill, what email accounts can I access?" \
 
 ### A6: List accounts shows delegated
 - [ ] accounts.js returns both own and delegated emails
+
+### A8: List accounts reports per-account scope state
+- [ ] accounts.js output includes `account_details` with three-state
+  `gmail`/`drive_file` per account (`granted` on healthy QA accounts); any
+  `reconnect_url` is bound with `&for=<email>`
 
 ---
 

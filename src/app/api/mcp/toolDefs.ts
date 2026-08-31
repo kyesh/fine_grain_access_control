@@ -31,7 +31,7 @@ export const TOOL_DEFS = {
   list_accounts: {
     name: 'list_accounts',
     title: 'List accessible email accounts',
-    description: 'Lists the email accounts this connection can access through FGAC.',
+    description: "Lists the email accounts this connection can access through FGAC. account_details reports each account's Google scope state: gmail and drive_file are 'granted', 'missing', or 'unknown' ('unknown' means the state could not be determined right now — treat the account as usable and let a real call settle it; never treat 'unknown' as missing). A 'missing' scope means every call needing it will fail until the account is reconnected — the entry's reconnect_url is a one-click fix link to give the user; it is bound to that specific account, so the user must open it while signed in to FGAC as that account.",
     readOnly: true,
   },
   gmail_list: {
@@ -108,7 +108,7 @@ export const TOOL_DEFS = {
   docs_edit: {
     name: 'docs_edit',
     title: 'Edit a Google Doc (batchUpdate)',
-    description: 'Apply Google Docs batchUpdate requests to a document — the full Docs editing surface: insert or delete text, tables, text styles, headings, images, page breaks, positional edits (https://developers.google.com/docs/api/reference/rest/v1/documents/batchUpdate). Examples: append text {"insertText":{"endOfSegmentLocation":{},"text":"..."}}; insert a 3x3 table {"insertTable":{"rows":3,"columns":3,"endOfSegmentLocation":{}}}; replace every occurrence {"replaceAllText":{"containsText":{"text":"old","matchCase":true},"replaceText":"new"}}. Requires a Read & Write FGAC rule for the document. Doc comments live in the Drive API — use comments_read / comments_add. To create a new document, use google_api_modify (POST v1/documents).',
+    description: 'Apply Google Docs batchUpdate requests to edit documents — insert or delete text, tables, text styles, headings, images, page breaks, and positional content (https://developers.google.com/docs/api/reference/rest/v1/documents/batchUpdate). Examples: append text {"insertText":{"endOfSegmentLocation":{},"text":"..."}}, insert 3x3 table {"insertTable":{"rows":3,"columns":3,"endOfSegmentLocation":{}}}, or replace every occurrence {"replaceAllText":{"containsText":{"text":"old","matchCase":true},"replaceText":"new"}}. Requires Read & Write FGAC access. Doc comments live in Drive API — use comments_read / comments_add. Create new documents with google_api_modify (POST v1/documents). Inserted text inherits the target paragraph\'s style; add updateParagraphStyle NORMAL_TEXT sweep when replacing body content. Deletes are auto-verified: response ends with "verified" or returns a warning plus the actual end index if a delete applied only partially (ranges crossing table boundaries may do this despite success).',
     readOnly: false,
     destructive: true,
   },

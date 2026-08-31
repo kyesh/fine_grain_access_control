@@ -3,6 +3,9 @@
 import { useUser, useReverification } from "@clerk/nextjs";
 import { useState } from "react";
 import { isReverificationCancelledError } from "@clerk/nextjs/errors";
+import {
+  startGoogleReconnect, DRIVE_FILE_SCOPE, GMAIL_MODIFY_SCOPE, type ClerkUserLike,
+} from "./googleReconnect";
 
 export function ConnectGoogleWarning() {
   const { user } = useUser();
@@ -10,33 +13,14 @@ export function ConnectGoogleWarning() {
 
   const connectAction = async () => {
     if (!user) return;
-    const existingGoogleAccount = user.externalAccounts.find(acc => acc.provider === 'google' || acc.provider === 'oauth_google' as any);
-      
-    let verificationUrl: string | undefined;
-
-    if (existingGoogleAccount && existingGoogleAccount.verification?.status === 'verified') {
-      const response = await existingGoogleAccount.reauthorize({ 
-        additionalScopes: ['https://www.googleapis.com/auth/gmail.modify'],
-        redirectUrl: window.location.href,
-        oidcPrompt: 'consent'
-      });
-      verificationUrl = response.verification?.externalVerificationRedirectURL?.href;
-    } else {
-      if (existingGoogleAccount) {
-        await existingGoogleAccount.destroy();
-      }
-      const response = await user.createExternalAccount({
-        strategy: "oauth_google",
-        redirectUrl: window.location.href,
-      });
-      verificationUrl = response.verification?.externalVerificationRedirectURL?.href;
-    }
-
-    if (verificationUrl) {
-      window.location.href = verificationUrl;
-    } else {
-      setIsLoading(false); // In case it returns without a URL
-    }
+    // Shared reconnect leg — this card once carried its own gmail.modify-only
+    // copy of the flow, leaving repaired grants without drive.file.
+    const verificationUrl = await startGoogleReconnect(
+      user as unknown as ClerkUserLike,
+      window.location.href,
+      [GMAIL_MODIFY_SCOPE, DRIVE_FILE_SCOPE],
+    );
+    window.location.href = verificationUrl;
   };
 
   const enhancedConnectAction = useReverification(connectAction);

@@ -332,3 +332,40 @@ tool error now delivers; watch whether the same person persists across days
 with `error_reason` in (`insufficientPermissions`,
 `ACCESS_TOKEN_SCOPE_INSUFFICIENT`) trend to zero on `$mcp_tool_call` — the
 pre-flight should absorb them before Google is called.
+
+**Quiet-probe caveat (2026-08-30):** `list_accounts` now probes every
+accessible account's token to report per-account scope state
+(`account_details`). Those probes run `getGoogleToken` in **quiet mode** —
+they fire NO `google_token_identity_fallback` / `google_token_fetch_failed`
+events and stamp no `google_token_error`/`token_ms` tool-call props — so the
+§7.4 and §7.6-adjacent counts above keep meaning "a real tool call hit this",
+not "someone listed accounts". `google_scope_missing` itself never fired from
+list_accounts (it comes from the denial pre-flights, which list_accounts does
+not run).
+
+**7.7 — Wrong-account reconnect opens.** A reconnect link is bound to the
+account it repairs (`?reconnect=1&for=<email>`, 2026-08-30); opened by a
+different signed-in FGAC user, the Accounts page suppresses the auto-fire and
+warns instead. Suppression also removed the old forensic signature (the wrong
+user's `google_reconnect_started` seconds after another user's
+`google_scope_missing`), so the card fires this client event to keep the
+population countable:
+
+```sql
+SELECT toDate(timestamp) AS day, count() AS opens, uniq(person_id) AS users,
+       uniq(properties.intended_for) AS intended_accounts
+FROM events
+WHERE event = 'google_reconnect_wrong_account'
+  AND properties.environment = 'production'
+  AND timestamp > now() - INTERVAL 30 DAY
+GROUP BY day ORDER BY day
+```
+
+Verified end-to-end 2026-08-31 (pre-merge): QA opens from the preview and local
+dev environments landed with `intended_for` populated, one event per open —
+which is why the environment filter above matters for this event in particular.
+
+Recovery check: for each `intended_for`, look for a later
+`google_reconnect_started` by the person whose identity matches that address —
+present means the right user eventually ran the repair; absent means the
+affected account is still stranded and worth proactive outreach.

@@ -17,10 +17,12 @@
   on the Connected Google Account card
 - **Expected**: The browser navigates to Google's OAuth consent (account
   chooser or consent screen) — never a silent no-op. After completing consent,
-  the user returns to `/dashboard/accounts?reconnected=1` with a "✓ Google
-  reconnected." note, and the scope badges show `gmail.modify` + `drive.file`
-  (not "Scopes missing or revoked"). A `google_reconnect_started` event fires
-  with `source: accounts_page`
+  the user returns to `/dashboard/accounts?reconnected=1`, sees a brief
+  "Confirming Google permissions…" state, then "✓ Google reconnected —
+  gmail.modify and drive.file confirmed." (success is verified against the
+  token bridge, never assumed), and the scope badges show `gmail.modify` +
+  `drive.file`. A `google_reconnect_started` event fires with
+  `source: accounts_page`
 
 ### A2: A broken grant routes the picker into reconnect instead of dying
 - With a broken/expired Google grant (token bridge `/api/auth/
@@ -57,3 +59,35 @@
   that pass" (or token failure) advice with a retry path — it must NOT
   redirect back to Google automatically (no consent loop), and nothing is
   granted
+
+### A6: A reconnect link for a different account warns instead of auto-firing
+- As USER_A (signed in to FGAC), open
+  `/dashboard/accounts?reconnect=1&for=<USER_B_EMAIL>` — a reconnect link
+  minted for USER_B's account
+- **Expected**: The reconnect flow does NOT auto-fire (no navigation to
+  Google's consent), and a warning card renders naming both accounts: the
+  link is for USER_B, the session is USER_A, reconnecting here would repair
+  the wrong account — sign out and sign back in as USER_B. The manual
+  "Reconnect Google" button remains available. A
+  `google_reconnect_wrong_account` event fires (once) carrying
+  `intended_for: <USER_B_EMAIL>`, and no `google_reconnect_started` fires.
+  With `for=<USER_A_EMAIL>` (or any address on USER_A's Clerk account) the
+  auto-fire behaves exactly as before — no warning, no wrong-account event
+
+### A7: Post-reconnect success is verified, not assumed
+- Land on `/dashboard/accounts?reconnected=1` while the Google grant is still
+  missing a scope (e.g. deny the drive.file checkbox on the consent screen
+  before returning, or craft the URL directly with a scope-less grant)
+- **Expected**: NO unconditional "✓ Google reconnected." — the button polls
+  the token bridge (tolerating Clerk scope-propagation lag, ~4×1.5 s) and
+  then renders a failure state naming the still-missing scope(s) with advice
+  to reconnect and approve every checkbox. A `google_reconnect_incomplete`
+  event fires with `missing_scopes`
+
+### A8: Scope badges are independent per scope
+- With an account holding gmail.modify but NOT drive.file (or vice versa),
+  open `/dashboard/accounts`
+- **Expected**: The granted scope shows its normal badge and the missing one
+  shows its own "missing" error badge — never one combined state rendering
+  both green from a single boolean. The Connected Google Account card's
+  reconnect guidance still appears when either scope is missing

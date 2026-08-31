@@ -21,7 +21,7 @@
    ```
 2. Complete OAuth flow (via `/browser-agent`) to get access token
 3. Approve connection via `/browser-agent`:
-   - Navigate to `$BASE_URL/dashboard?tab=connections`
+   - Navigate to `$BASE_URL/dashboard#connected-agents`
    - Find the pending connection for this client
    - Select a proxy key from the dropdown and click **Approve**
    - ⚠️ **NEVER approve connections via direct DB writes — always use the Web UI**
@@ -115,6 +115,12 @@ curl -s $BASE_URL/api/mcp -X POST \
 
 ### A6: list_accounts shows delegated emails
 - [ ] Returns both own and delegated email
+
+### A8: list_accounts reports per-account scope state
+- [ ] Same call: `account_details` present with `email`/`delegated` and
+  three-state `gmail`/`drive_file` (`granted` on healthy QA accounts);
+  `reconnect_url` only on accounts with a definitive problem, bound with
+  `&for=<email>`
 
 ---
 

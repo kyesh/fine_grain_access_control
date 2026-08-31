@@ -35,6 +35,7 @@ import { installFingerprint, parseInitializeClientInfo, type McpClientInfo } fro
 import { inSuccessSample, AUTH_SUCCESS_SAMPLE } from '@/lib/authSampling';
 import { ensureDefaultProfile } from '@/db/defaultProfile';
 import { mintApprovalLink, type ApprovalAction } from '@/lib/approvalLinks';
+import { connectionsDeepLink } from '@/lib/dashboardAgentLinks';
 import { recordApprovalMint } from '@/lib/approvalRequests';
 import { TOOL_DEFS, toolAnnotations, type FgacToolDef } from './toolDefs';
 import {
@@ -59,6 +60,25 @@ function cleanUrl(value: string | undefined | null): string | null {
 const DASHBOARD_URL = cleanUrl(process.env.NEXT_PUBLIC_APP_URL)
   || (process.env.VERCEL_PROJECT_PRODUCTION_URL ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL.trim()}` : null)
   || 'http://localhost:3000';
+
+/**
+ * One-click reconnect link, bound to the account it is meant to repair. The
+ * `for=` param lets the Accounts page refuse to auto-fire reconnect when the
+ * browser that opens the link is signed in to a DIFFERENT FGAC user — without
+ * it, the wrong user's grant gets "repaired" and reported as success while
+ * the affected account stays broken (2026-08-30 incident). `targetEmail` is
+ * the mailbox owner: for delegated mailboxes that owner — not the key owner —
+ * is the one who must run the reconnect.
+ */
+function reconnectLink(targetEmail: string): string {
+  return `${DASHBOARD_URL}/dashboard/accounts?reconnect=1&for=${encodeURIComponent(targetEmail)}`;
+}
+
+/** Per-account bound on the list_accounts scope probes — deliberately far
+ * below CLERK_TOKEN_TIMEOUT_MS (15 s): list_accounts is the first tool most
+ * agents call, and the probes run one per accessible account. A probe that
+ * misses the bound reports scope state 'unknown', never an error. */
+const LIST_ACCOUNTS_SCOPE_PROBE_TIMEOUT_MS = 4_000;
 
 // ─── Connection Resolution ──────────────────────────────────────────────────
 
@@ -226,7 +246,7 @@ async function resolveConnection(
       authorized: false,
       reason: 'pending_approval',
       connectionId: connection.id,
-      dashboardUrl: `${DASHBOARD_URL}/dashboard?tab=connections&highlight=${connection.id}`,
+      dashboardUrl: await connectionsDeepLink(DASHBOARD_URL, user.id),
     };
   }
 
@@ -357,8 +377,17 @@ type GoogleTokenResult = {
   hasDriveFileScope?: boolean;
 };
 
+/**
+ * `quiet` suppresses the PostHog captures and tool-call props this function
+ * stamps (google_token_identity_fallback / google_token_fetch_failed /
+ * google_token_error / token_ms). The list_accounts scope probe runs this
+ * once per accessible account on the first tool most agents call — letting
+ * those probes fire the events would corrupt the monitoring counts in
+ * docs/monitoring.md §7.4/§7.6, whose queries count the events unfiltered.
+ */
 async function getGoogleToken(
   targetEmail: string, keyOwner: { id: string; email: string; clerkUserId: string },
+  { quiet = false }: { quiet?: boolean } = {},
 ): Promise<GoogleTokenResult | null> {
   let tokenOwnerClerkId: string;
 
@@ -393,10 +422,12 @@ async function getGoogleToken(
       // $mcp_tool_call, so `uniq(person)` over it is the size of the drifted
       // population still being rescued. The monitoring runbook watches this
       // count fall to zero as the population self-heals (docs/monitoring.md).
-      addToolCallProps({ google_token_identity_fallback: true });
-      captureServerEvent(keyOwner.clerkUserId, 'google_token_identity_fallback', {
-        via: 'mcp',
-      });
+      if (!quiet) {
+        addToolCallProps({ google_token_identity_fallback: true });
+        captureServerEvent(keyOwner.clerkUserId, 'google_token_identity_fallback', {
+          via: 'mcp',
+        });
+      }
       tokenOwnerClerkId = keyOwner.clerkUserId;
     } else {
       return null;
@@ -410,10 +441,10 @@ async function getGoogleToken(
       client.users.getUserOauthAccessToken(tokenOwnerClerkId, 'oauth_google'),
       CLERK_TOKEN_TIMEOUT_MS,
     );
-    addToolCallProps({ token_ms: Date.now() - tokenStarted });
+    if (!quiet) addToolCallProps({ token_ms: Date.now() - tokenStarted });
     const grant = tokenResponse.data?.[0];
     if (!grant?.token) {
-      addToolCallProps({ google_token_error: 'no_token' });
+      if (!quiet) addToolCallProps({ google_token_error: 'no_token' });
       return null;
     }
     // Clerk reports the scopes Google actually granted (the dashboard's
@@ -430,17 +461,19 @@ async function getGoogleToken(
     // mode (Clerk 422: grant stored without a refresh token — seen on the
     // dev instance 2026-08-20, cause unconfirmed in prod). Without this,
     // these failures are indistinguishable from generic errors in analytics.
-    addToolCallProps({ token_ms: Date.now() - tokenStarted });
     const message = err instanceof Error ? err.message : String(err);
     const reason = err instanceof Error && err.name === 'TimeoutError'
       ? 'timeout'
       : /refresh/i.test(message) ? 'refresh_failed' : 'clerk_error';
-    addToolCallProps({ google_token_error: reason });
-    captureServerEvent(keyOwner.clerkUserId, 'google_token_fetch_failed', {
-      reason,
-      via: 'mcp',
-      account_delegated: targetEmail.toLowerCase() !== keyOwner.email.toLowerCase(),
-    });
+    if (!quiet) {
+      addToolCallProps({ token_ms: Date.now() - tokenStarted });
+      addToolCallProps({ google_token_error: reason });
+      captureServerEvent(keyOwner.clerkUserId, 'google_token_fetch_failed', {
+        reason,
+        via: 'mcp',
+        account_delegated: targetEmail.toLowerCase() !== keyOwner.email.toLowerCase(),
+      });
+    }
     console.error(`[MCP] Google token fetch failed (${reason}) for target mailbox:`, message);
     return null;
   }
@@ -628,7 +661,7 @@ const SCOPE_REASONS = new Set([
 
 function describe403(detail: string, targetEmail: string, r: GoogleErrorReason): string {
   const reconnect = `Ask the user to reconnect the account with this one-click link (it opens Google's consent screen directly): ` +
-    `${DASHBOARD_URL}/dashboard/accounts?reconnect=1 — then retry once after they confirm.`;
+    `${reconnectLink(targetEmail)} — then retry once after they confirm.`;
 
   // Throttling. Reconnecting the account does nothing here, and the retry the
   // old text suppressed is exactly the right move.
@@ -657,7 +690,7 @@ function describe403(detail: string, targetEmail: string, r: GoogleErrorReason):
   // retry, rather than asserting the scope cause the way the old text did.
   return `❌ Google denied the request (403${r.reason ? ` ${r.reason}` : ''})${detail ? `: ${detail}` : ''}. ` +
     `This is usually either temporary throttling or a missing/revoked OAuth scope for '${targetEmail}'. ` +
-    `Retry ONCE after a short pause — if it fails again it is the grant, not throttling, and reconnecting is the fix: ${DASHBOARD_URL}/dashboard/accounts?reconnect=1`;
+    `Retry ONCE after a short pause — if it fails again it is the grant, not throttling, and reconnecting is the fix: ${reconnectLink(targetEmail)}`;
 }
 
 function describeGoogleError(status: number, data: unknown, targetEmail: string): string {
@@ -670,7 +703,7 @@ function describeGoogleError(status: number, data: unknown, targetEmail: string)
     case 401:
       return `❌ Google authorization expired for '${targetEmail}'. STOP — do not retry; it will keep failing. ` +
         `Ask the user to reconnect this Google account with this one-click link (it opens Google's consent screen directly): ` +
-        `${DASHBOARD_URL}/dashboard/accounts?reconnect=1 — then retry once after they confirm.`;
+        `${reconnectLink(targetEmail)} — then retry once after they confirm.`;
     case 403:
       return describe403(detail, targetEmail, r);
     case 404:
@@ -902,6 +935,97 @@ const withSheetsGrace = (perm: FilePermission, doFetch: () => Promise<GoogleFetc
   withGrantGrace('sheet', perm, doFetch);
 const withDocsGrace = (perm: FilePermission, doFetch: () => Promise<GoogleFetchResult>) =>
   withGrantGrace('doc', perm, doFetch);
+
+// ─── docs_edit delete verification ──────────────────────────────────────────
+//
+// Google can apply a deleteContentRange only partially and still return 200
+// (observed 2026-08-30 when a range crossed a table boundary: ~190 chars of a
+// body-wide delete survived, response indicated success). The write stays a
+// byte-faithful passthrough; when a request array contains a delete we read
+// the body end index back and report facts — never our interpretation of the
+// content. Verification is best-effort: it can degrade to "unavailable" but
+// never turns a successful write into an error.
+
+/** Requests that never move body indices. */
+const DOCS_ZERO_DELTA_OPS = new Set([
+  'updateParagraphStyle', 'updateTextStyle', 'updateDocumentStyle',
+  'updateTableCellStyle', 'updateTableRowStyle', 'updateTableColumnProperties',
+  'updateSectionStyle',
+]);
+
+type DocsDeleteVerifyPlan =
+  | { hasDelete: false }
+  | { hasDelete: true; deterministic: boolean; expectedDelta: number };
+
+/**
+ * Decide whether a batchUpdate needs read-back verification and whether the
+ * net body-length change is exactly computable from the requests alone.
+ * Deterministic ops: deleteContentRange removes (endIndex - startIndex)
+ * indices, insertText adds the UTF-16 length of its text (JS string .length),
+ * style updates move nothing. Anything else — or any op targeting a non-body
+ * segment (segmentId) — makes the outcome non-deterministic; we then report
+ * before/after indices without an expectation.
+ */
+function planDocsDeleteVerification(requests: Record<string, unknown>[]): DocsDeleteVerifyPlan {
+  let hasDelete = false;
+  let deterministic = true;
+  let expectedDelta = 0;
+  for (const request of requests) {
+    for (const [op, rawArgs] of Object.entries(request)) {
+      const args = (rawArgs ?? {}) as Record<string, any>;
+      if (op === 'deleteContentRange') {
+        hasDelete = true;
+        const range = args.range as Record<string, any> | undefined;
+        if (range && typeof range.startIndex === 'number' && typeof range.endIndex === 'number' && !range.segmentId) {
+          expectedDelta -= range.endIndex - range.startIndex;
+        } else {
+          deterministic = false;
+        }
+      } else if (op === 'insertText') {
+        const targetsBody = !args.location?.segmentId && !args.endOfSegmentLocation?.segmentId;
+        if (typeof args.text === 'string' && targetsBody) {
+          expectedDelta += args.text.length;
+        } else {
+          deterministic = false;
+        }
+      } else if (!DOCS_ZERO_DELTA_OPS.has(op)) {
+        deterministic = false;
+      }
+    }
+  }
+  return hasDelete ? { hasDelete, deterministic, expectedDelta } : { hasDelete: false };
+}
+
+/** End index of the document body's last structural element, or null when the
+ * read fails — callers treat null as "verification unavailable". */
+async function fetchDocsBodyEndIndex(token: string, documentId: string, targetEmail: string): Promise<number | null> {
+  const result = await docsFetch(token, `${encodeURIComponent(documentId)}?fields=body(content(endIndex))`, 'GET', undefined, targetEmail);
+  if (!result.ok) return null;
+  const content = (result.data as { body?: { content?: Array<{ endIndex?: number }> } })?.body?.content;
+  const last = Array.isArray(content) && content.length > 0 ? content[content.length - 1] : null;
+  return typeof last?.endIndex === 'number' ? last.endIndex : null;
+}
+
+/** Verification line appended to the docs_edit result, or null for tier 0. */
+function docsDeleteVerifyNote(plan: DocsDeleteVerifyPlan, before: number | null, after: number | null): string | null {
+  if (!plan.hasDelete) return null;
+  if (before === null || after === null) {
+    addToolCallProps({ docs_verify_outcome: 'unavailable' });
+    return 'verification unavailable';
+  }
+  if (!plan.deterministic) {
+    addToolCallProps({ docs_verify_outcome: 'reported' });
+    return `body end ${after} (was ${before})`;
+  }
+  const expected = before + plan.expectedDelta;
+  if (after === expected) {
+    addToolCallProps({ docs_verify_outcome: 'verified' });
+    return 'verified';
+  }
+  addToolCallProps({ docs_verify_outcome: 'mismatch', docs_verify_expected: expected, docs_verify_actual: after });
+  console.warn(`[MCP] docs_edit delete verification mismatch: body end ${after}, expected ${expected}`);
+  return `body end ${after}, expected ${expected} — delete may have partially applied; read the document back.`;
+}
 
 async function checkFilePermission(kind: DriveFileKind, userId: string, proxyKeyId: string, fileId: string, isMutating: boolean) {
   const d = DRIVE_FILE_KINDS[kind];
@@ -1250,7 +1374,7 @@ async function resolveAccountAndToken(
 
   const googleToken = await getGoogleToken(targetEmail, conn.user);
   if (!googleToken) {
-    return resolveFailure('google_token_unavailable', `❌ Could not fetch Google token for '${targetEmail}'. The account owner may need to reconnect Google — one-click link: ${DASHBOARD_URL}/dashboard/accounts?reconnect=1`);
+    return resolveFailure('google_token_unavailable', `❌ Could not fetch Google token for '${targetEmail}'. The account owner may need to reconnect Google — one-click link: ${reconnectLink(targetEmail)}`);
   }
 
   return {
@@ -1288,7 +1412,7 @@ function gmailScopeDenial(conn: ConnectionApproved, resolved: ResolvedAccount) {
     `most likely the Gmail checkbox was left unchecked on Google's consent screen when connecting. ` +
     `STOP — every Gmail call on this account will fail until it is reconnected; retrying will NOT help. ` +
     `👉 Send the account owner this one-click link — it opens Google's consent screen directly; they must approve Gmail access there: ` +
-    `${DASHBOARD_URL}/dashboard/accounts?reconnect=1 — then retry once after they confirm. ` +
+    `${reconnectLink(resolved.targetEmail)} — then retry once after they confirm. ` +
     `Non-Gmail tools (sheets, docs) are unaffected.`,
   );
 }
@@ -1317,7 +1441,7 @@ function driveFileScopeDenial(conn: ConnectionApproved, resolved: ResolvedAccoun
     `most likely the account was connected before FGAC requested it, or the Drive checkbox was left unchecked on Google's consent screen. ` +
     `Every Sheets, Docs, Slides, and Drive call on this account will fail until it is reconnected; retrying will NOT help. ` +
     `👉 Send the account owner this one-click link — it opens Google's consent screen directly; they must approve Drive file access there: ` +
-    `${DASHBOARD_URL}/dashboard/accounts?reconnect=1 — then retry once after they confirm. ` +
+    `${reconnectLink(resolved.targetEmail)} — then retry once after they confirm. ` +
     `Gmail tools are unaffected.`,
   );
 }
@@ -1630,18 +1754,59 @@ const handler = createMcpHandler(
           return textResult('❌ No proxy key assigned.');
         }
         const emails = await getAccessibleEmails(conn.proxyKeyId);
+
+        // Per-account Google scope state, so the agent can see a
+        // missing-scope account BEFORE its first failing call. Three-state:
+        // Clerk not reporting scope metadata is 'unknown', never coerced to
+        // missing (same convention the scope denials enforce). Probes are
+        // quiet (no PostHog captures — see getGoogleToken) and individually
+        // time-bounded: this is the first tool most agents call, and N
+        // accounts riding the full 15 s Clerk timeout each is unacceptable.
+        const scopeState = (has: boolean | undefined) =>
+          has === undefined ? 'unknown' : has ? 'granted' : 'missing';
+        const probes = await Promise.allSettled(
+          emails.map(e => withTimeout(
+            getGoogleToken(e.targetEmail, conn.user, { quiet: true }),
+            LIST_ACCOUNTS_SCOPE_PROBE_TIMEOUT_MS,
+          )),
+        );
+        const accountDetails = emails.map((e, i) => {
+          const probe = probes[i];
+          const token = probe.status === 'fulfilled' ? probe.value : null;
+          const gmail = token ? scopeState(token.hasGmailScope) : 'unknown';
+          const driveFile = token ? scopeState(token.hasDriveFileScope) : 'unknown';
+          // A definitive miss — or a definitive token failure — gets the
+          // bound reconnect link; a timed-out probe stays link-free (nothing
+          // is known to be wrong).
+          const tokenUnavailable = probe.status === 'fulfilled' && token === null;
+          const needsReconnect = tokenUnavailable || gmail === 'missing' || driveFile === 'missing';
+          return {
+            email: e.targetEmail,
+            delegated: !!e.delegationId,
+            gmail,
+            drive_file: driveFile,
+            ...(needsReconnect ? { reconnect_url: reconnectLink(e.targetEmail) } : {}),
+          };
+        });
+        const driveMissing = accountDetails.find(d => d.drive_file === 'missing');
+
         // Onboarding nudge: list_accounts is most new users' first (and for
         // many, only) call — 2026-08 launch analytics showed a large cohort
         // stopping right here. Tell the agent what a useful next step is and
         // how more mailboxes get added, so the dead end becomes a path.
         return jsonResult({
           accounts: emails.map(e => e.targetEmail),
+          account_details: accountDetails,
           default: conn.user.email,
           nickname: conn.nickname,
           next_steps: {
             gmail: "Read a mailbox with gmail_list (pass account: '<address>' to target a specific one; defaults to the primary). Reads work out of the box.",
-            sheets: 'Spreadsheet access is granted per sheet: call sheets_get_spreadsheet with a spreadsheetId, or request_access — a denial returns a one-click approval link for the user.',
-            docs: 'Google Docs access is granted per document: call docs_read_document with a documentId, or request_access — a denial returns a one-click approval link for the user.',
+            sheets: driveMissing
+              ? `'${driveMissing.email}' is connected WITHOUT the drive.file scope — every Sheets call on it will fail until the account owner reconnects: ${driveMissing.reconnect_url}`
+              : 'Spreadsheet access is granted per sheet: call sheets_get_spreadsheet with a spreadsheetId, or request_access — a denial returns a one-click approval link for the user.',
+            docs: driveMissing
+              ? `'${driveMissing.email}' is connected WITHOUT the drive.file scope — every Docs call on it will fail until the account owner reconnects: ${driveMissing.reconnect_url}`
+              : 'Google Docs access is granted per document: call docs_read_document with a documentId, or request_access — a denial returns a one-click approval link for the user.',
             sending: 'Email sending is off by default; the first gmail_send returns a one-click approval link the user can use to whitelist the recipient.',
             raw_api: "Anything the typed tools can't express — Gmail mailbox writes (labels, drafts, archive/mark-read, trash) and threads, Drive listing and export, creating new docs, sheets, or slides — is reachable via google_api_get / google_api_modify under the same rules (see their descriptions). The Google grant covers ONLY Gmail plus per-file Drive access (Sheets/Docs/Slides/Drive files the user picked or this agent created); People/Contacts, Calendar, Tasks, and other Google APIs are not available and calls to them are refused.",
           },
@@ -2121,9 +2286,22 @@ const handler = createMcpHandler(
         if (!perm.allowed) return policyDenialWithLink(conn, resolved.proxyKeyId, perm.reason, docsDenialAction(perm, documentId, true));
 
         const body = JSON.stringify({ requests });
+        const verifyPlan = planDocsDeleteVerification(requests);
+        const endBefore = verifyPlan.hasDelete
+          ? await fetchDocsBodyEndIndex(resolved.token, documentId, resolved.targetEmail)
+          : null;
         const result = await withDocsGrace(perm, () => docsFetch(resolved.token, `${encodeURIComponent(documentId)}:batchUpdate`, 'POST', body, resolved.targetEmail));
         if (!result.ok) return docsErrorResult(result, documentId);
-        return jsonResult(result.data);
+        if (!verifyPlan.hasDelete) return jsonResult(result.data);
+
+        const endAfter = await fetchDocsBodyEndIndex(resolved.token, documentId, resolved.targetEmail);
+        const note = docsDeleteVerifyNote(verifyPlan, endBefore, endAfter);
+        return {
+          content: [
+            { type: 'text' as const, text: JSON.stringify(result.data, null, 2) },
+            ...(note ? [{ type: 'text' as const, text: note }] : []),
+          ],
+        };
       }
     );
 
