@@ -63,8 +63,12 @@ capability scope (e.g. "capabilities 04 and 06 only" for a re-test).
    (see `docs/QA_Acceptance_Test/README.md`): `run_id` is
    `<ISO timestamp>-<environment short name>`, one row per assertion with
    `status` (`pass`|`fail`|`skip`), `evidence` for pass/fail, `reason` for
-   every skip. For a scoped re-test, update the existing file's rows in place
-   rather than truncating it.
+   every skip. For a scoped re-test, set the top-level `"scope"` field to the
+   capability ids you were dispatched with (e.g. `"scope": ["10"]`) — the
+   coverage checker then requires only those capabilities — and update the
+   existing file's rows in place rather than truncating it. On a full-suite
+   run, omit `scope` entirely (and remove any stale `scope` left by a prior
+   scoped run).
 6. Run `npx tsx scripts/qa-coverage-check.ts` and fix your results file until
    the coverage problems it reports are gone (failures are fine — coverage
    gaps are not). Use Node 22 (`export PATH="$HOME/local/node22/bin:$PATH"`).
