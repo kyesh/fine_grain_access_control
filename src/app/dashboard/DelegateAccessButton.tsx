@@ -12,10 +12,17 @@ export function DelegateAccessButton() {
     setError(null);
     startTransition(async () => {
       try {
-        await createDelegation(formData);
-        setShowForm(false);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "Failed to create delegation");
+        // Refusals come back as values, not throws — production replaces a
+        // thrown server-action message with an opaque digest, which is what
+        // this form showed users until 2026-09-01.
+        const result = await createDelegation(formData);
+        if (result.ok) {
+          setShowForm(false);
+        } else {
+          setError(result.error);
+        }
+      } catch {
+        setError("Something went wrong creating the delegation. Please try again.");
       }
     });
   }

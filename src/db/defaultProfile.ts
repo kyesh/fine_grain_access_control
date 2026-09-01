@@ -95,7 +95,14 @@ export async function ensureDefaultProfile(userId: string, email: string) {
   if (existing) {
     // Cheap self-heal, once per new connection: delegations created while no
     // sync writer was in place (or that raced one) get materialized here.
-    await ensureDelegatedEmailAccess(existing.id, email);
+    // The own-mailbox row is ensured too — identity drift from the
+    // pre-4b551018 window (users.email re-synced without the access-row
+    // re-point) left default keys whose only own row targets an address the
+    // user no longer holds, so the key cannot reach their CURRENT mailbox at
+    // all (support case 2026-09-01). One idempotent insert repairs that; the
+    // stale row is left alone (token resolution refuses it anyway, and
+    // removal has its own hazards — see identity_email_drift bug report).
+    await ensureEmailAccess(existing.id, email);
     return existing;
   }
 
