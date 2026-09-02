@@ -44,13 +44,40 @@ export async function resolveDbUser(clerkUserId: string, email: string) {
       const ownKeys = await db.select({ id: proxyKeys.id }).from(proxyKeys)
         .where(eq(proxyKeys.userId, byClerkId.id));
       if (ownKeys.length > 0) {
-        await db.update(keyEmailAccess)
-          .set({ targetEmail: email })
+        const keyIds = ownKeys.map(k => k.id);
+        // A key can already hold a row for the NEW address — most commonly a
+        // drifted key whose own row kept the true (new) address all along,
+        // now joined by a row for the stale one via ensureDefaultProfile's
+        // own-row heal (defaultProfile.ts, PR #109). Re-pointing the stale
+        // row there would violate key_email_unique and abort the whole heal,
+        // so delete it instead: the destination row already grants the
+        // access, and a dangling row for an address the user no longer holds
+        // is exactly the drift this sync exists to prevent.
+        const alreadyCurrent = await db.select({ proxyKeyId: keyEmailAccess.proxyKeyId })
+          .from(keyEmailAccess)
           .where(and(
-            inArray(keyEmailAccess.proxyKeyId, ownKeys.map(k => k.id)),
+            inArray(keyEmailAccess.proxyKeyId, keyIds),
+            eq(keyEmailAccess.targetEmail, email),
+          ));
+        const haveNewRow = new Set(alreadyCurrent.map(r => r.proxyKeyId));
+        const toDelete = keyIds.filter(id => haveNewRow.has(id));
+        const toRepoint = keyIds.filter(id => !haveNewRow.has(id));
+        if (toDelete.length > 0) {
+          await db.delete(keyEmailAccess).where(and(
+            inArray(keyEmailAccess.proxyKeyId, toDelete),
             eq(keyEmailAccess.targetEmail, byClerkId.email),
             isNull(keyEmailAccess.delegationId),
           ));
+        }
+        if (toRepoint.length > 0) {
+          await db.update(keyEmailAccess)
+            .set({ targetEmail: email })
+            .where(and(
+              inArray(keyEmailAccess.proxyKeyId, toRepoint),
+              eq(keyEmailAccess.targetEmail, byClerkId.email),
+              isNull(keyEmailAccess.delegationId),
+            ));
+        }
       }
       return updated;
     }

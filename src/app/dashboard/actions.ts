@@ -5,7 +5,9 @@ import { users, proxyKeys, emailDelegations, keyEmailAccess, accessRules, keyRul
 import { eq, and, desc, isNull } from "drizzle-orm";
 import { findActiveDelegation } from "@/db/delegationQueries";
 import { syncDefaultProfileDelegatedAccess } from "@/db/defaultProfile";
-import { currentUser } from "@clerk/nextjs/server";
+import { currentUser, clerkClient } from "@clerk/nextjs/server";
+import { clerkPrimaryEmail } from "@/lib/clerkPrimaryEmail";
+import { resolveDbUser } from "@/db/userHelpers";
 import { revalidatePath } from "next/cache";
 import { validateRulePattern, patternKind, assertStorablePattern } from "@/lib/rulePatterns";
 import { slugifyProfileLabel } from "@/lib/profileSlugs";
@@ -55,38 +57,81 @@ async function getDbUser() {
 
 // ─── Email Delegations ──────────────────────────────────────────────────────
 
+export type DelegationActionResult = { ok: true } | { ok: false; error: string };
+
+/**
+ * Resolve the delegate's user row for an address typed into the form.
+ *
+ * The plain `users.email` match misses two people who DO hold FGAC accounts
+ * (support case 2026-09-01): a delegate whose `users.email` drifted away from
+ * the address they sign in with (see
+ * docs/bug_reports/identity_email_drift_breaks_token_lookup.md), and one who
+ * signed up with Clerk but whose users row hasn't been provisioned yet (the
+ * first dashboard/MCP visit does that). Both hold a Clerk account with a
+ * verified claim to the address, so on a miss ask Clerk who owns it and
+ * resolve THEIR row — `resolveDbUser` both heals the drift (email sync +
+ * own-mailbox access-row re-point, exactly as a dashboard load would) and
+ * provisions the missing row.
+ */
+async function findDelegateUser(delegateEmail: string) {
+  // Tombstoned rows (Clerk account deleted) are excluded — delegating to a
+  // retired identity would grant access nobody can exercise, and would be
+  // resurrected if that address signed up again. Newest first, since
+  // historical data contains duplicate rows per email.
+  const byEmail = await db.select().from(users)
+    .where(and(eq(users.email, delegateEmail), isNull(users.deletedAt)))
+    .orderBy(desc(users.createdAt))
+    .limit(1).then(res => res[0]);
+  if (byEmail) return byEmail;
+
+  try {
+    const client = await clerkClient();
+    const { data } = await client.users.getUserList({ emailAddress: [delegateEmail] });
+    // Only a VERIFIED claim to the address counts — an unverified address on
+    // someone's Clerk profile must not receive a delegation.
+    const clerkUser = data.find(u => u.emailAddresses.some(
+      e => e.emailAddress.toLowerCase() === delegateEmail && e.verification?.status === 'verified',
+    ));
+    if (!clerkUser) return undefined;
+    return await resolveDbUser(clerkUser.id, clerkPrimaryEmail(clerkUser) ?? delegateEmail);
+  } catch (err) {
+    console.error("[createDelegation] Clerk delegate lookup failed:", err);
+    return undefined;
+  }
+}
+
 /**
  * Create a delegation: the current user (owner) grants another user (delegate)
  * permission to create API keys that access the owner's Gmail.
  */
-export async function createDelegation(formData: FormData) {
+export async function createDelegation(formData: FormData): Promise<DelegationActionResult> {
   const dbUser = await getDbUser();
   const delegateEmail = (formData.get("delegateEmail") as string)?.trim().toLowerCase();
 
-  // These throw rather than returning silently: the caller renders the message,
-  // and a quiet return made the form close as if the delegation had succeeded.
+  // Expected-case refusals are RETURNED, never thrown: production replaces a
+  // thrown server-action message with an opaque digest, so the form rendered
+  // gibberish precisely when the user needed telling what to do (support case
+  // 2026-09-01). Same contract as RuleActionResult below. A quiet `return`
+  // without the error is equally wrong — it closes the form as if the
+  // delegation had succeeded.
   if (!delegateEmail) {
-    throw new Error("Enter the email address of the person you want to delegate to.");
+    return { ok: false, error: "Enter the email address of the person you want to delegate to." };
   }
 
   // Can't delegate to yourself
   if (delegateEmail === dbUser.email.toLowerCase()) {
-    throw new Error("You already have full access to your own mailbox.");
+    return { ok: false, error: "You already have full access to your own mailbox." };
   }
 
-  // Find the delegate user in our DB. Tombstoned rows (Clerk account deleted)
-  // are excluded — delegating to a retired identity would grant access nobody
-  // can exercise, and would be resurrected if that address signed up again.
-  // Newest first, since historical data contains duplicate rows per email.
-  const delegateUser = await db.select().from(users)
-    .where(and(eq(users.email, delegateEmail), isNull(users.deletedAt)))
-    .orderBy(desc(users.createdAt))
-    .limit(1).then(res => res[0]);
+  const delegateUser = await findDelegateUser(delegateEmail);
 
   if (!delegateUser) {
     // There is deliberately no invite flow — the delegate must already have an
     // FGAC account. Say so, instead of closing the form as if it worked.
-    throw new Error(`No FGAC account found for ${delegateEmail}. Ask them to sign up at fgac.ai with that Google account first.`);
+    return {
+      ok: false,
+      error: `No FGAC account found for ${delegateEmail}. Ask them to sign up at fgac.ai with that Google account first, then grant access again.`,
+    };
   }
 
   // Check for existing active delegation
@@ -103,7 +148,7 @@ export async function createDelegation(formData: FormData) {
     // prior sync was missed (e.g. the profile didn't exist yet).
     await syncDefaultProfileDelegatedAccess(delegateUser.email);
     revalidateDashboard();
-    return;
+    return { ok: true };
   }
 
   if (existing && existing.status === 'revoked') {
@@ -134,6 +179,7 @@ export async function createDelegation(formData: FormData) {
   });
 
   revalidateDashboard();
+  return { ok: true };
 }
 
 /**
@@ -171,7 +217,9 @@ export async function createProxyKey(formData: FormData) {
   const label = formData.get("label") as string;
   const emailAddresses = formData.getAll("emails") as string[];
 
-  if (!label) throw new Error("Label is required");
+  // Returned, not thrown, like every refusal below — production masks thrown
+  // server-action messages (see DelegationActionResult).
+  if (!label) return { error: "Label is required." };
 
   // Profile labels double as MCP URL slugs (/api/mcp/<slug>, see
   // src/lib/profileSlugs.ts). Two labels that slugify identically would make
@@ -191,22 +239,11 @@ export async function createProxyKey(formData: FormData) {
     };
   }
 
-  // Generate RSA Keypair for Service Account compatibility
-  const { publicKey, privateKey } = await jose.generateKeyPair('RS256', { extractable: true });
-  const publicKeyPem = await jose.exportSPKI(publicKey);
-  const privateKeyPem = await jose.exportPKCS8(privateKey);
-
-  // Create the key
-  const proxyKeyString = `sk_proxy_${crypto.randomUUID().replace(/-/g, '')}`;
-  const newKey = await db.insert(proxyKeys).values({
-    userId: dbUser.id,
-    key: proxyKeyString,
-    publicKey: publicKeyPem,
-    label,
-  }).returning().then(res => res[0]);
-
-  // Grant email access — every non-own address must be backed by an ACTIVE
-  // delegation, recorded on the row so revocation can tear it down again.
+  // Resolve the delegation backing every non-own address BEFORE creating the
+  // key: a refusal after the insert used to leave an orphaned key with partial
+  // access. Every non-own address must be backed by an ACTIVE delegation,
+  // recorded on the row so revocation can tear it down again.
+  const grants: { email: string; delegationId: string | null }[] = [];
   for (const email of emailAddresses) {
     let delegationId: string | null = null;
 
@@ -221,12 +258,30 @@ export async function createProxyKey(formData: FormData) {
         // delegationId — granting access that no delegation backed, that
         // revocation could not remove, and that looked like the user's own
         // mailbox to every downstream check.
-        throw new Error(`No active delegation grants you access to ${email}.`);
+        return { error: `No active delegation grants you access to ${email}.` };
       }
 
       delegationId = delegation.id;
     }
 
+    grants.push({ email, delegationId });
+  }
+
+  // Generate RSA Keypair for Service Account compatibility
+  const { publicKey, privateKey } = await jose.generateKeyPair('RS256', { extractable: true });
+  const publicKeyPem = await jose.exportSPKI(publicKey);
+  const privateKeyPem = await jose.exportPKCS8(privateKey);
+
+  // Create the key
+  const proxyKeyString = `sk_proxy_${crypto.randomUUID().replace(/-/g, '')}`;
+  const newKey = await db.insert(proxyKeys).values({
+    userId: dbUser.id,
+    key: proxyKeyString,
+    publicKey: publicKeyPem,
+    label,
+  }).returning().then(res => res[0]);
+
+  for (const { email, delegationId } of grants) {
     await db.insert(keyEmailAccess).values({
       proxyKeyId: newKey.id,
       delegationId,

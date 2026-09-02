@@ -222,6 +222,23 @@ tmux kill-session -t fgac-qa
 
 ---
 
+## Capability: Windowed Large Responses (→ capabilities/20_attachment_reading.md)
+
+- Fixtures: an under-150 KB attachment, an over-160 KB attachment, and a
+  long-bodied (> 20k chars) message in the QA mailbox (send between
+  USER_A/USER_B under the standing permission if absent), plus the QA sheet
+  and doc from setup.
+- A1–A7: drive the adopter tools (`gmail_get_attachment`, `gmail_read`,
+  `docs_read_document`, sheets reads, `google_api_get`) through the tmux
+  Claude Code MCP session, varying `offset`/`limit` per the capability doc.
+  For A3, have the agent save each window's `data` to files, concatenate,
+  decode once, verify length/hash; if the runtime can't hash, assert
+  `total_chars` equals the summed `chars_returned` and the final
+  `next_offset` is null.
+- A8: fold into the Analytics Events queries below (same run window).
+
+---
+
 ## Capability: Analytics Events (→ capabilities/16_analytics_events.md)
 
 > Run LAST — it inspects the PostHog events the capabilities above generated.

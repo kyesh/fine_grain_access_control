@@ -46,6 +46,7 @@ import {
 } from './googleApiPolicy';
 import { DRIVE_FILE_KINDS, ACTIVE_DRIVE_FILE_KINDS, type DriveFileKind } from '@/lib/driveFileKinds';
 import { clerkPrimaryEmail } from '@/lib/clerkPrimaryEmail';
+import { ownClerkEmailMatch } from '@/lib/identityDrift';
 import { slugifyProfileLabel } from '@/lib/profileSlugs';
 import { logAndSanitize, describeErrorForLog, toolErrorResult } from '@/lib/serverErrors';
 
@@ -336,23 +337,23 @@ async function checkEmailAccess(proxyKeyId: string, targetEmail: string) {
  * can legitimately name an address that no longer equals `users.email`
  * (support case 2026-08-24). Only consulted after the delegation lookup
  * fails, so it costs nothing on the happy paths.
+ *
+ * Also returns the account's primary email so the caller can heal the drift
+ * it just confirmed, without a second Clerk fetch.
  */
-async function isOwnClerkEmail(clerkUserId: string, email: string): Promise<boolean> {
+async function checkOwnClerkEmail(
+  clerkUserId: string, email: string,
+): Promise<{ own: boolean; primaryEmail?: string }> {
   try {
     const client = await clerkClient();
     const clerkUser = await client.users.getUser(clerkUserId);
-    const target = email.toLowerCase();
-    const ownVerified = clerkUser.emailAddresses.some(
-      e => e.emailAddress.toLowerCase() === target && e.verification?.status === 'verified',
-    );
-    const ownGoogle = clerkUser.externalAccounts.some(
-      e => (e.provider === 'oauth_google' || (e.provider as string) === 'google') &&
-        e.emailAddress?.toLowerCase() === target,
-    );
-    return ownVerified || ownGoogle;
+    return {
+      own: ownClerkEmailMatch(clerkUser, email),
+      primaryEmail: clerkPrimaryEmail(clerkUser),
+    };
   } catch (err) {
     console.error('[MCP] Clerk lookup failed while checking own-email fallback:', err);
-    return false;
+    return { own: false };
   }
 }
 
@@ -412,7 +413,11 @@ async function getGoogleToken(
 
     if (emailOwner && delegation) {
       tokenOwnerClerkId = emailOwner.clerkUserId;
-    } else if (await isOwnClerkEmail(keyOwner.clerkUserId, targetEmail)) {
+    } else {
+      const own = await checkOwnClerkEmail(keyOwner.clerkUserId, targetEmail);
+      if (!own.own) {
+        return null;
+      }
       // Not a delegation — the address is the key owner's own mailbox under a
       // drifted `users.email`. Use their token and record that the fallback
       // fired so analytics can watch the drift population shrink.
@@ -429,9 +434,24 @@ async function getGoogleToken(
           via: 'mcp',
         });
       }
+      // Heal the drift this branch just proved: `resolveDbUser` syncs
+      // `users.email` to the Clerk primary and re-points own-mailbox access
+      // rows, exactly as a dashboard load would — but an MCP-only connector
+      // user never loads the dashboard, and `resolveConnection` only calls
+      // resolveDbUser for brand-new rows, so without this the drift (and the
+      // fallback's Clerk round-trip) persisted on every call indefinitely
+      // (observed in production, 2026-08-25 → 08-31). Runs on `quiet` scope
+      // probes too — quiet suppresses analytics, not repair. On failure the
+      // fallback still serves this call; the next one retries the heal.
+      if (own.primaryEmail && own.primaryEmail.toLowerCase() !== keyOwner.email.toLowerCase()) {
+        try {
+          await resolveDbUser(keyOwner.clerkUserId, own.primaryEmail);
+          console.log(`[MCP] Healed drifted identity email for ${keyOwner.clerkUserId}`);
+        } catch (err) {
+          console.error('[MCP] Identity drift heal failed (fallback still serving):', describeErrorForLog(err));
+        }
+      }
       tokenOwnerClerkId = keyOwner.clerkUserId;
-    } else {
-      return null;
     }
   }
 
@@ -1163,6 +1183,67 @@ const COMMENT_LIST_FIELDS = 'nextPageToken,comments(id,content,resolved,createdT
 const MAX_BODY_CHARS = 20_000;
 const MAX_ATTACHMENT_CHARS = 200_000; // base64url chars ≈ 150 KB decoded
 
+/**
+ * Generic large-response windowing (plan gmail-attachment-pagination_v3):
+ * when a tool's payload exceeds what the CALLER wants in one response, the
+ * caller says which section (`offset`) and how much (`limit`, chars) — the
+ * agent knows its own harness's tool-result budget, so it sizes windows
+ * itself instead of the server guessing. A window is a plain substring of
+ * the payload, so contiguous windows concatenate to exactly the original
+ * string (for base64url payloads: concatenate first, decode ONCE at the
+ * end). Shared today by gmail_get_attachment (base64url data) and
+ * docs_read_document (serialized JSON); any tool with an oversized payload
+ * can adopt the same envelope.
+ */
+const RESPONSE_WINDOW_MAX_CHARS = 200_000;
+
+function windowPayload(payload: string, offset: number, limit: number | undefined) {
+  const cappedLimit = Math.min(Math.max(1, limit ?? RESPONSE_WINDOW_MAX_CHARS), RESPONSE_WINDOW_MAX_CHARS);
+  const data = payload.slice(offset, offset + cappedLimit);
+  const nextOffset = offset + data.length < payload.length ? offset + data.length : null;
+  addToolCallProps({ window_offset: offset, window_chars: data.length, window_total_chars: payload.length });
+  return {
+    offset,
+    chars_returned: data.length,
+    total_chars: payload.length,
+    next_offset: nextOffset,
+    data,
+  };
+}
+
+/**
+ * The full windowed tool result: envelope + reassembly note, or the ❌
+ * out-of-range guidance (outcome `failed`, never isError — same directory
+ * rationale as resolveFailure). `encoding: 'base64url'` payloads get the
+ * decode-once instruction; plain serialized payloads the concatenate one.
+ */
+function windowedResult(
+  payload: string,
+  offset: number | undefined,
+  limit: number | undefined,
+  extra: Record<string, unknown> = {},
+  encoding: 'base64url' | null = null,
+) {
+  const off = offset ?? 0;
+  if (off >= payload.length) {
+    return textResult(
+      `❌ offset ${off} is at or beyond the end of the payload (${payload.length} chars total). ` +
+      `Do not retry this offset — the previous window was the final one, or restart from offset 0.`);
+  }
+  const win = windowPayload(payload, off, limit);
+  const reassemble = encoding === 'base64url'
+    ? 'concatenate the data strings in offset order, then base64url-decode the result once'
+    : 'concatenate the data strings in offset order to reconstruct the full payload';
+  return jsonResult({
+    ...extra,
+    ...(encoding ? { encoding } : {}),
+    ...win,
+    note: win.next_offset === null
+      ? `Final window — ${reassemble}.`
+      : `Partial content — call again with offset: ${win.next_offset} for the next window; ${reassemble}.`,
+  });
+}
+
 function decodeB64Url(s: string): string {
   try { return Buffer.from(s, 'base64url').toString('utf8'); } catch { return ''; }
 }
@@ -1179,7 +1260,7 @@ interface GmailPart {
  * attachment metadata. The full payload (nested base64 parts, redundant
  * headers) routinely runs 10-50x the size of the content the model needs.
  */
-function parseGmailMessage(msg: Record<string, unknown>) {
+function parseGmailMessage(msg: Record<string, unknown>, opts: { fullBody?: boolean } = {}) {
   const payload = msg.payload as (GmailPart & { headers?: Array<{ name?: string; value?: string }> }) | undefined;
   const headersArr = payload?.headers ?? [];
   const header = (name: string) =>
@@ -1215,7 +1296,7 @@ function parseGmailMessage(msg: Record<string, unknown>) {
       .trim();
   }
 
-  const truncated = bodyText.length > MAX_BODY_CHARS;
+  const truncated = !opts.fullBody && bodyText.length > MAX_BODY_CHARS;
   return {
     id: msg.id,
     threadId: msg.threadId,
@@ -1229,7 +1310,7 @@ function parseGmailMessage(msg: Record<string, unknown>) {
       date: header('date'),
     },
     body: truncated
-      ? `${bodyText.slice(0, MAX_BODY_CHARS)}\n…[truncated ${bodyText.length - MAX_BODY_CHARS} characters — use gmail_read with format "metadata" or narrow the request]`
+      ? `${bodyText.slice(0, MAX_BODY_CHARS)}\n…[truncated ${bodyText.length - MAX_BODY_CHARS} characters — re-call gmail_read with offset/limit to window the full message, or use format "metadata"]`
       : bodyText,
     attachments,
   };
@@ -1894,8 +1975,10 @@ const handler = createMcpHandler(
         account: z.string().optional().describe('Email account to use.'),
         messageId: z.string().describe('Gmail message ID'),
         format: z.enum(['full', 'metadata', 'minimal']).optional().describe('Response format. "full" (default) returns parsed headers, body text, and attachment metadata.'),
+        offset: z.number().int().min(0).optional().describe('Start position (chars into the serialized response, body UNtruncated) for a windowed read of a long message. Use the next_offset from the previous response to continue; start at 0.'),
+        limit: z.number().int().min(1).optional().describe('Max chars to return in this response (server caps at 200000). Size this to YOUR tool-result budget. Passing offset or limit switches to the windowed envelope.'),
       }),
-      async ({ account, messageId, format }, { authInfo }) => {
+      async ({ account, messageId, format, offset, limit }, { authInfo }) => {
         const conn = await requireApproval(authInfo);
         if ('content' in conn) return conn;
 
@@ -1917,7 +2000,18 @@ const handler = createMcpHandler(
 
         // Rules were evaluated on the complete payload; the response is the
         // parsed, token-frugal view unless a lighter format was requested.
-        if (!format || format === 'full') {
+        // Windowed reads (offset/limit) serialize the parsed view with the
+        // body UNtruncated — the 20k inline truncation exists to protect the
+        // default response, and a caller windowing explicitly has taken
+        // charge of its own budget.
+        const parsed = (!format || format === 'full');
+        if (offset !== undefined || limit !== undefined) {
+          const payload = JSON.stringify(parsed
+            ? parseGmailMessage(result.data as Record<string, unknown>, { fullBody: true })
+            : result.data);
+          return windowedResult(payload, offset, limit, { messageId });
+        }
+        if (parsed) {
           return jsonResult(parseGmailMessage(result.data as Record<string, unknown>));
         }
         return jsonResult(result.data);
@@ -1932,8 +2026,10 @@ const handler = createMcpHandler(
         attachmentId: z.string().optional().describe('Attachment ID, taken from the `attachments` array of a gmail_read on THIS messageId. Ids are message-scoped and are re-issued when the message is re-indexed; a stale id is healed automatically when the message has exactly one attachment. Prefer `filename` when you know it — filenames never go stale.'),
         filename: z.string().optional().describe('Attachment filename as shown in gmail_read `attachments` (case-insensitive), as an alternative to attachmentId. If several attachments share the name, the error lists them so you can pick one by attachmentId.'),
         account: z.string().optional().describe('Email account to use.'),
+        offset: z.number().int().min(0).optional().describe('Start position (chars into the base64url data) for a windowed read of a large attachment. Use the next_offset from the previous response to continue; start at 0.'),
+        limit: z.number().int().min(1).optional().describe('Max chars of base64url data to return in this response (server caps at 200000). Size this to YOUR tool-result budget. Passing offset or limit switches to the windowed envelope.'),
       }),
-      async ({ messageId, attachmentId, filename, account }, { authInfo }) => {
+      async ({ messageId, attachmentId, filename, account, offset, limit }, { authInfo }) => {
         const conn = await requireApproval(authInfo);
         if ('content' in conn) return conn;
 
@@ -2071,10 +2167,28 @@ const handler = createMcpHandler(
         const attachmentChars = attachment.data?.length ?? 0;
         const approxKb = Math.round((attachmentChars * 3) / 4 / 1024);
         addToolCallProps({ attachment_chars: attachmentChars, attachment_kb: approxKb });
-        if (attachmentChars > MAX_ATTACHMENT_CHARS) {
-          return textResult(`⚠️ Attachment is ~${approxKb} KB, which exceeds the ~150 KB limit for MCP responses. Ask the user to retrieve it directly from Gmail.`);
+
+        // Large-attachment windowing (plan gmail-attachment-pagination_v3):
+        // Gmail's attachments.get has no partial fetch (path params only), so
+        // each windowed call re-downloads the full body server-side — fine at
+        // observed volume. The caller sizes windows to its own tool-result
+        // budget via offset/limit; windows are substrings of the base64url
+        // data, so the agent concatenates them in order and decodes ONCE.
+        const wantsWindow = offset !== undefined || limit !== undefined;
+        const data = attachment.data ?? '';
+
+        if (!wantsWindow) {
+          if (attachmentChars > MAX_ATTACHMENT_CHARS) {
+            return textResult(
+              `⚠️ Attachment is ~${approxKb} KB, which exceeds the ~150 KB limit for a single MCP response. ` +
+              `Retrieve it in windows: call again with offset: 0 and a limit sized to your tool-result budget (chars of base64url data, max 200000). ` +
+              `Each response reports total_chars and next_offset — concatenate the data strings in offset order, then base64url-decode the result once. ` +
+              `Or ask the user to retrieve it directly from Gmail.`);
+          }
+          return jsonResult(attachment);
         }
-        return jsonResult(attachment);
+
+        return windowedResult(data, offset, limit, { size: attachment.size }, 'base64url');
       }
     );
 
@@ -2139,8 +2253,10 @@ const handler = createMcpHandler(
       toolConfig(TOOL_DEFS.sheets_get_spreadsheet, {
         spreadsheetId: z.string().describe('Google Spreadsheet ID (e.g. 1BxiMVs0...)'),
         account: z.string().optional().describe('Email account to use.'),
+        offset: z.number().int().min(0).optional().describe('Start position (chars into the serialized JSON response) for a windowed read of large metadata. Use the next_offset from the previous response to continue; start at 0.'),
+        limit: z.number().int().min(1).optional().describe('Max chars to return in this response (server caps at 200000). Size this to YOUR tool-result budget. Passing offset or limit switches to the windowed envelope.'),
       }),
-      async ({ spreadsheetId, account }, { authInfo }) => {
+      async ({ spreadsheetId, account, offset, limit }, { authInfo }) => {
         const conn = await requireApproval(authInfo);
         if ('content' in conn) return conn;
 
@@ -2154,6 +2270,9 @@ const handler = createMcpHandler(
 
         const result = await withSheetsGrace(perm, () => sheetsFetch(resolved.token, `${spreadsheetId}`, 'GET', undefined, resolved.targetEmail));
         if (!result.ok) return sheetsErrorResult(result, spreadsheetId);
+        if (offset !== undefined || limit !== undefined) {
+          return windowedResult(JSON.stringify(result.data), offset, limit, { spreadsheetId });
+        }
         return jsonResult(result.data);
       }
     );
@@ -2165,8 +2284,10 @@ const handler = createMcpHandler(
         spreadsheetId: z.string().describe('Google Spreadsheet ID'),
         range: z.string().describe("Cell range (e.g. 'Sheet1'!A1:D20 or 'Sheet1')"),
         account: z.string().optional().describe('Email account to use.'),
+        offset: z.number().int().min(0).optional().describe('Start position (chars into the serialized JSON response) for a windowed read of a large range. Prefer narrowing the range first. Use the next_offset from the previous response to continue; start at 0.'),
+        limit: z.number().int().min(1).optional().describe('Max chars to return in this response (server caps at 200000). Size this to YOUR tool-result budget. Passing offset or limit switches to the windowed envelope.'),
       }),
-      async ({ spreadsheetId, range, account }, { authInfo }) => {
+      async ({ spreadsheetId, range, account, offset, limit }, { authInfo }) => {
         const conn = await requireApproval(authInfo);
         if ('content' in conn) return conn;
 
@@ -2181,6 +2302,9 @@ const handler = createMcpHandler(
         const encodedRange = encodeURIComponent(range);
         const result = await withSheetsGrace(perm, () => sheetsFetch(resolved.token, `${spreadsheetId}/values/${encodedRange}`, 'GET', undefined, resolved.targetEmail));
         if (!result.ok) return sheetsErrorResult(result, spreadsheetId);
+        if (offset !== undefined || limit !== undefined) {
+          return windowedResult(JSON.stringify(result.data), offset, limit, { spreadsheetId, range });
+        }
         return jsonResult(result.data);
       }
     );
@@ -2283,8 +2407,10 @@ const handler = createMcpHandler(
         documentId: z.string().describe('Google Docs document ID (e.g. 1NQiAY...)'),
         fields: z.string().optional().describe('Optional Docs API field mask to trim the response (e.g. "title,body.content"). Use when a full read is too large.'),
         account: z.string().optional().describe('Email account to use.'),
+        offset: z.number().int().min(0).optional().describe('Start position (chars into the serialized JSON response) for a windowed read of a large document. Use the next_offset from the previous response to continue; start at 0.'),
+        limit: z.number().int().min(1).optional().describe('Max chars to return in this response (server caps at 200000). Size this to YOUR tool-result budget. Passing offset or limit switches to the windowed envelope.'),
       }),
-      async ({ documentId, fields, account }, { authInfo }) => {
+      async ({ documentId, fields, account, offset, limit }, { authInfo }) => {
         const conn = await requireApproval(authInfo);
         if ('content' in conn) return conn;
 
@@ -2299,6 +2425,12 @@ const handler = createMcpHandler(
         const query = fields ? `?fields=${encodeURIComponent(fields)}` : '';
         const result = await withDocsGrace(perm, () => docsFetch(resolved.token, `${encodeURIComponent(documentId)}${query}`, 'GET', undefined, resolved.targetEmail));
         if (!result.ok) return docsErrorResult(result, documentId);
+        // Same windowing pattern as gmail_get_attachment: on request, a
+        // substring of the serialized JSON response — windows concatenate to
+        // the exact document JSON. Combine with `fields` to narrow first.
+        if (offset !== undefined || limit !== undefined) {
+          return windowedResult(JSON.stringify(result.data), offset, limit, { documentId });
+        }
         return jsonResult(result.data);
       }
     );
@@ -2412,8 +2544,10 @@ const handler = createMcpHandler(
       toolConfig(TOOL_DEFS.google_api_get, {
         path: z.string().describe('API path (e.g. "gmail/v1/users/me/messages" or "v4/spreadsheets/1BxiM.../values/Sheet1")'),
         account: z.string().optional().describe('Email account to use.'),
+        offset: z.number().int().min(0).optional().describe('Start position (chars into the serialized response) for a windowed read of a large payload. Use the next_offset from the previous response to continue; start at 0.'),
+        limit: z.number().int().min(1).optional().describe('Max chars to return in this response (server caps at 200000). Size this to YOUR tool-result budget. Passing offset or limit switches successful responses to the windowed envelope.'),
       }),
-      async ({ path: rawPath, account }, { authInfo }) => {
+      async ({ path: rawPath, account, offset, limit }, { authInfo }) => {
         const conn = await requireApproval(authInfo);
         if ('content' in conn) return conn;
 
@@ -2431,7 +2565,17 @@ const handler = createMcpHandler(
         const resolved = await resolveAccountAndToken(conn, account);
         if ('error' in resolved) return textResult(resolved.error);
 
-        return executeRawGoogleCall(conn, resolved, path, 'GET', cls);
+        const res = await executeRawGoogleCall(conn, resolved, path, 'GET', cls);
+        // Windowing applies to the SUCCESSFUL payload only — denials, errors,
+        // and policy messages (⏳🚫⚠️❌ prefixes, per classifyToolOutcome's
+        // convention) pass through whole so their guidance is never sliced.
+        if (offset !== undefined || limit !== undefined) {
+          const text = res.content?.[0]?.text ?? '';
+          if (!(res as { isError?: boolean }).isError && text && !/^[⏳🚫❌]|^⚠️/u.test(text)) {
+            return windowedResult(text, offset, limit, { path });
+          }
+        }
+        return res;
       }
     );
 

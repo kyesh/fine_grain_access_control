@@ -54,6 +54,9 @@ attributable to it.
   with the raw-api-classification change — earlier docs described these props
   ahead of the code). Events whose attachment fetch itself failed carry
   `attachment_declared_kb` (size from the parent's MIME metadata) instead.
+  Windowed reads (`gmail_get_attachment`, `docs_read_document`) add
+  `window_offset` / `window_chars` / `window_total_chars` — asserted in
+  capability 20 (A6), not re-checked here.
 
 ### A9: Raw Google API calls carry product/action classification
 - Inspect `$mcp_tool_call` events where `$mcp_tool_name` is `google_api_get`

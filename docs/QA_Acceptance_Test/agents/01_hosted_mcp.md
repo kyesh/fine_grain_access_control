@@ -299,6 +299,22 @@ curl -s $BASE_URL/api/mcp -X POST \
 
 ---
 
+## Capability: Windowed Large Responses (→ capabilities/20_attachment_reading.md)
+
+- Fixtures: an under-150 KB attachment, an over-160 KB attachment, and a
+  long-bodied (> 20k chars) message in the QA mailbox (send between
+  USER_A/USER_B under the standing permission if absent), plus the QA sheet
+  and doc from setup.
+- A1–A7: `tools/call` via curl on `gmail_get_attachment`, `gmail_read`,
+  `docs_read_document`, `sheets_read_range`/`sheets_get_spreadsheet`, and
+  `google_api_get`, varying `offset`/`limit` per the capability doc. A3
+  reassembly: concatenate the windows' `data` strings in offset order,
+  base64url-decode once, compare `shasum` + length against the sent file;
+  A4/A5: concatenated windows must equal the windowless read.
+- A8: fold into the Analytics Events queries below (same run window).
+
+---
+
 ## Capability: Analytics Events (→ capabilities/16_analytics_events.md)
 
 > Run LAST — it inspects the PostHog events the capabilities above generated.

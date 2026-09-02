@@ -190,6 +190,22 @@ No tmux sessions to clean up. Results are saved to `test/qa-envs/cc-cli/evals/re
 
 ---
 
+## Capability: Windowed Large Responses (→ capabilities/20_attachment_reading.md)
+
+- Fixtures: an under-150 KB attachment, an over-160 KB attachment, and a
+  long-bodied (> 20k chars) message in the QA mailbox (send between
+  USER_A/USER_B under the standing permission if absent), plus the QA sheet
+  and doc from setup.
+- A1–A7: headless `claude -p` evals invoking the adopter tools
+  (`gmail_get_attachment`, `gmail_read`, `docs_read_document`, sheets reads,
+  `google_api_get`) with the capability doc's `offset`/`limit` matrix; grade
+  on the envelope fields (`total_chars`, `next_offset`, `chars_returned` ≤
+  limit) and the ⚠️/❌ guidance. A3 reassembly: script the windows via the
+  eval harness, concatenate + decode once, compare length/hash.
+- A8: fold into the Analytics Events queries below (same run window).
+
+---
+
 ## Capability: Analytics Events (→ capabilities/16_analytics_events.md)
 
 > Run LAST — it inspects the PostHog events the capabilities above generated.

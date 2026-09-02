@@ -43,13 +43,13 @@ export const TOOL_DEFS = {
   gmail_read: {
     name: 'gmail_read',
     title: 'Read a Gmail message',
-    description: 'Read a Gmail message by ID. Returns parsed headers, body text, and attachment metadata. Reading is allowed by default; messages matching the user\'s read-block rules (labels or content patterns), if any, are withheld. Works across every connected or delegated Gmail inbox via the "account" parameter. For a full thread use google_api_get with gmail/v1/users/me/threads/{id}.',
+    description: 'Read a Gmail message by ID. Returns parsed headers, body text, and attachment metadata. Reading is allowed by default; messages matching the user\'s read-block rules (labels or content patterns), if any, are withheld. Works across every connected or delegated Gmail inbox via the "account" parameter. For a full thread use google_api_get with gmail/v1/users/me/threads/{id}. Long messages: pass offset and a limit sized to your tool-result budget (chars, max 200000/call) to window the serialized message with the body UNtruncated — the envelope reports total_chars and next_offset; concatenate data strings in offset order.',
     readOnly: true,
   },
   gmail_get_attachment: {
     name: 'gmail_get_attachment',
     title: 'Download a Gmail attachment',
-    description: 'Retrieve an email attachment by message ID plus either attachment ID or filename (allowed unless the parent message matches a read-block rule). Gmail attachment ids go stale when a message is re-indexed — stale ids are healed automatically when unambiguous, and filenames never go stale. Returns Gmail\'s base64url-encoded data (URL-safe alphabet, padded with "=") — decode with a base64url decoder, not standard base64.',
+    description: 'Retrieve an email attachment by message ID plus either attachment ID or filename (allowed unless the parent message matches a read-block rule). Gmail attachment ids go stale when a message is re-indexed — stale ids are healed automatically when unambiguous, and filenames never go stale. Returns Gmail\'s base64url-encoded data (URL-safe alphabet, padded with "=") — decode with a base64url decoder, not standard base64. Files over ~150 KB must be read in windows: pass offset and a limit sized to YOUR tool-result budget (chars of base64url data, max 200000/call); each response reports total_chars and next_offset — concatenate the data strings in offset order, then decode once.',
     readOnly: true,
   },
   gmail_send: {
@@ -69,13 +69,13 @@ export const TOOL_DEFS = {
   sheets_get_spreadsheet: {
     name: 'sheets_get_spreadsheet',
     title: 'Get spreadsheet metadata',
-    description: 'Get metadata and sheet tabs for a Google Spreadsheet exposed by the user\'s FGAC rules.',
+    description: 'Get metadata and sheet tabs for a Google Spreadsheet exposed by the user\'s FGAC rules. Large responses: pass offset and a limit sized to your tool-result budget (chars, max 200000/call) — the windowed envelope reports total_chars and next_offset; concatenate data strings in offset order.',
     readOnly: true,
   },
   sheets_read_range: {
     name: 'sheets_read_range',
     title: 'Read spreadsheet cells',
-    description: 'Read cell values from a sheet tab or range in a Google Spreadsheet exposed by the user\'s FGAC rules.',
+    description: 'Read cell values from a sheet tab or range in a Google Spreadsheet exposed by the user\'s FGAC rules. Prefer narrowing the range; for genuinely large ranges, pass offset and a limit sized to your tool-result budget (chars, max 200000/call) — the windowed envelope reports total_chars and next_offset; concatenate data strings in offset order.',
     readOnly: true,
   },
   sheets_update_range: {
@@ -102,7 +102,7 @@ export const TOOL_DEFS = {
   docs_read_document: {
     name: 'docs_read_document',
     title: 'Read a Google Doc',
-    description: 'Read a Google Docs document exposed by the user\'s FGAC rules. Returns the raw Docs API document resource (title, body content as structured JSON). Large documents can be trimmed with the optional "fields" mask (e.g. "title,body.content") — use it if a full read is too big. To edit the document use docs_edit; comments live in the Drive API — use comments_read.',
+    description: 'Read a Google Docs document exposed by the user\'s FGAC rules. Returns the raw Docs API document resource (title, body content as structured JSON). Large documents: trim with the optional "fields" mask (e.g. "title,body.content"), or read in windows by passing offset and a limit sized to YOUR tool-result budget (chars of serialized JSON, max 200000/call) — each response reports total_chars and next_offset; concatenate data strings in offset order. To edit the document use docs_edit; comments live in the Drive API — use comments_read.',
     readOnly: true,
   },
   docs_edit: {
@@ -128,7 +128,7 @@ export const TOOL_DEFS = {
   google_api_get: {
     name: 'google_api_get',
     title: 'Raw Google API read',
-    description: 'Perform a read-only GET request against any Google API endpoint by path — the full read surface behind the typed convenience tools. Gmail (https://developers.google.com/gmail/api/reference/rest): messages, threads, drafts, labels, history, settings — reads are allowed by default and filtered by the user\'s read-block rules if any. Google Sheets (https://developers.google.com/sheets/api/reference/rest) and Google Docs (https://developers.google.com/docs/api/reference/rest): require a per-file FGAC rule. Other Google APIs (e.g. Drive drive/v3 for file listing, metadata, export, revisions; Slides slides/v1) are forwarded subject to the Google OAuth scopes the user granted — with the standard grant, Drive is limited by drive.file to files the user picked or this agent created, and a 404 can mean the file exists but is not granted. APIs outside the grant — People/Contacts, Calendar, Tasks, YouTube, and other non-Workspace-file APIs — can NEVER work through FGAC and are refused; do not probe them. Exception: comment paths (drive/v3/files/{id}/comments) follow the file\'s FGAC rule — comments_read is the shortcut. Batch endpoints are denied. Use this whenever no typed read tool covers the endpoint you need.',
+    description: 'Perform a read-only GET request against any Google API endpoint by path — the full read surface behind the typed convenience tools. Gmail (https://developers.google.com/gmail/api/reference/rest): messages, threads, drafts, labels, history, settings — reads are allowed by default and filtered by the user\'s read-block rules if any. Google Sheets (https://developers.google.com/sheets/api/reference/rest) and Google Docs (https://developers.google.com/docs/api/reference/rest): require a per-file FGAC rule. Other Google APIs (e.g. Drive drive/v3 for file listing, metadata, export, revisions; Slides slides/v1) are forwarded subject to the Google OAuth scopes the user granted — with the standard grant, Drive is limited by drive.file to files the user picked or this agent created, and a 404 can mean the file exists but is not granted. APIs outside the grant — People/Contacts, Calendar, Tasks, YouTube, and other non-Workspace-file APIs — can NEVER work through FGAC and are refused; do not probe them. Exception: comment paths (drive/v3/files/{id}/comments) follow the file\'s FGAC rule — comments_read is the shortcut. Batch endpoints are denied. Use this whenever no typed read tool covers the endpoint you need. Large responses: pass offset and a limit sized to your tool-result budget (chars, max 200000/call) — the windowed envelope reports total_chars and next_offset; concatenate data strings in offset order.',
     readOnly: true,
     freeformMethods: ['GET'],
   },
