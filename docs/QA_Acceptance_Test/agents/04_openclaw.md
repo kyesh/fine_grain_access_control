@@ -169,6 +169,22 @@ docker compose -f test/qa-envs/openclaw/docker-compose.yml down
 
 ---
 
+## Capability: Windowed Large Responses (→ capabilities/20_attachment_reading.md)
+
+- Fixtures: an under-150 KB attachment, an over-160 KB attachment, and a
+  long-bodied (> 20k chars) message in the QA mailbox (send between
+  USER_A/USER_B under the standing permission if absent), plus the QA sheet
+  and doc from setup.
+- A1–A7: drive the adopter tools (`gmail_get_attachment`, `gmail_read`,
+  `docs_read_document`, sheets reads, `google_api_get`) through the OpenClaw
+  gateway, varying `offset`/`limit` per the capability doc; assert on the
+  envelope fields, and for A3 assert `total_chars` equals the summed
+  `chars_returned` with a null final `next_offset` (hash locally when the
+  gateway lets you extract the windows).
+- A8: fold into the Analytics Events queries below (same run window).
+
+---
+
 ## Capability: Analytics Events (→ capabilities/16_analytics_events.md)
 
 > Run LAST — it inspects the PostHog events the capabilities above generated.
