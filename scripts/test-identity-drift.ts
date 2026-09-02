@@ -88,6 +88,21 @@ check('fallback branch heals via resolveDbUser',
 check('heal is gated on the Clerk primary differing from the DB row',
   getGoogleTokenSrc.includes('primaryEmail.toLowerCase() !== keyOwner.email.toLowerCase()'));
 
+// ---- Structural guard: the heal survives a pre-existing destination row ---
+// PR #109's ensureDefaultProfile own-row heal inserts a row for the CURRENT
+// users.email on every new connection — for a drifted user that is the STALE
+// address, so their key ends up holding rows for both addresses. resolveDbUser's
+// re-point must then DELETE the stale row rather than update it into a
+// key_email_unique violation, which would abort the heal (and 500 the
+// dashboard, whose loadDashboardData calls resolveDbUser unguarded).
+const helpers = readFileSync(join(__dirname, '../src/db/userHelpers.ts'), 'utf8');
+check('resolveDbUser checks for keys already holding the new-address row',
+  helpers.includes('alreadyCurrent'));
+check('resolveDbUser deletes the stale row when the destination row exists',
+  helpers.includes('delete(keyEmailAccess)'));
+check('the delete only touches own-mailbox rows for the old address',
+  /delete\(keyEmailAccess\)[\s\S]{0,300}targetEmail, byClerkId\.email[\s\S]{0,200}isNull\(keyEmailAccess\.delegationId\)/.test(helpers));
+
 // ---- Result ----------------------------------------------------------------
 if (failures > 0) {
   console.error(`test-identity-drift: ${failures} failure(s)`);
