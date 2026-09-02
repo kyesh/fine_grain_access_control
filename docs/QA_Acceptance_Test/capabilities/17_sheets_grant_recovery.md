@@ -115,14 +115,18 @@ sheet tells the truth.
   indicator never blocks the rest of the dashboard from rendering (a
   Google outage degrades to no-indicator, not a broken page).
 
-### A7: Post-policy Google 403/404 on a sheets call returns an honest error
+### A7: Post-policy Google 403/404 on a sheets call returns honest ❌ guidance
 - With the A2 rule present and the sheet still un-picked, retry
   `sheets_get_spreadsheet` via MCP.
-- **Expected**: The error is NOT the generic "Google resource not found
-  (404). Check the ID and try again." It states that the sheet is approved
-  in FGAC but Google access is not set up yet, and points the user at the
-  dashboard to finish setup. `$mcp_tool_call` still records
-  `outcome=error` (it IS an error) — but the text is actionable.
+- **Expected**: The response is NOT the generic "Google resource not found
+  (404). Check the ID and try again." It is ❌ guidance stating that the
+  sheet is approved in FGAC but Google access is not set up yet, and points
+  the user at the dashboard to finish setup. Since the directory-error
+  demotion (PR #72 salvage, 2026-09) this classifies as `$mcp_tool_call`
+  `outcome=failed` with `$mcp_is_error=false` — a user-fixable condition,
+  kept out of the Connector Directory error rate — while still carrying
+  `error_status` (403/404) internally. `outcome=error` here is the
+  pre-demotion regression (capability 16 A17 asserts the event side).
 
 ### A8: Recovery analytics distinguish the funnel stages
 - Replay A1→A4 and inspect captured events (PostHog debug/local capture per
@@ -132,3 +136,32 @@ sheet tells the truth.
   `{result: 'missing'}` → `sheets_grant_recovered` → `$mcp_tool_call`
   success — each stage attributable to the same person, so the production
   dashboard can measure recovery rate directly.
+
+### A10: Hand-typed rule creation verifies the grant at birth
+- On `/dashboard`, create a sheets rule via the MANUAL rule form (not the
+  Picker), hand-typing the never-picked fixture spreadsheet's id. The rule
+  must save successfully regardless of the grant state.
+- **Expected**: `sheets_grant_verification` fires with
+  `{via: 'dashboard_manual', result: 'missing', spreadsheet_id: <typed id>}`
+  (query per capability 16 conventions) — the stranded-at-birth rule is
+  visible in the funnel from the moment it exists, instead of only when a
+  call later fails. Repeating with a sheet that HAS been picked (standing QA
+  fixture) yields `result: 'ok'`. Telemetry only: rule creation must succeed
+  even if the Google check errors (`result: 'unknown'` is acceptable then),
+  and the same creation fires `rule_saved {via: 'dashboard_manual',
+  file_id}` (capability 16 A15 — one creation serves both assertions).
+
+### A11: Recovery re-checks are captured even when the grant stays missing
+- With a stranded rule (A2/A10 state), open the recovery panel
+  (`/dashboard/sheets-setup?sid=<id>` or the dashboard chip) and trigger a
+  re-check WITHOUT completing a Picker pick — e.g. close/skip the Picker so
+  the recovery UI re-verifies, or call the seam it uses directly:
+  `GET /api/rules/verify-sheets-access?sid=<id>&context=recovery` as the
+  signed-in user.
+- **Expected**: `sheets_grant_verification` fires with
+  `{via: 'recovery', result: 'missing', spreadsheet_id: <id>}` and NO
+  `sheets_grant_recovered` event. Previously only successful re-checks were
+  visible (via `sheets_grant_recovered`), so stuck users were
+  indistinguishable from users who never tried. After a real pick, the
+  re-check fires `{via: 'recovery', result: 'ok'}` AND
+  `sheets_grant_recovered` (A4/A8 unchanged).

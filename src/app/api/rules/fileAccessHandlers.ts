@@ -61,8 +61,15 @@ export async function verifyFileAccessGET(kind: DriveFileKind, request: NextRequ
       const result: FileGrantState = token
         ? await verifyFileGrant(kind, token, fileId)
         : { state: 'missing' };
-      if (context === 'recovery' && result.state === 'ok') {
-        captureServerEvent(clerkUserId, n.recoveredEvent, { [n.idProp]: fileId });
+      if (context === 'recovery') {
+        // Every recovery re-check is captured, not just the successes —
+        // attempts that stay 'missing' are the funnel's stuck users.
+        captureServerEvent(clerkUserId, n.verificationEvent, {
+          result: result.state, via: 'recovery', [n.idProp]: fileId,
+        });
+        if (result.state === 'ok') {
+          captureServerEvent(clerkUserId, n.recoveredEvent, { [n.idProp]: fileId });
+        }
       }
       // link_open = the approve page checking the grant before showing the
       // flow — the top of the picker-first funnel. post_approval = the

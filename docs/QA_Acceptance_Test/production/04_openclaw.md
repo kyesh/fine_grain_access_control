@@ -1,5 +1,11 @@
 # Production: OpenClaw (ClawHub)
 
+> **GATED — user-confirmed production QA only.** Do not execute this runbook
+> unless the dispatching prompt states the user explicitly confirmed production
+> QA in the current session (see `/qa-production`). If that sentence is absent,
+> stop and report instead of running. This suite mutates the shared production
+> QA account and deliberately triggers denials against production endpoints.
+
 > Install: Via `clawhub skill install fgac`
 > Runs ALL capabilities against `https://gmail.fgac.ai`
 

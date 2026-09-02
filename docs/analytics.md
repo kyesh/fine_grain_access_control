@@ -31,7 +31,7 @@ keep internal/QA traffic out of the numbers.
 | `flyer_scanned` | server (`/go/[slug]` QR redirect) | `slug`, `slug_known`, `campaign`, `variant`, `channel`, `destination`, `device`, `$raw_user_agent`/`$useragent` (the visitor's UA — without it PostHog's virtual traffic classification marks every scan `$virt_is_bot` / `no_user_agent` and bot-filtered views drop all real scans; added 2026-08-30), `geo_city`/`geo_country` (from Vercel headers; `$geoip_disable` set so the server IP isn't resolved). **Bot-filtered** (link-preview crawlers get the redirect but no event) and captured with a random distinct id per scan — `count()` is scans, not people. Joins to the web funnel via `utm_content`/`ref` = slug on the landing `$pageview`. Links managed via `npm run links` (`scripts/short-links.ts`); per-slug running totals also live in the `short_links.scan_count` column |
 | `sign_up_completed` | server (Clerk webhook, `user.created`) | `$set.email` |
 | `video_played` | client (`TrackedVideoEmbed.tsx`, all Descript demo embeds) | `video_id`, `video_title`, `page` |
-| `$mcp_tool_call` | server (`/api/mcp`, every tool) | `$mcp_tool_name`, `$mcp_duration_ms`, `$mcp_is_error`, `client_id`, `client_name`, `user_agent`, `outcome`, `account_email`, `account_delegated`; raw tools add `raw_api_kind`, `raw_api_family`, `raw_api_endpoint`, `raw_api_mutating`; denials add `denial_code`, and denials carrying an approval link add `approval_request_id` (joins to the approval funnel); failures add `error_status`, `error_reason`, `error_domain`, `failure_reason`, `gmail_404_site`; `gmail_get_attachment` adds `attachment_selector` and, on 404 recovery paths, `attachment_selfheal`; windowed reads (`gmail_get_attachment`, `gmail_read`, `docs_read_document`, `sheets_get_spreadsheet`, `sheets_read_range`, `google_api_get`) add `window_offset`, `window_chars`, `window_total_chars`; calls that reach Google add `google_ms` (cumulative wall-clock inside `googleFetch`) and `token_ms` (Clerk token fetch) |
+| `$mcp_tool_call` | server (`/api/mcp`, every tool) | `$mcp_tool_name`, `$mcp_duration_ms`, `$mcp_is_error`, `client_id`, `client_name`, `user_agent`, `outcome`, `account_email`, `account_delegated`; raw tools add `raw_api_kind`, `raw_api_family`, `raw_api_endpoint`, `raw_api_mutating`; denials add `denial_code`, and denials carrying an approval link add `approval_request_id` (joins to the approval funnel); failures add `error_status`, `error_reason`, `error_domain`, `failure_reason`, `gmail_404_site`; per-file sheets/docs calls add `file_id` + `file_service` (stamped in `checkFilePermission`, so every typed sheets/docs tool, comments tool, and raw per-file API call carries them — denied outcomes included — making per-file time-to-first-success queryable and joining to `rule_saved.file_id`); `gmail_get_attachment` adds `attachment_selector` and, on 404 recovery paths, `attachment_selfheal`; windowed reads (`gmail_get_attachment`, `gmail_read`, `docs_read_document`, `sheets_get_spreadsheet`, `sheets_read_range`, `google_api_get`) add `window_offset`, `window_chars`, `window_total_chars`; calls that reach Google add `google_ms` (cumulative wall-clock inside `googleFetch`) and `token_ms` (Clerk token fetch) |
 | `proxy_request` | server (`/api/proxy/[...path]`) | `service` (gmail/sheets/drive), `method`, `status`, `outcome` (`success`/`auth_failed`/`denied`/`timeout`/`error`), `duration_ms`, `proxy_key_id`, `account_email`, `account_delegated`, `google_ms`, `token_ms`; upstream failures add `error_status` (`timeout`/`network`) |
 | `mcp_connection_created` | server (`/api/mcp` auth layer) | `connection_id`, `client_id`, `client_name`/`client_version` (from MCP `initialize` clientInfo, when the creating request was one — **in practice ~never**: the client's concurrent SSE GET usually wins the row-insert race, so this event fires nameless; measured 0/10 with a name 2026-08-27→29. Use `mcp_connection_client_identified` or person-level `mcp_client_initialize` for client attribution), `auto_attached`, `account_age_seconds` |
 | `mcp_connection_client_identified` | server (`/api/mcp` auth layer, backfill-on-touch) | `connection_id`, `client_id`, `client_name`, `client_version`. Fires **once per connection**, on the first initialize that replaces the opaque `client_id` placeholder name — the reliable connection→client-product mapping (join on `connection_id`) |
@@ -42,7 +42,14 @@ keep internal/QA traffic out of the numbers.
 | `approval_link_opened` | server (approve-page load, `/dashboard/approve`) | `status` (`fresh`/`already_granted`/`wrong_account`/`invalid`), `request_id` (real id for `wrong_account` — recomputed against the resolved owner; `undefined` only for `invalid`), `action`, `agent_driven`, `user_agent` |
 | `approval_link_approved` | server (`actions.ts`, all approval paths) | `action`, `request_id`; per-file grants add `substituted` and `granted_count` |
 | `read_restriction_enforced` | server (`/api/mcp`) | `via` (tool name), `restriction` |
-| `sheets_grant_verification` | server (approve-page load via `/api/rules/verify-sheets-access`, and approval in `actions.ts`) | `result` (`ok`/`missing`/`unknown`), `via` (`link_open`/`magic_link`/`post_approval`), `spreadsheet_id` |
+| `rule_saved` | server (`reportRuleSave` in dashboard `actions.ts` — manual rule form, `exposeFilesFromPicker`, magic-link `insertFileRule`) | `mode` (`create`/`update`), `service`, `action_type`, `via` (`dashboard_manual` = hand-typed rule form / `dashboard_picker` = Google Picker expose / `magic_link` = approval-page grant), `file_id` (when the rule targets a sheet/doc — the join key to `$mcp_tool_call.file_id`); `dashboard_manual` adds `scoped`, `assigned_keys`, and pattern shape (`pattern_kind`/`pattern_length` — the pattern itself is NEVER sent: send patterns are real addresses); `dashboard_picker` adds `profile_scoped`; `magic_link` adds `request_id` (joins the approval funnel) |
+| `rule_save_failed` | server (dashboard `actions.ts`, manual rule form validation) | `mode`, `service`, `action_type`, `via` (`dashboard_manual`), `reason`, pattern shape props as above |
+| `picker_scope_redirect` | client (`useGooglePicker`) | `kind` (`sheet`/`doc`). Fires immediately BEFORE the `drive.file` OAuth consent redirect — the funnel's riskiest hop: a `picker_scope_redirect` with no subsequent `picker_opened` is a user who never came back from consent. Page context via `$pathname` |
+| `picker_opened` | client (`useGooglePicker`) | `kind`, `from_oauth_return` (true when the picker auto-reopened after the consent round-trip) |
+| `picker_picked` | client (`useGooglePicker`) | `kind`, `count` (files picked) |
+| `picker_cancelled` | client (`useGooglePicker`) | `kind` |
+| `picker_flow_error` | client (`useGooglePicker`, pre-existing) | `stage`, `message` |
+| `sheets_grant_verification` | server (approve-page load via `/api/rules/verify-sheets-access`, approval in `actions.ts`, hand-typed rule creation in `createRule`, recovery re-checks) | `result` (`ok`/`missing`/`unknown`), `via` (`link_open`/`magic_link`/`post_approval`/`dashboard_manual`/`recovery`), `spreadsheet_id`. `dashboard_manual` = grant verified at rule birth for a hand-typed file id (the stranded-at-birth case — telemetry only, a Google hiccup never fails rule creation); `recovery` = EVERY recovery-UI re-check, captured regardless of result (attempts that stay `missing` are the funnel's stuck users — before this, only successes were visible via `sheets_grant_recovered`, which still fires on `ok`) |
 | `sheets_grant_recovered` | server (`/api/rules/verify-sheets-access`) | `spreadsheet_id` |
 | `docs_grant_verification` / `docs_grant_recovered` | server (`/api/rules/verify-docs-access`, approval in `actions.ts`) | docs twins of the sheets grant-funnel events, with `document_id` |
 | `google_token_fetch_failed` | server (MCP `getGoogleToken`, proxy `fetchClerkGoogleToken`, `getOwnerGoogleToken`) | `reason` (`refresh_failed` = Clerk 422 cannot-refresh, `clerk_error`, `timeout` = MCP-path Clerk call exceeded 15 s), `via` (`mcp`/`proxy`/`grant_check`), `account_delegated`. The `$mcp_tool_call` event also carries `google_token_error` on affected calls. Added 2026-08-20 after the dev-instance refresh-token loss was found; this is the signal for whether production users hit it too |
@@ -111,6 +118,20 @@ pre-existing stranded rules (dashboard chips, MCP error links); a verified
 re-check there fires `sheets_grant_recovered`. Funnel health =
 `link_open{missing}` → `magic_link{ok}` conversion.
 
+**The sheets/docs adoption funnel** (instrumented end to end since the PR #72
+salvage, 2026-09): `picker_scope_redirect` → `picker_opened` →
+`picker_picked` → `rule_saved{via}` → `*_grant_verification{result=ok}` →
+first successful `$mcp_tool_call` carrying that `file_id`. The client picker
+events cover the dashboard leg (the consent redirect being the riskiest hop —
+`picker_scope_redirect` without a following `picker_opened` is an abandoned
+consent); `rule_saved.via` splits the three rule-creation paths
+(`dashboard_manual`/`dashboard_picker`/`magic_link`); the grant-verification
+events say whether Google actually holds the `drive.file` grant (every path,
+stranded-at-birth included); and `file_id` on `$mcp_tool_call` closes the
+loop — per-file time-to-first-success from pick to working agent call. Join
+the server stages on `file_id`; the client stages join per-person per-session
+(picker events carry no file id until the pick).
+
 `$mcp_tool_call` uses PostHog's **canonical MCP Analytics schema** (event and
 `$mcp_*` property names) so PostHog's built-in MCP views resolve the tool name.
 `$mcp_is_error` is true only for upstream failures/exceptions; the finer-grained
@@ -121,6 +142,23 @@ worked; before 2026-08-24 this classified as `failed` and inflated
 `gmail_get_attachment` error-rate readings), `failed` (❌ auth/input problems — these carry `failure_reason`, see below),
 `error` (upstream Google failure), `exception`.
 Unauthenticated calls attribute to the `anonymous-mcp` / `anonymous-proxy` persons.
+
+**The `error` vs `failed` boundary (directory-error demotion, 2026-09):**
+`error` (`$mcp_is_error=true`) means FGAC or Google is unhealthy — 5xx,
+`timeout`, `network`, throttling 403s (`usageLimits`), exceptions. `failed`
+(`$mcp_is_error=false`) means the caller or user can fix it by acting
+differently. Three formerly-`error` Google-guidance results are demoted to ❌
+`failed` on that principle, because each names the exact user/caller fix:
+(a) the post-policy 403/404 "sheet/doc not picked in the Picker" setup-link
+guidance (`fileGrantErrorResult`), (b) the stale Gmail message-id /
+attachment-id 404 guidance (`gmailNotFoundResult`), and (c) the
+stale-comment-404 guidance (`commentsErrorResult`). `$mcp_is_error` feeds the
+Anthropic Connector Directory's published per-tool error rates, so this is
+also the optics fix for conditions FGAC cannot heal server-side. Internal
+observability is unchanged: the demoted rows still carry `error_status`,
+`error_reason`, `error_domain`, and `gmail_404_site`. Error-rate trend
+queries must not compare across the deploy — split on `outcome` (`error` vs
+`failed`) and date-bound at the deploy window.
 
 > **Legacy naming (before 2026-08):** tool calls were captured as a custom
 > `mcp_tool_call` event with `tool` / `duration_ms` properties. That name
