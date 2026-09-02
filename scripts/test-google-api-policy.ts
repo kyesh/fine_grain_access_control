@@ -3,8 +3,8 @@
  * (src/app/api/mcp/googleApiPolicy.ts). Run: npx tsx scripts/test-google-api-policy.ts
  */
 import {
-  classifyGoogleApiCall, extractSendRecipients, extractDraftSendInfo, collectLabelIds,
-  sheetsApprovalAction, docsApprovalAction, extractDocsDocumentId,
+  classifyGoogleApiCall, canonicalizeGoogleApiPath, extractSendRecipients, extractDraftSendInfo,
+  collectLabelIds, sheetsApprovalAction, docsApprovalAction, extractDocsDocumentId,
   templateGoogleApiPath, rawApiFamily, extractGoogleErrorReason,
 } from '../src/app/api/mcp/googleApiPolicy';
 
@@ -149,6 +149,15 @@ expect('drive comment replies POST → file_comments mutating',
 expect('drive file metadata GET stays passthrough (no comments segment)',
   classifyGoogleApiCall('drive/v3/files/1BxiM2doc-ID_x', 'GET'),
   (c: { kind: string }) => c.kind === 'passthrough');
+// ── Bare Drive spelling (`v3/files/…`, observed 2026-08-31): canonicalized so
+// classification, comments enforcement, and routing all see `drive/v3/…` ──
+expect('bare-spelling comments POST (v3/files/…/comments) → file_comments, not passthrough',
+  classifyGoogleApiCall('v3/files/1BxiM2doc-ID_x/comments', 'POST'),
+  (c: { kind: string; fileId?: string; isMutating?: boolean }) =>
+    c.kind === 'file_comments' && c.fileId === '1BxiM2doc-ID_x' && c.isMutating === true);
+expect('bare-spelling file PATCH (v3/files/{id}) → passthrough with drive family',
+  classifyGoogleApiCall('v3/files/1BxiM2doc-ID_x', 'PATCH'),
+  (c: { kind: string; family?: string }) => c.kind === 'passthrough' && c.family === 'drive/v3');
 expect('un-granted API (calendar) → denied unsupported (no calendar scope in the grant)',
   classifyGoogleApiCall('calendar/v3/calendars/primary/events', 'GET'),
   (c: { kind: string; code?: string; family?: string }) =>
@@ -317,6 +326,32 @@ expect('messages/import is a literal subresource, not an id',
 expect('message trash keeps id-strip + literal verb tail',
   templateGoogleApiPath('gmail/v1/users/me/messages/18c8f2ab91d004a7/trash'),
   (t: string) => t === 'gmail/v1/users/me/messages/{id}/trash');
+expect('bare drive spelling canonicalized in the endpoint template (one analytics spelling)',
+  templateGoogleApiPath('v3/files/1BxiM2doc-ID_x/comments'),
+  (t: string) => t === 'drive/v3/files/{id}/comments');
+
+console.log('canonicalizeGoogleApiPath:');
+expect('bare v3/files gains the drive/ prefix',
+  canonicalizeGoogleApiPath('v3/files/1Abc/comments'),
+  (p: string) => p === 'drive/v3/files/1Abc/comments');
+expect('leading slash stripped, query preserved',
+  canonicalizeGoogleApiPath('/v3/files?q=name'),
+  (p: string) => p === 'drive/v3/files?q=name');
+expect('idempotent on the canonical spelling',
+  canonicalizeGoogleApiPath('drive/v3/files/1Abc'),
+  (p: string) => p === 'drive/v3/files/1Abc');
+expect('sheets bare spelling untouched (v4/spreadsheets is served as-is)',
+  canonicalizeGoogleApiPath('v4/spreadsheets/1Abc/values/A1:B2'),
+  (p: string) => p === 'v4/spreadsheets/1Abc/values/A1:B2');
+expect('docs bare spelling untouched',
+  canonicalizeGoogleApiPath('v1/documents'),
+  (p: string) => p === 'v1/documents');
+expect('segment boundary respected (v3/filesystems is not drive)',
+  canonicalizeGoogleApiPath('v3/filesystems/abc'),
+  (p: string) => p === 'v3/filesystems/abc');
+expect('drive v2 bare spelling also canonicalized',
+  canonicalizeGoogleApiPath('v2/files/1Abc'),
+  (p: string) => p === 'drive/v2/files/1Abc');
 
 console.log('extractGoogleErrorReason:');
 expect('legacy errors[] shape (Gmail/Drive)',

@@ -39,7 +39,8 @@ import { connectionsDeepLink } from '@/lib/dashboardAgentLinks';
 import { recordApprovalMint } from '@/lib/approvalRequests';
 import { TOOL_DEFS, toolAnnotations, type FgacToolDef } from './toolDefs';
 import {
-  classifyGoogleApiCall, extractSendRecipients, extractDraftSendInfo, sheetsApprovalAction, docsApprovalAction,
+  classifyGoogleApiCall, canonicalizeGoogleApiPath, extractSendRecipients, extractDraftSendInfo,
+  sheetsApprovalAction, docsApprovalAction,
   templateGoogleApiPath, rawApiFamily, extractGoogleErrorReason,
   type RawCallClass, type GoogleErrorReason,
 } from './googleApiPolicy';
@@ -727,7 +728,8 @@ function describeGoogleError(status: number, data: unknown, targetEmail: string)
     case 403:
       return describe403(detail, targetEmail, r);
     case 404:
-      return `❌ Google resource not found (404)${detail ? `: ${detail}` : ''}. Check the ID and try again.`;
+      return `❌ Google resource not found (404)${detail ? `: ${detail}` : ''}. ` +
+        `The id is wrong, stale, or not visible to this account — verify it against a fresh listing before retrying; the same id unchanged will 404 again.`;
     case 429:
       return '❌ Google API rate limit exceeded (429). Wait a moment and retry.';
     default:
@@ -829,6 +831,32 @@ function fileGrantErrorResult(kind: DriveFileKind, result: { error: string; stat
     );
   }
   return errorResult(result.error);
+}
+
+/**
+ * Post-policy Google failure on a comments call. Comments are content on the
+ * file, so a 403/404 here means what it means for the file itself — the FGAC
+ * rule exists but Google holds no drive.file grant for the file — and gets
+ * the same setup-link answer via fileGrantErrorResult. The one extra cause is
+ * a reply addressed to a specific commentId: comment ids are file-scoped and
+ * go stale when comments are deleted, and no reconnect or Picker pass fixes
+ * that, so that branch must steer to a fresh comments_read first.
+ */
+function commentsErrorResult(
+  kind: DriveFileKind,
+  result: { error: string; status?: number },
+  fileId: string,
+  commentId?: string,
+) {
+  if (commentId && result.status === 404) {
+    return errorResult(
+      `❌ Google returned 404 for comment '${commentId}' on this ${DRIVE_FILE_KINDS[kind].noun} — the comment id is stale or belongs to a different file, ` +
+      `or the file itself is not granted to FGAC at Google. ` +
+      `Do NOT retry the same commentId: re-run comments_read for this file and reply to a comment id from that fresh response. ` +
+      `If comments_read also fails with 403/404, the file grant is the problem — follow the setup link that error gives.`,
+    );
+  }
+  return fileGrantErrorResult(kind, result, fileId);
 }
 
 /**
@@ -992,10 +1020,15 @@ function planDocsDeleteVerification(requests: Record<string, unknown>[]): DocsDe
   let expectedDelta = 0;
   for (const request of requests) {
     for (const [op, rawArgs] of Object.entries(request)) {
-      const args = (rawArgs ?? {}) as Record<string, any>;
+      const args = (rawArgs ?? {}) as {
+        range?: { startIndex?: unknown; endIndex?: unknown; segmentId?: unknown };
+        text?: unknown;
+        location?: { segmentId?: unknown };
+        endOfSegmentLocation?: { segmentId?: unknown };
+      };
       if (op === 'deleteContentRange') {
         hasDelete = true;
-        const range = args.range as Record<string, any> | undefined;
+        const range = args.range;
         if (range && typeof range.startIndex === 'number' && typeof range.endIndex === 'number' && !range.segmentId) {
           expectedDelta -= range.endIndex - range.startIndex;
         } else {
@@ -1706,7 +1739,12 @@ async function executeRawGoogleCall(
     const check = await checkCommentsPermission(conn, resolved.proxyKeyId, cls.fileId, cls.isMutating);
     if ('denial' in check) return check.denial;
     const result = await withGrantGrace(check.kind, check.perm, () => googleFetch(rawUrl(cleanPath), resolved.token, method, serializeBody(body), resolved.targetEmail));
-    if (!result.ok) return errorResult(result.error);
+    if (!result.ok) {
+      // A raw reply path addresses a specific comment; its 404 needs the
+      // stale-commentId branch, same as comments_add with commentId.
+      const commentId = cleanPath.match(/\/comments\/([^/?#]+)/)?.[1];
+      return commentsErrorResult(check.kind, result, cls.fileId, commentId && decodeURIComponent(commentId));
+    }
     return jsonResult(result.data);
   }
 
@@ -2459,7 +2497,7 @@ const handler = createMcpHandler(
 
         const url = `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}/comments?fields=${encodeURIComponent(COMMENT_LIST_FIELDS)}&pageSize=50${pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : ''}`;
         const result = await withGrantGrace(check.kind, check.perm, () => googleFetch(url, resolved.token, 'GET', undefined, resolved.targetEmail));
-        if (!result.ok) return errorResult(result.error);
+        if (!result.ok) return fileGrantErrorResult(check.kind, result, fileId);
         return jsonResult(result.data);
       }
     );
@@ -2495,7 +2533,7 @@ const handler = createMcpHandler(
           : `${base}/comments?fields=${encodeURIComponent('id,content,createdTime')}`;
         const payload = JSON.stringify(commentId && resolve ? { content, action: 'resolve' } : { content });
         const result = await withGrantGrace(check.kind, check.perm, () => googleFetch(url, resolved.token, 'POST', payload, resolved.targetEmail));
-        if (!result.ok) return errorResult(result.error);
+        if (!result.ok) return commentsErrorResult(check.kind, result, fileId, commentId);
         return jsonResult(result.data);
       }
     );
@@ -2509,10 +2547,15 @@ const handler = createMcpHandler(
         offset: z.number().int().min(0).optional().describe('Start position (chars into the serialized response) for a windowed read of a large payload. Use the next_offset from the previous response to continue; start at 0.'),
         limit: z.number().int().min(1).optional().describe('Max chars to return in this response (server caps at 200000). Size this to YOUR tool-result budget. Passing offset or limit switches successful responses to the windowed envelope.'),
       }),
-      async ({ path, account, offset, limit }, { authInfo }) => {
+      async ({ path: rawPath, account, offset, limit }, { authInfo }) => {
         const conn = await requireApproval(authInfo);
         if ('content' in conn) return conn;
 
+        // Canonicalize bare Drive spellings (`v3/files/…` → `drive/v3/files/…`)
+        // before anything reads the path, so classification, per-file comments
+        // enforcement, host routing, and the stamped endpoint template agree
+        // (see canonicalizeGoogleApiPath).
+        const path = canonicalizeGoogleApiPath(rawPath);
         // Classify before resolving the account: resolution failures keep
         // their raw_api_* props, and denials that need no account (batch,
         // unsupported families) answer without a token fetch.
@@ -2545,11 +2588,12 @@ const handler = createMcpHandler(
         body: z.union([z.string(), z.record(z.string(), z.any())]).optional().describe('Request body (JSON object or string)'),
         account: z.string().optional().describe('Email account to use.'),
       }),
-      async ({ path, method = 'POST', body, account }, { authInfo }) => {
+      async ({ path: rawPath, method = 'POST', body, account }, { authInfo }) => {
         const conn = await requireApproval(authInfo);
         if ('content' in conn) return conn;
 
-        // Classify before resolving the account — see google_api_get.
+        // Canonicalize + classify before resolving the account — see google_api_get.
+        const path = canonicalizeGoogleApiPath(rawPath);
         const cls = classifyAndStampRawCall(path, method);
         if (cls.kind === 'denied') return textResult(cls.reason);
 
