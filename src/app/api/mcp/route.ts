@@ -1000,10 +1000,15 @@ function planDocsDeleteVerification(requests: Record<string, unknown>[]): DocsDe
   let expectedDelta = 0;
   for (const request of requests) {
     for (const [op, rawArgs] of Object.entries(request)) {
-      const args = (rawArgs ?? {}) as Record<string, any>;
+      const args = (rawArgs ?? {}) as {
+        range?: { startIndex?: unknown; endIndex?: unknown; segmentId?: unknown };
+        text?: unknown;
+        location?: { segmentId?: unknown };
+        endOfSegmentLocation?: { segmentId?: unknown };
+      };
       if (op === 'deleteContentRange') {
         hasDelete = true;
-        const range = args.range as Record<string, any> | undefined;
+        const range = args.range;
         if (range && typeof range.startIndex === 'number' && typeof range.endIndex === 'number' && !range.segmentId) {
           expectedDelta -= range.endIndex - range.startIndex;
         } else {
