@@ -138,18 +138,23 @@ sheet tells the truth.
   dashboard can measure recovery rate directly.
 
 ### A10: Hand-typed rule creation verifies the grant at birth
-- On `/dashboard`, create a sheets rule via the MANUAL rule form (not the
-  Picker), hand-typing the never-picked fixture spreadsheet's id. The rule
-  must save successfully regardless of the grant state.
+- Create a sheets rule for the never-picked fixture spreadsheet's id via
+  the app's own grant seam — as the signed-in user,
+  `POST /api/rules/grant-sheets-access` with a hand-typed
+  `targetResourceId` (the manual rule modal is Gmail-only, so this REST
+  endpoint — the same one the Picker manager calls — is the reachable
+  hand-typed path). The rule must save successfully regardless of the
+  grant state.
 - **Expected**: `sheets_grant_verification` fires with
-  `{via: 'dashboard_manual', result: 'missing', spreadsheet_id: <typed id>}`
+  `{via: 'grant_api', result: 'missing', spreadsheet_id: <typed id>}`
   (query per capability 16 conventions) — the stranded-at-birth rule is
   visible in the funnel from the moment it exists, instead of only when a
-  call later fails. Repeating with a sheet that HAS been picked (standing QA
-  fixture) yields `result: 'ok'`. Telemetry only: rule creation must succeed
-  even if the Google check errors (`result: 'unknown'` is acceptable then),
-  and the same creation fires `rule_saved {via: 'dashboard_manual',
-  file_id}` (capability 16 A15 — one creation serves both assertions).
+  call later fails. Repeating with a sheet that HAS been picked (standing
+  QA fixture) yields a fresh-create `result: 'ok'` (updates to an existing
+  rule do not re-verify). Telemetry only: rule creation must succeed even
+  if the Google check errors (`result: 'unknown'` is acceptable then), and
+  the same creation fires `rule_saved {via: 'grant_api', file_id}`
+  (capability 16 A15 — one creation serves both assertions).
 
 ### A11: Recovery re-checks are captured even when the grant stays missing
 - With a stranded rule (A2/A10 state), open the recovery panel

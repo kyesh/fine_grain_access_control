@@ -293,6 +293,39 @@ export async function grantFileAccessPOST(kind: DriveFileKind, request: NextRequ
       }
     }
 
+    // via 'grant_api': this REST seam serves both the dashboard's Picker
+    // manager (ExposedFilesManager) and any direct API caller — the only
+    // reachable path for a hand-typed sheet/doc id, since the manual rule
+    // modal is Gmail-only. file_id joins to $mcp_tool_call.file_id.
+    captureServerEvent(clerkUserId, 'rule_saved', {
+      mode: existingRule ? 'update' : 'create',
+      service: n.d.service,
+      action_type: chosenActionType,
+      via: 'grant_api',
+      file_id: targetResourceId,
+      ...(Array.isArray(proxyKeyIds) ? { assigned_keys: proxyKeyIds.length } : {}),
+    });
+
+    // A rule created here may have no Picker pick behind it (hand-typed or
+    // API-supplied id), so Google may hold no drive.file grant — the same
+    // stranded-at-birth dead end the magic-link flow verifies against.
+    // Record the grant state at birth so these rules are visible in the
+    // funnel instead of silently broken. Telemetry only: a Google hiccup
+    // must never fail rule creation.
+    if (!existingRule) {
+      try {
+        const token = await getOwnerGoogleToken(clerkUserId);
+        const grant: FileGrantState = token
+          ? await verifyFileGrant(kind, token, targetResourceId)
+          : { state: 'missing' };
+        captureServerEvent(clerkUserId, n.verificationEvent, {
+          result: grant.state, via: 'grant_api', [n.idProp]: targetResourceId,
+        });
+      } catch (err) {
+        console.error(`Birth grant verification failed for ${n.d.service}:`, err);
+      }
+    }
+
     return NextResponse.json({ success: true, ruleId });
   } catch (error) {
     console.error(`Error saving ${n.d.service} rule:`, error);

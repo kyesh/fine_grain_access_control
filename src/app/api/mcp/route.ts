@@ -634,21 +634,22 @@ async function sendDenialWithLinks(
         action: 'send_whitelist', recipient: denial.deniedRecipient,
       });
       lines.push(`👉 Allow sending to '${denial.deniedRecipient}' only — share this one-click link with the user: ${one.url}`);
-      await recordApprovalMint({
+      const oneMintCount = await recordApprovalMint({
         requestId: one.requestId, userId: conn.user.id, proxyKeyId,
         action: 'send_whitelist', targetHash: one.targetHash,
       });
       captureServerEvent(conn.user.clerkUserId, 'approval_link_minted', {
         action: 'send_whitelist', request_id: one.requestId, target_hash: one.targetHash, via: 'send_denial',
+        mint_count: oneMintCount,
       });
     }
     const all = await mintApprovalLink(DASHBOARD_URL, conn.user.id, proxyKeyId, { action: 'send_all' });
     lines.push(`👉 Or allow sending to ANY recipient from this profile — share this one-click link with the user instead: ${all.url}`);
-    await recordApprovalMint({
+    const allMintCount = await recordApprovalMint({
       requestId: all.requestId, userId: conn.user.id, proxyKeyId, action: 'send_all',
     });
     captureServerEvent(conn.user.clerkUserId, 'approval_link_minted', {
-      action: 'send_all', request_id: all.requestId, via: 'send_denial',
+      action: 'send_all', request_id: all.requestId, via: 'send_denial', mint_count: allMintCount,
     });
     lines.push('Present both options and let the user pick; "any recipient" is the convenient choice if they expect to send freely, and it stays revocable from the dashboard rules.');
     lines.push(AGENT_APPROVAL_PROTOCOL);
@@ -2302,7 +2303,9 @@ const handler = createMcpHandler(
         const result = await withSheetsGrace(perm, () => sheetsFetch(resolved.token, `${spreadsheetId}`, 'GET', undefined, resolved.targetEmail));
         if (!result.ok) return sheetsErrorResult(result, spreadsheetId);
         if (offset !== undefined || limit !== undefined) {
-          return windowedResult(JSON.stringify(result.data), offset, limit, { spreadsheetId });
+          // Pretty-printed to match the windowless jsonResult serialization —
+          // windows must reassemble byte-identical to the unwindowed read.
+          return windowedResult(JSON.stringify(result.data, null, 2), offset, limit, { spreadsheetId });
         }
         return jsonResult(result.data);
       }
@@ -2334,7 +2337,7 @@ const handler = createMcpHandler(
         const result = await withSheetsGrace(perm, () => sheetsFetch(resolved.token, `${spreadsheetId}/values/${encodedRange}`, 'GET', undefined, resolved.targetEmail));
         if (!result.ok) return sheetsErrorResult(result, spreadsheetId);
         if (offset !== undefined || limit !== undefined) {
-          return windowedResult(JSON.stringify(result.data), offset, limit, { spreadsheetId, range });
+          return windowedResult(JSON.stringify(result.data, null, 2), offset, limit, { spreadsheetId, range });
         }
         return jsonResult(result.data);
       }
@@ -2460,7 +2463,7 @@ const handler = createMcpHandler(
         // substring of the serialized JSON response — windows concatenate to
         // the exact document JSON. Combine with `fields` to narrow first.
         if (offset !== undefined || limit !== undefined) {
-          return windowedResult(JSON.stringify(result.data), offset, limit, { documentId });
+          return windowedResult(JSON.stringify(result.data, null, 2), offset, limit, { documentId });
         }
         return jsonResult(result.data);
       }
@@ -2675,11 +2678,12 @@ const handler = createMcpHandler(
         }
 
         const { url, requestId, targetHash } = await mintApprovalLink(DASHBOARD_URL, conn.user.id, conn.proxyKeyId, action);
-        await recordApprovalMint({
+        const mintCount = await recordApprovalMint({
           requestId, userId: conn.user.id, proxyKeyId: conn.proxyKeyId, action: action.action, targetHash,
         });
         captureServerEvent(conn.user.clerkUserId, 'approval_link_minted', {
           action: action.action, via: 'request_access', request_id: requestId, target_hash: targetHash,
+          mint_count: mintCount,
         });
         addToolCallProps({ approval_request_id: requestId });
         return jsonResult({
