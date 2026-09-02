@@ -31,7 +31,7 @@ keep internal/QA traffic out of the numbers.
 | `flyer_scanned` | server (`/go/[slug]` QR redirect) | `slug`, `slug_known`, `campaign`, `variant`, `channel`, `destination`, `device`, `$raw_user_agent`/`$useragent` (the visitor's UA — without it PostHog's virtual traffic classification marks every scan `$virt_is_bot` / `no_user_agent` and bot-filtered views drop all real scans; added 2026-08-30), `geo_city`/`geo_country` (from Vercel headers; `$geoip_disable` set so the server IP isn't resolved). **Bot-filtered** (link-preview crawlers get the redirect but no event) and captured with a random distinct id per scan — `count()` is scans, not people. Joins to the web funnel via `utm_content`/`ref` = slug on the landing `$pageview`. Links managed via `npm run links` (`scripts/short-links.ts`); per-slug running totals also live in the `short_links.scan_count` column |
 | `sign_up_completed` | server (Clerk webhook, `user.created`) | `$set.email` |
 | `video_played` | client (`TrackedVideoEmbed.tsx`, all Descript demo embeds) | `video_id`, `video_title`, `page` |
-| `$mcp_tool_call` | server (`/api/mcp`, every tool) | `$mcp_tool_name`, `$mcp_duration_ms`, `$mcp_is_error`, `client_id`, `client_name`, `user_agent`, `outcome`, `account_email`, `account_delegated`; raw tools add `raw_api_kind`, `raw_api_family`, `raw_api_endpoint`, `raw_api_mutating`; denials add `denial_code`, and denials carrying an approval link add `approval_request_id` (joins to the approval funnel); failures add `error_status`, `error_reason`, `error_domain`, `failure_reason`, `gmail_404_site`; `gmail_get_attachment` adds `attachment_selector`, on 404 recovery paths `attachment_selfheal`, and on windowed reads `attachment_mode`, `attachment_offset`, `attachment_window`, `attachment_text_kind`, `attachment_text_chars`, `attachment_extract_error`; calls that reach Google add `google_ms` (cumulative wall-clock inside `googleFetch`) and `token_ms` (Clerk token fetch) |
+| `$mcp_tool_call` | server (`/api/mcp`, every tool) | `$mcp_tool_name`, `$mcp_duration_ms`, `$mcp_is_error`, `client_id`, `client_name`, `user_agent`, `outcome`, `account_email`, `account_delegated`; raw tools add `raw_api_kind`, `raw_api_family`, `raw_api_endpoint`, `raw_api_mutating`; denials add `denial_code`, and denials carrying an approval link add `approval_request_id` (joins to the approval funnel); failures add `error_status`, `error_reason`, `error_domain`, `failure_reason`, `gmail_404_site`; `gmail_get_attachment` adds `attachment_selector` and, on 404 recovery paths, `attachment_selfheal`; windowed reads (`gmail_get_attachment`, `gmail_read`, `docs_read_document`, `sheets_get_spreadsheet`, `sheets_read_range`, `google_api_get`) add `window_offset`, `window_chars`, `window_total_chars`; calls that reach Google add `google_ms` (cumulative wall-clock inside `googleFetch`) and `token_ms` (Clerk token fetch) |
 | `proxy_request` | server (`/api/proxy/[...path]`) | `service` (gmail/sheets/drive), `method`, `status`, `outcome` (`success`/`auth_failed`/`denied`/`timeout`/`error`), `duration_ms`, `proxy_key_id`, `account_email`, `account_delegated`, `google_ms`, `token_ms`; upstream failures add `error_status` (`timeout`/`network`) |
 | `mcp_connection_created` | server (`/api/mcp` auth layer) | `connection_id`, `client_id`, `client_name`/`client_version` (from MCP `initialize` clientInfo, when the creating request was one — **in practice ~never**: the client's concurrent SSE GET usually wins the row-insert race, so this event fires nameless; measured 0/10 with a name 2026-08-27→29. Use `mcp_connection_client_identified` or person-level `mcp_client_initialize` for client attribution), `auto_attached`, `account_age_seconds` |
 | `mcp_connection_client_identified` | server (`/api/mcp` auth layer, backfill-on-touch) | `connection_id`, `client_id`, `client_name`, `client_version`. Fires **once per connection**, on the first initialize that replaces the opaque `client_id` placeholder name — the reliable connection→client-product mapping (join on `connection_id`) |
@@ -255,24 +255,27 @@ was stranded on an unmerged branch and the props first ship with the
 raw-api-classification change, 2026-08-21.) The pre-existing 200k-char cap
 is unchanged.
 
-**Windowed attachment reads (gmail-attachment-pagination plan):** the
+**Windowed large responses (gmail-attachment-pagination plan v3):** the
 2026-08 size-capped demand was bimodal — 8 of 11 external `size_capped` rows
-were 215–331 KB documents (barely over the cap), 3 were 1.8–17.5 MB — and the
-intent behind nearly all of it is *reading*, so `gmail_get_attachment` now
-serves large attachments as extracted text (PDF / .docx / text types, ~50k-char
-windows) with decoded-byte base64 windows (~75 KB) as the fallback; the ⚠️
-`size_capped` refusal remains only for over-cap files with no text layer, still
-non-`isError`, and now names the `mode:'base64'` continuation. Props on
-windowed calls: `attachment_mode` (`auto|text|base64` as requested),
-`attachment_offset`, `attachment_window` (`text|bytes` — what was actually
-returned), `attachment_text_kind` (`pdf|docx|text`), `attachment_text_chars`
-(total extracted length, before windowing), `attachment_extract_error`
-(`unsupported|failed|empty` — `empty` is a text layer that extracts to
-nothing, i.e. a scanned PDF). Confirmation queries: `size_capped` count for
-external users should converge toward zero for extractable types; the
-`attachment_window='text'` share says whether agents actually read via
-extraction; a rising `attachment_extract_error='failed'` count is a parser
-regression.
+were 215–331 KB documents (barely over the cap), 3 were 1.8–17.5 MB. Rather
+than the server guessing (extraction, fixed chunk sizes), the pattern is
+caller-directed windowing: `offset` + `limit` params on every read tool with a
+potentially-oversized payload — the agent sizes windows to its *own* harness's
+tool-result budget. Windows are plain substrings (base64url data for
+`gmail_get_attachment`; the serialized response for `gmail_read` — body
+untruncated when windowed — `docs_read_document`, `sheets_get_spreadsheet`,
+`sheets_read_range`, and `google_api_get`) inside a uniform envelope
+(`total_chars`, `next_offset`), so contiguous windows concatenate to exactly
+the original payload. Deliberately NOT windowed: tools with native Google
+pagination (`gmail_list`, `comments_read`), small bounded reads, and all
+write tools (re-issuing a write to page its response would repeat the side
+effect). The ⚠️ `size_capped` refusal
+remains for over-cap attachment calls that pass no window params, stays
+non-`isError`, and names the continuation. Windowed calls stamp
+`window_offset`, `window_chars`, `window_total_chars`. Confirmation queries:
+external `size_capped` events should be followed (same user, minutes) by
+windowed calls rather than silence; `window_total_chars` distribution sizes
+real large-payload demand per tool.
 
 **Raw Google API classification (raw-api-classification plan):** every
 `google_api_get` / `google_api_modify` call stamps four props at

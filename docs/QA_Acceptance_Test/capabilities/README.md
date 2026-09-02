@@ -33,4 +33,4 @@
 | 17 | `17_sheets_grant_recovery.md` | Sheets approval verifies the Google-side grant; picker + video recovery when missing; honest post-policy errors |
 | 18 | `18_google_reconnect.md` | Broken/expired Google grants route into the Reconnect Google flow |
 | 19 | `19_docs_management.md` | Per-document read/write/block rules, docs MCP tools, raw `documents` enforcement, docs grant recovery |
-| 20 | `20_attachment_reading.md` | Large-attachment reading: extracted-text windows, base64 byte windows, guided size-cap refusal |
+| 20 | `20_attachment_reading.md` | Caller-directed windowing of large read payloads (offset/limit envelope) across attachment, gmail_read, docs, sheets, and raw GET; guided size-cap refusal |

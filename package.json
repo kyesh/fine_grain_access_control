@@ -26,7 +26,6 @@
     "clsx": "^2.1.1",
     "dotenv": "^17.3.1",
     "drizzle-orm": "^0.45.1",
-    "fflate": "^0.8.3",
     "jose": "^6.2.2",
     "lucide-react": "^0.577.0",
     "mcp-handler": "^1.1.0",
@@ -40,8 +39,7 @@
     "safe-regex": "^2.1.1",
     "svix": "^1.99.1",
     "tailwind-merge": "^3.5.0",
-    "tsx": "^4.21.0",
-    "unpdf": "^1.8.1"
+    "tsx": "^4.21.0"
   },
   "devDependencies": {
     "@neondatabase/api-client": "^2.7.1",

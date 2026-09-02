@@ -1,66 +1,88 @@
-# Capability 20: Attachment Reading (windows + extraction)
+# Capability 20: Windowed Large Responses
 
-`gmail_get_attachment` must serve attachments of any size without dead ends:
-small files keep the legacy full-base64url response, large extractable files
-return windowed extracted text, and raw bytes are always reachable via
-stateless base64 windows. The ⚠️ size-capped refusal survives only for
-over-cap files with no text layer, stays non-`isError` (Connector Directory
-error rate), and must name the continuation call.
+Every read tool whose payload can exceed an agent's tool-result window
+supports caller-directed windowing: `offset` + `limit` (chars), a uniform
+envelope (`total_chars`, `next_offset`, `chars_returned`, `data`), and
+windows that are plain substrings — contiguous windows concatenate to exactly
+the original payload. The agent sizes windows to its own harness's budget;
+the server never guesses or transforms.
 
-Fixtures: send mail between USER_A and USER_B carrying (1) a small text/CSV
-attachment (< 150 KB), (2) a text-bearing PDF larger than ~160 KB (over the
-200k base64-char cap), and (3) any binary with no text layer (e.g. a PNG),
-ideally over-cap — an under-cap binary still covers A4/A6. Standing permission
-covers sending real mail between the QA accounts.
+Adopters and their payloads:
 
-### A1: Legacy path unchanged for small attachments
+| tool | windowed payload |
+| --- | --- |
+| `gmail_get_attachment` | the base64url `data` string (decode ONCE after concatenating) |
+| `gmail_read` | serialized parsed message, body UNtruncated (the default 20k inline truncation is bypassed when windowing) |
+| `docs_read_document` | serialized JSON document resource (composes with `fields`) |
+| `sheets_get_spreadsheet` / `sheets_read_range` | serialized JSON response |
+| `google_api_get` | the serialized successful response; denials/errors/policy messages pass through whole |
 
-Call with only messageId + attachmentId/filename on the small attachment.
-Response is the full JSON `{size, data}` with base64url data — no window
-metadata, no mode/offset required. Decoded bytes match the sent file.
+Not adopted, by design: tools with native upstream pagination (`gmail_list`,
+`comments_read` — Google page tokens), small bounded reads (`gmail_labels`,
+`list_accounts`, `get_my_permissions`), and ALL write tools (`gmail_send`,
+`sheets_update_range`/`append_rows`/`edit`, `docs_edit`, `comments_add`,
+`google_api_modify`) — windowing a write's response would invite re-issuing
+the side effect to fetch the next window.
 
-### A2: Over-cap extractable attachment returns text, not a refusal
+Fixtures: a message with a small attachment (< 150 KB), one with an
+attachment > 160 KB (over the 200k base64-char cap), and a long-bodied
+message (> 20k chars body) in the QA mailbox — send between USER_A/USER_B
+under the standing permission if absent; plus the QA-exposed sheet and doc
+from setup.
 
-Default call (no mode) on the over-cap PDF. Response starts with `📎`, states
-the filename, `extracted pdf text`, a `chars 0–N of TOTAL` range, and — when
-TOTAL exceeds the ~50k-char window — the exact `offset:` to continue with.
-Outcome is `success` (not `size_capped`), and the body contains real text from
-the PDF.
+### A1: Legacy paths unchanged when no window params are passed
 
-### A3: Text windows continue by offset and terminate
+`gmail_get_attachment` on the small attachment returns the full `{size,
+data}` JSON (decoded bytes match the sent file). `gmail_read` on the
+long-bodied message returns the parsed view with the 20k body truncation
+notice, which names the offset/limit continuation. Windowless
+`docs_read_document` / sheets reads return their raw resources.
 
-`mode:'text'` with the offset from A2's response returns the next window with
-a contiguous char range; the final window says `End of text.` instead of a
-next offset. `mode:'text'` also works on the small (under-cap) attachment —
-extraction is not gated on size.
+### A2: Over-cap attachment without window params → guided ⚠️, non-error
 
-### A4: Base64 windows page bytes and reassemble exactly
+`gmail_get_attachment` on the over-cap attachment with no offset/limit.
+Response starts with `⚠️` (classified `size_capped`, NOT `isError`), states
+the size, and instructs the windowed continuation.
 
-`mode:'base64', offset:0` on an attachment (use the over-cap PDF if fixture 3
-is under-cap) returns JSON with `total_bytes`, `offset`, `bytes_returned`,
-`next_offset`, and base64url `data`. Following `next_offset` until it is
-`null` and concatenating the DECODED windows reproduces the original file
-byte-for-byte (verify by length + a hash where the environment allows).
+### A3: Attachment windows honor limit and reassemble byte-for-byte
 
-### A5: Non-extractable over-cap file gets a guided ⚠️, not a dead end
+On the over-cap attachment, call with `offset: 0` and a chosen `limit`
+(e.g. 100000), follow `next_offset` to `null`. Each response carries the
+envelope; `chars_returned` ≤ limit; a limit above 200000 is capped to 200000.
+Concatenating the `data` strings in offset order and base64url-decoding the
+result once reproduces the original file (verify length + hash where the
+environment allows).
 
-Default call on the over-cap binary with no text layer. Response starts with
-`⚠️` (classified `size_capped`, NOT `isError`), states the size, and names the
-`mode:'base64'` + `offset` continuation. If only an under-cap binary fixture
-exists, assert instead that `mode:'text'` on it returns the ❌ no-extractor
-guidance pointing at `mode:'base64'` — same seam, under-cap variant.
+### A4: gmail_read windows expose the untruncated body
 
-### A6: Out-of-range offset fails safe
+`gmail_read` with `offset`/`limit` on the long-bodied message: following
+`next_offset` to the end and concatenating yields parseable JSON whose `body`
+contains the full text — longer than 20k chars, with no truncation marker.
 
-An offset at/beyond the end (text or base64 mode) returns ❌ guidance to stop
-retrying or restart from 0 — outcome `failed`, NOT `isError`, and no content.
+### A5: Docs and sheets reads window the same envelope
 
-### A7: Windowed-read analytics props land
+`docs_read_document` (QA doc) and `sheets_read_range` (QA sheet) with
+`offset`/`limit` return the envelope over their serialized JSON; following
+`next_offset` and concatenating reconstructs byte-identical JSON to the
+windowless read. (`sheets_get_spreadsheet` shares the identical seam — spot
+check one envelope response.)
 
-The `$mcp_tool_call` events from A2–A4 carry `attachment_mode`/
-`attachment_offset` (windowed calls), `attachment_window` (`text`/`bytes` as
-returned), and for text windows `attachment_text_kind` + total
-`attachment_text_chars`; A5's event carries `attachment_extract_error`.
-Verify via PostHog (dev project) or server logs per the environment's
-capability-16 method; skip with reason if the environment cannot observe
-events.
+### A6: google_api_get windows successes only
+
+`google_api_get` with `offset`/`limit` on an allowed Gmail read path (e.g.
+`gmail/v1/users/me/messages/<id>?format=full`) returns the envelope over the
+raw response. The same params on a DENIED path (e.g. a batch endpoint) return
+the denial text whole — never a windowed slice of it.
+
+### A7: Out-of-range offset fails safe
+
+An `offset` at/beyond `total_chars` (any adopter) returns ❌ guidance to stop
+retrying or restart from 0 — outcome `failed`, NOT `isError`, no data.
+
+### A8: Windowing analytics props land
+
+The `$mcp_tool_call` events from A3–A6 carry `window_offset`,
+`window_chars`, and `window_total_chars`; A2's event carries
+`attachment_chars`/`attachment_kb` and `outcome = size_capped`. Verify via
+PostHog (dev project) or server logs per the environment's capability-16
+method; skip with reason if the environment cannot observe events.
