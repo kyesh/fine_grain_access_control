@@ -53,7 +53,16 @@ attributable to it.
   2026-08-24 classifies as `outcome=size_capped`, not `failed` (first shipped
   with the raw-api-classification change — earlier docs described these props
   ahead of the code). Events whose attachment fetch itself failed carry
-  `attachment_declared_kb` (size from the parent's MIME metadata) instead.
+  `attachment_declared_kb` (size from the parent's MIME metadata) instead —
+  but only when the intended attachment is identifiable from the fresh
+  parent read: filename-selected fetches, current-id fetches, and the
+  single-attachment self-heal (`attachment_selfheal` `recovered`/
+  `retry_failed`, which resolves the caller's stale id to the message's
+  only attachment and stamps its declared size). The `ambiguous` and
+  `no_attachments` branches cannot name a target attachment, so a null
+  declared size there is correct, not a regression (2026-09-02 finding:
+  before this the heal branch stamped nothing either, making the fallback
+  black-box unreachable).
   Windowed reads (`gmail_get_attachment`, `docs_read_document`) add
   `window_offset` / `window_chars` / `window_total_chars` — asserted in
   capability 20 (A6), not re-checked here.

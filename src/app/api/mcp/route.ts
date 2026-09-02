@@ -2160,6 +2160,15 @@ const handler = createMcpHandler(
               `STOP retrying this pair and re-check which message carries the attachment via gmail_read.`);
           }
           if (!suppliedIdIsCurrent && freshAttachments.length === 1) {
+            // The heal has just identified the attachment the caller meant
+            // (the message's only one), so its declared size is knowable now
+            // even though the supplied id missed the findDeclared lookup
+            // above — stamp it so retry_failed rows are size-attributable.
+            // (QA 16 A8: this was the only reachable fetch-failure branch
+            // with an identifiable target and it stamped nothing.)
+            if (freshAttachments[0].sizeBytes) {
+              addToolCallProps({ attachment_declared_kb: Math.round(freshAttachments[0].sizeBytes / 1024) });
+            }
             const retry = await gmailFetch(
               resolved.token,
               resolved.targetEmail,
