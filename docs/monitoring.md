@@ -339,7 +339,8 @@ MCP `initialize`), or `mcp_client_initialize` for authenticated sessions.
 while the rest of their traffic works — measured 2026-08-28 as repeated
 per-user `gmail_list` 403s (9.5% tool-error rate on the entry-point tool).
 Since 2026-08-28 the MCP path pre-flight-denies these calls
-(`failure_reason: 'gmail_scope_missing'`, outcome `failed`) and fires the
+(`denial_code` = `failure_reason` = `'gmail_scope_missing'`; outcome
+`denied_by_policy` since 2026-09-03, `failed` before that) and fires the
 unsampled standalone event:
 
 ```sql
