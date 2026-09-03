@@ -72,22 +72,60 @@ async function main() {
     process.exit(1);
   }
 
-  const mergedIntoMain = (gitBranch: string): boolean => {
+  const refMergedIntoMain = (ref: string): boolean => {
     try {
-      execSync(`git merge-base --is-ancestor "origin/${gitBranch}" origin/main`, { encoding: 'utf-8' });
+      execSync(`git merge-base --is-ancestor "${ref}" origin/main`, { encoding: 'utf-8' });
       return true;
     } catch {
       return false;
     }
   };
+  const mergedIntoMain = (gitBranch: string): boolean => refMergedIntoMain(`origin/${gitBranch}`);
 
   const sanitizedToRaw = new Map<string, string>();
   for (const b of remoteBranches) sanitizedToRaw.set(sanitize(b), b);
+
+  // Local branches (includes branches checked out in other worktrees) — an
+  // unpushed local branch has no remote ref but its Neon branch may be in use.
+  const localSanitizedToRaw = new Map<string, string>();
+  try {
+    execSync("git for-each-ref --format='%(refname:short)' refs/heads", { encoding: 'utf-8' })
+      .split('\n')
+      .map(b => b.replace(/^'|'$/g, '').trim())
+      .filter(Boolean)
+      .forEach(b => localSanitizedToRaw.set(sanitize(b), b));
+  } catch { /* no local view — the unknown-branch rule below still keeps them */ }
+
+  // Head refs of finished (merged or closed) PRs, so a db:branch Neon branch
+  // whose git branch was deleted after merge can still be proven stale.
+  // Best-effort: if gh is unavailable/unauthenticated we just fall back to
+  // the old behavior (unknown names are kept, never deleted).
+  const finishedPrSanitized = new Set<string>();
+  try {
+    for (const state of ['merged', 'closed']) {
+      JSON.parse(
+        execSync(`gh pr list --state ${state} --limit 300 --json headRefName`, { encoding: 'utf-8' })
+      ).forEach((pr: { headRefName: string }) => finishedPrSanitized.add(sanitize(pr.headRefName)));
+    }
+  } catch {
+    console.log('ℹ️  gh unavailable — skipping finished-PR matching (unknown branches will be kept).');
+  }
 
   let currentBranchSanitized = '';
   try {
     currentBranchSanitized = sanitize(execSync('git rev-parse --abbrev-ref HEAD', { encoding: 'utf-8' }).trim());
   } catch { /* detached HEAD etc. — no extra protection possible */ }
+
+  // Branches checked out in ANY worktree get the same protection as the
+  // current branch — a live session's DB branch must never vanish mid-run,
+  // even right after its PR merges.
+  const checkedOutSanitized = new Set<string>();
+  try {
+    execSync('git worktree list --porcelain', { encoding: 'utf-8' })
+      .split('\n')
+      .filter(l => l.startsWith('branch refs/heads/'))
+      .forEach(l => checkedOutSanitized.add(sanitize(l.slice('branch refs/heads/'.length).trim())));
+  } catch { /* worktrees unavailable — current-branch protection still applies */ }
 
   let deletedCount = 0;
   for (const branch of branches) {
@@ -108,13 +146,25 @@ async function main() {
       gitRef = sanitizedToRaw.get(branch.name);
       if (branch.name === currentBranchSanitized) {
         protectedReason = 'current local git branch';
+      } else if (checkedOutSanitized.has(branch.name)) {
+        protectedReason = 'checked out in a worktree';
       } else if (gitRef && !mergedIntoMain(gitRef)) {
         protectedReason = 'git branch still active (unmerged)';
       } else if (!gitRef) {
-        // Doesn't map to any remote git branch. For preview/* that means the
-        // branch is gone (stale); for plain names it could be anything a
-        // human made by hand — leave those alone.
-        protectedReason = 'no matching git branch — not created by this tooling?';
+        // Doesn't map to any remote git branch. Staleness can still be proven
+        // two ways: a leftover LOCAL branch already merged into origin/main
+        // (finished session that never got cleaned up), or a finished
+        // (merged/closed) PR whose head ref this name matches. An unmerged
+        // local branch is protected — it may be an active unpushed session.
+        // Anything else could be a branch a human made by hand — leave alone.
+        const localRaw = localSanitizedToRaw.get(branch.name);
+        if (localRaw && !refMergedIntoMain(localRaw)) {
+          protectedReason = 'local git branch exists (unmerged)';
+        } else if (localRaw || finishedPrSanitized.has(branch.name)) {
+          gitRef = branch.name; // stale: local branch merged, or PR finished
+        } else {
+          protectedReason = 'no matching git branch — not created by this tooling?';
+        }
       }
     }
 
