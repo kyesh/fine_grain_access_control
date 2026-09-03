@@ -26,7 +26,7 @@ import { eq, and, isNull } from 'drizzle-orm';
 import { filterLiveDelegatedAccess } from '@/db/delegationQueries';
 import { clerkClient } from '@clerk/nextjs/server';
 import { resolveDbUser } from '@/db/userHelpers';
-import { loadApplicableRules, checkReadRestrictions, type ApplicableRules } from '@/lib/gmailRules';
+import { loadApplicableRules, checkReadRestrictions, decodeB64Url, stripHtmlToText, type ApplicableRules } from '@/lib/gmailRules';
 import { compileRulePattern } from '@/lib/rulePatterns';
 import { captureServerEvent } from '@/lib/posthogServer';
 import { runWithToolCallProps, addToolCallProps, getToolCallProps } from '@/lib/toolCallContext';
@@ -1273,10 +1273,6 @@ function windowedResult(
   });
 }
 
-function decodeB64Url(s: string): string {
-  try { return Buffer.from(s, 'base64url').toString('utf8'); } catch { return ''; }
-}
-
 interface GmailPart {
   mimeType?: string;
   filename?: string;
@@ -1318,11 +1314,7 @@ function parseGmailMessage(msg: Record<string, unknown>, opts: { fullBody?: bool
   }
 
   if (!bodyText && htmlFallback) {
-    bodyText = htmlFallback
-      .replace(/<style[\s\S]*?<\/style>/gi, ' ')
-      .replace(/<[^>]+>/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim();
+    bodyText = stripHtmlToText(htmlFallback);
   }
 
   const truncated = !opts.fullBody && bodyText.length > MAX_BODY_CHARS;

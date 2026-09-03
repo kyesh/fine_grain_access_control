@@ -4,6 +4,7 @@ import { users, proxyKeys, emailDelegations, keyEmailAccess, accessRules, keyRul
 import { eq, and } from 'drizzle-orm';
 import { clerkClient } from '@clerk/nextjs/server';
 import { compileRulePattern } from '@/lib/rulePatterns';
+import { checkReadRestrictions } from '@/lib/gmailRules';
 import { captureServerEvent } from '@/lib/posthogServer';
 import { GOOGLE_FETCH_TIMEOUT_MS, CLERK_TOKEN_TIMEOUT_MS, withTimeout, isUpstreamTimeout } from '@/lib/upstreamTimeouts';
 
@@ -767,55 +768,20 @@ async function handleProxyRequest(request: NextRequest, params: { path: string[]
     const isJson = forward.headers.get('content-type')?.includes('application/json');
 
     // ─── 9. Evaluate Read / Inbound Rules ───────────────────────────────────
-    if (request.method === 'GET' && fullPath.includes('messages') && isJson) {
-      const readBlacklistRules = applicableRules.filter(r => r.service === 'gmail' && r.actionType === 'read_blacklist');
-      const labelBlacklistRules = applicableRules.filter(r => r.service === 'gmail' && r.actionType === 'label_blacklist');
-      const labelWhitelistRules = applicableRules.filter(r => r.service === 'gmail' && r.actionType === 'label_whitelist');
-
-      let parsedBody: Record<string, unknown> | null = null;
+    // Shared with the MCP tools and the push-notification filter
+    // (checkReadRestrictions), so the three read paths cannot drift. Gates on
+    // every Gmail GET — not just messages/* — because thread (and draft)
+    // reads return the same message content and previously bypassed rules on
+    // this path while the MCP path checked them.
+    if (request.method === 'GET' && fullPath.startsWith('gmail/') && isJson) {
+      let parsedBody: unknown = null;
       try { parsedBody = JSON.parse(returnBody); } catch { /* not JSON */ }
-
-      if (parsedBody && parsedBody.labelIds && Array.isArray(parsedBody.labelIds)) {
-        // 1. Check Label Blacklists First (Precedence)
-        for (const rule of labelBlacklistRules) {
-          if (rule.regexPattern && parsedBody.labelIds.includes(rule.regexPattern)) {
-             return NextResponse.json({
-               error: `Access restricted: Email contains blacklisted label '${rule.regexPattern}'.`
-             }, { status: 403 });
-          }
-        }
-
-        // 2. Check Label Whitelists
-        if (labelWhitelistRules.length > 0) {
-           let hasWhitelistedLabel = false;
-           for (const rule of labelWhitelistRules) {
-             if (rule.regexPattern && parsedBody.labelIds.includes(rule.regexPattern)) {
-               hasWhitelistedLabel = true;
-               break;
-             }
-           }
-           if (!hasWhitelistedLabel) {
-             return NextResponse.json({
-               error: `Access restricted: Email lacks a required whitelisted label.`
-             }, { status: 403 });
-           }
-        }
-      }
-
-      if (readBlacklistRules.length > 0) {
-        for (const rule of readBlacklistRules) {
-          if (!rule.regexPattern) continue;
-          const regex = compileRulePattern(rule.regexPattern);
-          if (!regex) {
-            console.error(`Skipping unusable pattern on rule '${rule.ruleName}'`);
-            continue;
-          }
-          if (regex.test(returnBody)) {
-            return NextResponse.json({
-              error: `Access restricted: Email content blocked by rule '${rule.ruleName}'.`
-            }, { status: 403 });
-          }
-        }
+      const restriction = checkReadRestrictions(applicableRules, parsedBody ?? returnBody);
+      if (restriction) {
+        captureServerEvent(dbUser.clerkUserId, 'read_restriction_enforced', { via: 'rest_proxy', restriction });
+        // REST surface: same text as the MCP denial, minus the MCP outcome-
+        // classification emoji prefix.
+        return NextResponse.json({ error: restriction.replace(/^🚫 /u, '') }, { status: 403 });
       }
     }
 

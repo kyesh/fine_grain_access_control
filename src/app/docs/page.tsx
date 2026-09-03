@@ -47,13 +47,13 @@ const EXAMPLES: Array<{
   {
     prompt: "Summarize my unread email.",
     outcome:
-      "Claude lists and reads recent unread messages and summarizes them. Any message blocked by your rules (a blacklisted label, or content matching a block pattern like a 2FA code) is withheld — Claude sees an “Access restricted” notice instead of the message.",
+      "Claude lists and reads recent unread messages and summarizes them. Any message blocked by your rules (a blacklisted label, or content matching a block pattern like a 2FA code) is withheld — Claude sees an “FGAC read rule … blocked this message” notice instead of the message.",
   },
   {
     prompt: "Read the latest message from my bank.",
     denied: true,
     outcome:
-      "If your rules block financial mail (by label or content pattern), Claude receives “🚫 Access restricted: Content blocked by rule …” and tells you it can't read that message. The denial names the rule so you know which grant to change if you actually wanted access.",
+      "If your rules block financial mail (by label or content pattern), Claude receives “🚫 FGAC read rule '…' blocked this message” and tells you it can't read that message. The denial names the rule, states that FGAC (not the agent) made the decision, and links the dashboard so you know which grant to change if you actually wanted access.",
   },
   {
     prompt: "Email alex@example.com a short status update.",

@@ -797,7 +797,12 @@ export async function applyRecommendedSecurityRules() {
       ruleName: "Block Sign In Alerts",
       service: "gmail",
       actionType: "read_blacklist",
-      regexPattern: "Sign In"
+      // "sign-in" (hyphenated) is the idiom security alerts actually use
+      // ("New sign-in on Mac", "Unusual sign-in activity"); the previous
+      // "Sign In" (spaced) matched conversational prose ("sign in to the
+      // portal") instead — blocking business mail while missing the alerts
+      // (support case, 2026-09-03).
+      regexPattern: "sign-in"
     },
     {
       userId: dbUser.id,
