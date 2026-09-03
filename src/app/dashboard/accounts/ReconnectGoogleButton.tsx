@@ -126,6 +126,14 @@ export function ReconnectGoogleButton({
     verifyStarted.current = true;
     let cancelled = false;
 
+    // Closes the reconnect funnel: started → returned → verified|incomplete.
+    // Without this event a google_reconnect_started with no terminal event is
+    // ambiguous between abandoned consent, a session dropped during the OAuth
+    // round-trip (observed 2026-09-03: consent succeeded, user landed on the
+    // sign-in page and reasonably assumed failure), and plain success — the
+    // return leg rendered its result but captured nothing.
+    posthog?.capture("google_reconnect_returned");
+
     const run = async () => {
       setVerify({ phase: "checking" });
       let missing = ["gmail.modify", "drive.file"];
@@ -145,6 +153,7 @@ export function ReconnectGoogleButton({
       }
       if (cancelled) return;
       if (missing.length === 0) {
+        posthog?.capture("google_reconnect_verified");
         setVerify({ phase: "verified" });
       } else {
         posthog?.capture("google_reconnect_incomplete", { missing_scopes: missing });

@@ -310,3 +310,16 @@ attributable to it.
   `outcome = 'error'` for this call is the pre-demotion regression. Genuine
   unhealth must be unaffected: any 5xx/`timeout`/`network` row from this run
   still classifies `error` with `$mcp_is_error = true`.
+
+### A18: Reconnect funnel closes with a terminal event
+- As a signed-in user whose Google grant is healthy, load
+  `/dashboard/accounts?reconnected=1` directly (no real consent round-trip
+  needed — the return leg runs on the param alone).
+- **Expected**: `google_reconnect_returned` fires when the page processes the
+  param, then `google_reconnect_verified` once the tokeninfo poll confirms
+  both scopes (with a broken grant it fires `google_reconnect_incomplete
+  {missing_scopes}` instead — either terminal event closes the funnel). A
+  `google_reconnect_started` with NO subsequent `returned` is the alertable
+  signature for abandoned consent or a session dropped during the OAuth
+  round-trip (monitoring.md §7.8); a run where the return leg fires neither
+  terminal event is a regression.
