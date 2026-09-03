@@ -36,12 +36,14 @@ Before the FIRST partner in an environment can use notifications:
    - `PUBSUB_PUSH_SA_EMAIL` — `fgac-push-invoker@<project>.iam.gserviceaccount.com`
    - `CRON_SECRET` — random string; **without it the delivery/renewal crons
      401 in production and never run**
-3. **Plan constraint**: Vercel Hobby allows max 2 crons, daily granularity —
-   `vercel.json` is configured accordingly. Consequence: failed-webhook
-   *retries* wait for the daily drain (happy path is unaffected — first
-   delivery is inline). Upgrading to Pro or pointing an external scheduler at
-   `/api/cron/deliver-webhooks` (Bearer `CRON_SECRET`) restores fast retries.
-   Decide before onboarding latency-sensitive partners.
+3. **Cron cadence**: `vercel.json` still schedules the webhook drain daily —
+   a leftover from the Hobby-plan era (daily-only crons). Consequence:
+   failed-webhook *retries* wait for the daily drain (happy path is
+   unaffected — first delivery is inline). Since the 2026-09 upgrade to
+   Vercel Pro, sub-daily crons are allowed (per-minute granularity, 100
+   crons/project), so tightening the retry schedule in `vercel.json` is now
+   just an edit + deploy. Decide before onboarding latency-sensitive
+   partners.
 
 ## 1. Intake & review
 
@@ -143,9 +145,11 @@ Permissions are **copied** into keys/rules at consent and pinned by
   and self-heals subscriptions whose initial arm failed (`watchExpiresAt`
   NULL). Gmail also publishes a zero-diff notification at arm time — normal,
   not a bug.
-- **Instant Vercel deploy failures with empty Builds**: check the Neon branch
-  count (10-branch limit) AND `vercel.json` plan-validity (sub-daily crons on
-  Hobby reject the deployment) before anything destructive.
+- **Instant Vercel deploy failures with empty Builds**: check `vercel.json`
+  plan-validity before anything destructive. (Historical causes, both retired
+  by the 2026-09 plan upgrades: the Neon free-tier 10-branch hard cap — Launch
+  allows 5000, billing $1.50/branch-month past 10 instead of blocking — and
+  sub-daily crons, which Hobby rejected but Pro accepts.)
 
 ## 6. Suspension & offboarding
 
