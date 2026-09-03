@@ -132,10 +132,19 @@ sheet tells the truth.
 - Replay A1→A4 and inspect captured events (PostHog debug/local capture per
   capability 16 conventions).
 - **Expected**: The sequence contains `approval_link_minted(sheets_expose)`
-  → `approval_link_approved(sheets_expose)` → `sheets_grant_verification`
-  `{result: 'missing'}` → `sheets_grant_recovered` → `$mcp_tool_call`
-  success — each stage attributable to the same person, so the production
-  dashboard can measure recovery rate directly.
+  → `sheets_grant_verification {via: 'link_open', result: 'missing'}` →
+  `approval_link_approved(sheets_expose)` → `sheets_grant_verification
+  {via: 'magic_link', result: 'ok'}` → `sheets_grant_verification {via:
+  'post_approval', result: 'ok'}` → `$mcp_tool_call` success — each stage
+  attributable to the same person and `request_id`, so the production
+  dashboard measures the approve-page funnel directly as
+  `link_open{missing}` → `magic_link{ok}` conversion (`docs/analytics.md`).
+  `sheets_grant_recovered` is NOT part of this chain: it belongs to the
+  dashboard recovery panel's `context=recovery` re-check for pre-existing
+  stranded rules (A4's Picker pick from the approve page is a first-time
+  grant, not a recovery) — that path is asserted by A11. Corrected
+  2026-09-03; the earlier wording listed `sheets_grant_recovered` here and
+  could never pass through the approve-page flow.
 
 ### A10: Hand-typed rule creation verifies the grant at birth
 - Create a sheets rule for the never-picked fixture spreadsheet's id via
