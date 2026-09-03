@@ -101,20 +101,27 @@ attributable to it.
     `account_not_permitted`, `google_token_unavailable`. Capability 03
     (multi-email scoping) and 07 (key lifecycle) generate the
     `account_not_permitted` and `no_proxy_key` cases respectively.
-  - Since the directory-error demotion (PR #72 salvage, 2026-09), a second
+  - Since the directory-error demotion (PR #72 salvage, 2026-09-02), a second
     class of `outcome=failed` events exists: user/caller-fixable Google
-    results demoted from `error` — the not-picked sheet/doc 403/404
-    setup-link guidance (`fileGrantErrorResult`), the stale Gmail
-    message-id/attachment-id 404 guidance (`gmailNotFoundResult`), and the
-    stale-comment 404 guidance (`commentsErrorResult`). These carry
-    `error_status` (NOT `failure_reason`); a run where they classify as
-    `outcome=error` is a regression. Genuine unhealth (5xx, `timeout`,
-    `network`, throttling 403, exceptions) must still classify `error`.
-  - `outcome=failed` events must still have `$mcp_is_error = false`. These
-    are deliberately `textResult`, not `errorResult` — promoting them would
-    move them into the error field Anthropic's Connector Directory reads. A
-    run where `$mcp_is_error` is true for a `failed` outcome is a regression,
-    not a pass.
+    results demoted from `error` — the stale Gmail message-id/attachment-id
+    404 guidance (`gmailNotFoundResult`) and the stale-comment 404 guidance
+    (`commentsErrorResult`). These carry `error_status` (NOT
+    `failure_reason`); a run where they classify as `outcome=error` is a
+    regression. Genuine unhealth (5xx, `timeout`, `network`, throttling 403,
+    exceptions) must still classify `error`.
+  - Since the refusal graduation (2026-09-03), deterministic grant refusals
+    classify `outcome=denied_by_policy` (🚫), NOT `failed` or `error`: the
+    scope pre-flights (`denial_code` = `failure_reason` =
+    `gmail_scope_missing` / `drive_file_scope_missing`, plus
+    `google_scope_missing: true`) and the not-picked sheet/doc 403/404
+    setup-link guidance (`fileGrantErrorResult` and id-addressed passthrough
+    404s, `denial_code: file_grant_missing_at_google`, still carrying
+    `error_status` when Google was reached). A run where any of these
+    classify `failed` or `error` is a regression.
+  - `outcome=failed` and `outcome=denied_by_policy` events must still have
+    `$mcp_is_error = false`. These are deliberately `textResult`, not
+    `errorResult`. A run where `$mcp_is_error` is true for either outcome is
+    a regression, not a pass.
   - A `gmail_get_attachment` or `gmail_read` event with `error_status = 404`
     carries `gmail_404_site` (`message` or `attachment`). `attachment` means
     the parent message read succeeded and only the attachment id was stale.
