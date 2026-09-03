@@ -84,10 +84,19 @@ Practical consequences:
   then `computer {action:'left_click', coordinate:[400,300]}` and read back
   `400/__probe[0].x`. It also re-confirms `isTrusted: true` on the spot. Or skip the
   maths entirely and click where the target visibly is in the screenshot.
-- The Picker renders in a **cross-origin iframe**: DOM queries into it return nothing,
-  so it can only be driven by coordinate via `computer`. If tiles ignore a correctly
-  scaled trusted click, that is a harness regression worth reporting — fall back to
-  Path B before handing the step to the user.
+- **The Picker is keyboard-accessible — drive it that way (measured 2026-09-03).** The
+  Picker renders in a cross-origin iframe whose document reports a 0×0 viewport, so
+  every coordinate derived from inside it (`boundingBox()`, `getBoundingClientRect()`)
+  is null/garbage and pointer clicks — built-in `computer` or Path B `page.mouse` —
+  never reach a tile (an in-frame event probe recorded zero pointer events across
+  three targets). Keyboard focus works normally: from the Picker's search input,
+  `Tab`×4 lands on the first file tile (`role=option`), `ArrowRight`/`ArrowLeft` move
+  between tiles (the focused tile becomes `aria-selected=true`), then `Tab` to the
+  `Select` button and `Enter` confirms — the parent page renders "✓ Sheet access
+  granted" (or the substitution notice when the picked file isn't the requested id).
+  Verify each step by reading `document.activeElement` inside the frame rather than
+  by screenshot. This is the standard accessibility path, not a workaround, and it
+  is what the QA runners use.
 
 ## QA Subagent Architecture
 
@@ -96,7 +105,7 @@ QA execution is delegated to cost-tiered subagents defined in `.claude/agents/`:
 `docs/QA_Acceptance_Test/qa-results.json`; `qa-smoke` and `deploy-watcher` (Haiku) handle
 mechanical polling and smoke checks; `qa-coverage-auditor` (Sonnet) adversarially reviews
 results; `qa-setup-driver` (inherits the session model) drives the browser setup flows.
-Two rules bind this architecture:
+Four rules bind this architecture:
 
 1. **Only the orchestrator (main session) edits source, schema, or config.** Runners
    execute and report; a runner that hits a code problem records it, never fixes it.
@@ -104,6 +113,25 @@ Two rules bind this architecture:
    parses the `### A<n>:` assertions in `docs/QA_Acceptance_Test/capabilities/` and
    validates `qa-results.json` (schema in `docs/QA_Acceptance_Test/README.md`). Prose
    assertion counts are informational.
+3. **Production QA is user-confirmed, every time.** Routine validation is local +
+   preview (`/deploy-pr-preview`) only. `/qa-production` and the
+   `docs/QA_Acceptance_Test/production/` runbooks never run autonomously or as a step
+   of another workflow, and even a user-typed `/qa-production` requires an in-session
+   scope confirmation before any runner is dispatched (the suite mutates the shared
+   production QA account, which can back live claude.ai connectors — breakage there
+   registers as connector-directory disconnect/health events). Expect production QA
+   to be rare.
+4. **The orchestrator never drives a third-party surface — not even for a "quick
+   diagnostic."** Google Picker, Clerk sign-in, OAuth consent, account choosers, and
+   any probing of how those surfaces receive input belong in a runner
+   (`qa-env-runner` / `qa-setup-driver`), which has its own transcript. The
+   vocabulary that work generates — trusted input, cross-origin frames, session
+   handoffs, bearer tokens — reads as security-sensitive to automated classifiers
+   regardless of the authorization behind it, and on 2026-09-03 an hour of it in the
+   main session degraded the whole session while the runners that did the same work
+   earlier were unaffected. Every runner prompt states the context plainly: QA of
+   FGAC's own Google integration against a local or preview build, using the two test
+   accounts we own.
 
 QA environments run sequentially (they share one dev server, one Neon branch, and the QA
 accounts/keys — lifecycle capabilities mutate that shared state). Targeted re-tests

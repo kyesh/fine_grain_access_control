@@ -397,3 +397,38 @@ Recovery check: for each `intended_for`, look for a later
 `google_reconnect_started` by the person whose identity matches that address —
 present means the right user eventually ran the repair; absent means the
 affected account is still stranded and worth proactive outreach.
+
+**7.8 — Reconnect round-trips that never come back.** The reconnect funnel is
+`google_reconnect_started` → `google_reconnect_returned` (the Accounts page
+processed `?reconnected=1`) → `google_reconnect_verified` or
+`google_reconnect_incomplete` (2026-09-03; before `returned`/`verified`
+existed, silence after `started` was unreadable). A start with no `returned`
+within the session means the user either abandoned Google's consent screen or
+— the case that motivated this — completed consent but lost their session
+during the round-trip and landed on the sign-in page believing the reconnect
+failed. In production the `redirect_url` chain survives re-sign-in, so a
+recovered user still fires `returned` late; a user who walked away never does.
+
+```sql
+SELECT s.day, s.started, r.returned,
+       s.started - r.returned AS never_returned
+FROM
+  (SELECT toDate(timestamp) AS day, count() AS started FROM events
+   WHERE event = 'google_reconnect_started'
+     AND properties.environment = 'production'
+     AND timestamp > now() - INTERVAL 30 DAY GROUP BY day) s
+LEFT JOIN
+  (SELECT toDate(timestamp) AS day, count() AS returned FROM events
+   WHERE event = 'google_reconnect_returned'
+     AND properties.environment = 'production'
+     AND timestamp > now() - INTERVAL 30 DAY GROUP BY day) r
+  ON s.day = r.day
+ORDER BY s.day
+```
+
+Investigate any sustained `never_returned` > 0: per person, a `started` with
+no `returned` within ~15 minutes is the alertable unit. Pair with
+`google_reconnect_incomplete` (returned, but scopes still missing — Google
+granted without fresh consent) to separate the two repair paths. ClickHouse
+LEFT JOIN note: missing right-side rows fill 0, not NULL, so the subtraction
+is safe.
