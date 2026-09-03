@@ -394,7 +394,8 @@ export async function createRule(formData: FormData): Promise<RuleActionResult> 
   if (!ruleName || !service || !actionType) {
     console.error("[createRule] Missing required fields:", { ruleName, service, actionType });
     await reportRuleSave(dbUser.clerkUserId, "rule_save_failed", {
-      mode: "create", service, action_type: actionType, reason: "missing_fields",
+      mode: "create", service, action_type: actionType, via: "dashboard_manual",
+      reason: "missing_fields",
     });
     return { ok: false, error: "Rule name, service and action type are all required." };
   }
@@ -410,7 +411,8 @@ export async function createRule(formData: FormData): Promise<RuleActionResult> 
       const check = validateRulePattern(finalRegexPattern);
       if (!check.ok) {
         await reportRuleSave(dbUser.clerkUserId, "rule_save_failed", {
-          mode: "create", service, action_type: actionType, reason: check.reason,
+          mode: "create", service, action_type: actionType, via: "dashboard_manual",
+          reason: check.reason,
           pattern_kind: patternKind(finalRegexPattern),
           pattern_length: finalRegexPattern.length,
         });
@@ -437,13 +439,42 @@ export async function createRule(formData: FormData): Promise<RuleActionResult> 
   }
 
   await reportRuleSave(dbUser.clerkUserId, "rule_saved", {
-    mode: "create", service, action_type: actionType,
+    mode: "create", service, action_type: actionType, via: "dashboard_manual",
     scoped: !!targetEmail, assigned_keys: keyIds.length,
+    ...(targetResourceId ? { file_id: targetResourceId } : {}),
     ...(finalRegexPattern ? {
       pattern_kind: patternKind(finalRegexPattern),
       pattern_length: finalRegexPattern.length,
     } : {}),
   });
+
+  // A hand-typed file id has no Picker pick behind it, so Google may hold no
+  // drive.file grant — the same stranded-rule dead end the magic-link flow
+  // verifies against. Record the grant state at rule birth so these rules are
+  // visible in the funnel instead of silently broken. Telemetry only: a
+  // Google hiccup must never fail rule creation.
+  if ((service === 'sheets' || service === 'docs') && targetResourceId) {
+    try {
+      const { verifyFileGrant, getOwnerGoogleToken } = await import("@/lib/driveFileGrantCheck");
+      const { captureServerEvent } = await import("@/lib/posthogServer");
+      const kind = service === 'sheets' ? ('sheet' as const) : ('doc' as const);
+      const token = await getOwnerGoogleToken(dbUser.clerkUserId);
+      const grant = token
+        ? await verifyFileGrant(kind, token, targetResourceId)
+        : { state: 'missing' as const };
+      captureServerEvent(
+        dbUser.clerkUserId,
+        kind === 'sheet' ? "sheets_grant_verification" : "docs_grant_verification",
+        {
+          result: grant.state,
+          via: "dashboard_manual",
+          [kind === 'sheet' ? "spreadsheet_id" : "document_id"]: targetResourceId,
+        },
+      );
+    } catch (err) {
+      console.error("[createRule] grant verification failed:", err);
+    }
+  }
 
   revalidateDashboard();
   return { ok: true };
@@ -462,7 +493,8 @@ export async function updateRule(formData: FormData): Promise<RuleActionResult> 
   if (!ruleId || !ruleName || !service || !actionType) {
     console.error("[updateRule] Missing required fields");
     await reportRuleSave(dbUser.clerkUserId, "rule_save_failed", {
-      mode: "update", service, action_type: actionType, reason: "missing_fields",
+      mode: "update", service, action_type: actionType, via: "dashboard_manual",
+      reason: "missing_fields",
     });
     return { ok: false, error: "Rule name, service and action type are all required." };
   }
@@ -478,7 +510,8 @@ export async function updateRule(formData: FormData): Promise<RuleActionResult> 
       const check = validateRulePattern(finalRegexPattern);
       if (!check.ok) {
         await reportRuleSave(dbUser.clerkUserId, "rule_save_failed", {
-          mode: "update", service, action_type: actionType, reason: check.reason,
+          mode: "update", service, action_type: actionType, via: "dashboard_manual",
+          reason: check.reason,
           pattern_kind: patternKind(finalRegexPattern),
           pattern_length: finalRegexPattern.length,
         });
@@ -491,7 +524,8 @@ export async function updateRule(formData: FormData): Promise<RuleActionResult> 
   const rule = await db.select().from(accessRules).where(eq(accessRules.id, ruleId)).limit(1).then(res => res[0]);
   if (!rule || rule.userId !== dbUser.id) {
     await reportRuleSave(dbUser.clerkUserId, "rule_save_failed", {
-      mode: "update", service, action_type: actionType, reason: "not_found_or_forbidden",
+      mode: "update", service, action_type: actionType, via: "dashboard_manual",
+      reason: "not_found_or_forbidden",
     });
     return { ok: false, error: "That rule no longer exists, or it is not yours to edit." };
   }
@@ -516,8 +550,9 @@ export async function updateRule(formData: FormData): Promise<RuleActionResult> 
   }
 
   await reportRuleSave(dbUser.clerkUserId, "rule_saved", {
-    mode: "update", service, action_type: actionType,
+    mode: "update", service, action_type: actionType, via: "dashboard_manual",
     scoped: !!targetEmail, assigned_keys: keyIds.length,
+    ...(targetResourceId ? { file_id: targetResourceId } : {}),
     ...(finalRegexPattern ? {
       pattern_kind: patternKind(finalRegexPattern),
       pattern_length: finalRegexPattern.length,
@@ -618,6 +653,17 @@ async function exposeFilesFromPicker(
           .values({ accessRuleId: rule.id, proxyKeyId: profileId });
       }
     }
+
+    // A picker pick registers the drive.file grant, so this event IS the
+    // funnel's dashboard-path success end state.
+    await reportRuleSave(dbUser.clerkUserId, "rule_saved", {
+      mode: existing ? "update" : "create",
+      service: d.service,
+      action_type: existing ? existing.actionType : d.actionTypes.read,
+      via: "dashboard_picker",
+      file_id: file.id,
+      profile_scoped: !!profileId,
+    });
   }
 
   revalidateDashboard();
@@ -1074,6 +1120,14 @@ async function applyFileGrantApproval(opts: {
       resourceName: name,
     }).returning();
     await db.insert(keyRuleAssignments).values({ proxyKeyId: key.id, accessRuleId: rule.id });
+    captureServerEvent(dbUser.clerkUserId, "rule_saved", {
+      mode: "create",
+      service: d.service,
+      action_type: readWrite ? d.actionTypes.readWrite : d.actionTypes.read,
+      via: "magic_link",
+      file_id: id,
+      request_id: p.requestId,
+    });
   };
 
   if (picked && picked.length > 0) {

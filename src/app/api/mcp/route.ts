@@ -288,8 +288,14 @@ async function resolveConnection(
  * tool working as designed, not a tool failure. */
 const textResult = (text: string) => ({ content: [{ type: 'text' as const, text }] });
 
-/** Upstream/auth failure: marked isError so clients (and the directory's
- * health metrics) see it as a genuine tool error. */
+/** Genuine unhealth — FGAC or Google is broken: 5xx, timeouts, network
+ * failures, throttling 403s, unhandled exceptions. Marked isError so clients
+ * (and the Connector Directory's health metrics, via $mcp_is_error) see it as
+ * a real tool error. Conditions the USER or CALLING AGENT can fix by acting
+ * differently — a missing drive.file grant, a stale message/attachment/
+ * comment id — are ❌-prefixed textResult instead (outcome `failed`),
+ * deliberately kept out of the directory's error field; see the
+ * ResolveFailureReason comment for the original rationale. */
 const errorResult = (text: string) => ({ content: [{ type: 'text' as const, text }], isError: true });
 
 const jsonResult = (data: unknown) => textResult(JSON.stringify(data, null, 2));
@@ -628,21 +634,22 @@ async function sendDenialWithLinks(
         action: 'send_whitelist', recipient: denial.deniedRecipient,
       });
       lines.push(`👉 Allow sending to '${denial.deniedRecipient}' only — share this one-click link with the user: ${one.url}`);
-      await recordApprovalMint({
+      const oneMintCount = await recordApprovalMint({
         requestId: one.requestId, userId: conn.user.id, proxyKeyId,
         action: 'send_whitelist', targetHash: one.targetHash,
       });
       captureServerEvent(conn.user.clerkUserId, 'approval_link_minted', {
         action: 'send_whitelist', request_id: one.requestId, target_hash: one.targetHash, via: 'send_denial',
+        mint_count: oneMintCount,
       });
     }
     const all = await mintApprovalLink(DASHBOARD_URL, conn.user.id, proxyKeyId, { action: 'send_all' });
     lines.push(`👉 Or allow sending to ANY recipient from this profile — share this one-click link with the user instead: ${all.url}`);
-    await recordApprovalMint({
+    const allMintCount = await recordApprovalMint({
       requestId: all.requestId, userId: conn.user.id, proxyKeyId, action: 'send_all',
     });
     captureServerEvent(conn.user.clerkUserId, 'approval_link_minted', {
-      action: 'send_all', request_id: all.requestId, via: 'send_denial',
+      action: 'send_all', request_id: all.requestId, via: 'send_denial', mint_count: allMintCount,
     });
     lines.push('Present both options and let the user pick; "any recipient" is the convenient choice if they expect to send freely, and it stays revocable from the dashboard rules.');
     lines.push(AGENT_APPROVAL_PROTOCOL);
@@ -815,6 +822,13 @@ async function googleFetch(
  * Picker; a mistyped id looks identical from outside). The generic "check
  * the ID" text sent the whole 2026-08 connector cohort into a retry loop;
  * say what is actually wrong and where the one-click fix lives.
+ *
+ * The 403/404 branch is ❌ textResult (outcome `failed`), not errorResult:
+ * a missing drive.file grant or a mistyped id is a condition the user or
+ * calling agent fixes, not FGAC/Google unhealth, and it must not feed the
+ * Connector Directory's error rate — same rationale as ResolveFailureReason.
+ * error_status/error_reason props are stamped at the googleFetch layer, so
+ * internal observability is unaffected. Other statuses stay errorResult.
  */
 function fileGrantErrorResult(kind: DriveFileKind, result: { error: string; status?: number }, fileId: string) {
   if (result.status === 403 || result.status === 404) {
@@ -823,7 +837,7 @@ function fileGrantErrorResult(kind: DriveFileKind, result: { error: string; stat
     // Only the sheets setup page embeds a demo video today — the error must
     // not promise docs users a video that isn't there (QA 19 A12 finding).
     const setupBlurb = kind === 'sheet' ? ' (includes a short how-to video)' : '';
-    return errorResult(
+    return textResult(
       `❌ FGAC allows this ${d.noun}, but Google hasn't shared the ${short} itself with FGAC yet, so Google rejected the call (${result.status}). ` +
       `This is a one-time setup step only the user can do: they must pick this ${short} in Google's file picker. ` +
       `👉 Send the user here to finish setup${setupBlurb}: ${DASHBOARD_URL}${d.setupPath}?${d.setupIdParam}=${encodeURIComponent(fileId)} ` +
@@ -849,7 +863,10 @@ function commentsErrorResult(
   commentId?: string,
 ) {
   if (commentId && result.status === 404) {
-    return errorResult(
+    // Stale caller-supplied commentId → ❌ textResult (outcome `failed`), not
+    // isError: the calling agent fixes it by re-reading comments, so it stays
+    // out of the directory error rate (see fileGrantErrorResult).
+    return textResult(
       `❌ Google returned 404 for comment '${commentId}' on this ${DRIVE_FILE_KINDS[kind].noun} — the comment id is stale or belongs to a different file, ` +
       `or the file itself is not granted to FGAC at Google. ` +
       `Do NOT retry the same commentId: re-run comments_read for this file and reply to a comment id from that fresh response. ` +
@@ -879,6 +896,13 @@ function commentsErrorResult(
  *
  * Each branch states a stop condition. The repeat-count signature says the
  * missing piece was the stop, not the explanation.
+ *
+ * Both 404 branches are ❌ textResult (outcome `failed`), not errorResult:
+ * a stale caller-supplied id is fixed by the calling agent acting
+ * differently, not by FGAC or Google, so it stays out of the Connector
+ * Directory error rate (see fileGrantErrorResult / ResolveFailureReason).
+ * The gmail_404_site prop keeps the two sites separable internally.
+ * Non-404 statuses stay errorResult.
  */
 function gmailNotFoundResult(
   site: 'message' | 'attachment',
@@ -889,7 +913,7 @@ function gmailNotFoundResult(
   addToolCallProps({ gmail_404_site: site });
 
   if (site === 'message') {
-    return errorResult(
+    return textResult(
       `❌ Gmail has no message with id '${messageId}' for this account (404). ` +
       `The id is wrong, belongs to a different account, or the message was deleted. ` +
       `STOP — do not retry this id; it will keep failing. ` +
@@ -897,7 +921,7 @@ function gmailNotFoundResult(
     );
   }
 
-  return errorResult(
+  return textResult(
     `❌ The message exists, but Gmail has no attachment with that attachmentId on it (404). ` +
     `Attachment ids belong to one specific message and Gmail re-issues them when the message is re-indexed, ` +
     `so an id from an earlier gmail_read (or from a different message) goes stale even though the message is still fine. ` +
@@ -1081,6 +1105,11 @@ function docsDeleteVerifyNote(plan: DocsDeleteVerifyPlan, before: number | null,
 }
 
 async function checkFilePermission(kind: DriveFileKind, userId: string, proxyKeyId: string, fileId: string, isMutating: boolean) {
+  // Single choke point every per-file sheets/docs call passes through (typed
+  // tools, comments tools, and the raw Google API branch), so stamping the
+  // file id here makes per-file time-to-first-success queryable from
+  // $mcp_tool_call alone.
+  addToolCallProps({ file_id: fileId, file_service: DRIVE_FILE_KINDS[kind].service });
   const d = DRIVE_FILE_KINDS[kind];
   const allRules = await db.select().from(accessRules).where(eq(accessRules.userId, userId));
   const keyAssignments = await db.select().from(keyRuleAssignments).where(eq(keyRuleAssignments.proxyKeyId, proxyKeyId));
@@ -1363,7 +1392,10 @@ type ToolAnalyticsResult = { isError?: boolean; content?: Array<{ type?: string;
  * ⚠️ (size-capped: a deliberate refusal to return an oversized payload —
  * the tool worked, so it must not count as a tool error in any error-rate
  * metric; before 2026-08-24 it classified as `failed` and inflated the
- * gmail_get_attachment error rate).
+ * gmail_get_attachment error rate). By the same precedent, caller/user-
+ * fixable Google 403/404 guidance (missing drive.file grant, stale
+ * message/attachment/comment ids) was demoted from isError to ❌ `failed`
+ * on 2026-09-02 — see errorResult's doc-comment for the boundary.
  */
 function classifyToolOutcome(result: ToolAnalyticsResult): string {
   if (result.isError) return 'error';
@@ -2128,6 +2160,15 @@ const handler = createMcpHandler(
               `STOP retrying this pair and re-check which message carries the attachment via gmail_read.`);
           }
           if (!suppliedIdIsCurrent && freshAttachments.length === 1) {
+            // The heal has just identified the attachment the caller meant
+            // (the message's only one), so its declared size is knowable now
+            // even though the supplied id missed the findDeclared lookup
+            // above — stamp it so retry_failed rows are size-attributable.
+            // (QA 16 A8: this was the only reachable fetch-failure branch
+            // with an identifiable target and it stamped nothing.)
+            if (freshAttachments[0].sizeBytes) {
+              addToolCallProps({ attachment_declared_kb: Math.round(freshAttachments[0].sizeBytes / 1024) });
+            }
             const retry = await gmailFetch(
               resolved.token,
               resolved.targetEmail,
@@ -2271,7 +2312,9 @@ const handler = createMcpHandler(
         const result = await withSheetsGrace(perm, () => sheetsFetch(resolved.token, `${spreadsheetId}`, 'GET', undefined, resolved.targetEmail));
         if (!result.ok) return sheetsErrorResult(result, spreadsheetId);
         if (offset !== undefined || limit !== undefined) {
-          return windowedResult(JSON.stringify(result.data), offset, limit, { spreadsheetId });
+          // Pretty-printed to match the windowless jsonResult serialization —
+          // windows must reassemble byte-identical to the unwindowed read.
+          return windowedResult(JSON.stringify(result.data, null, 2), offset, limit, { spreadsheetId });
         }
         return jsonResult(result.data);
       }
@@ -2303,7 +2346,7 @@ const handler = createMcpHandler(
         const result = await withSheetsGrace(perm, () => sheetsFetch(resolved.token, `${spreadsheetId}/values/${encodedRange}`, 'GET', undefined, resolved.targetEmail));
         if (!result.ok) return sheetsErrorResult(result, spreadsheetId);
         if (offset !== undefined || limit !== undefined) {
-          return windowedResult(JSON.stringify(result.data), offset, limit, { spreadsheetId, range });
+          return windowedResult(JSON.stringify(result.data, null, 2), offset, limit, { spreadsheetId, range });
         }
         return jsonResult(result.data);
       }
@@ -2429,7 +2472,7 @@ const handler = createMcpHandler(
         // substring of the serialized JSON response — windows concatenate to
         // the exact document JSON. Combine with `fields` to narrow first.
         if (offset !== undefined || limit !== undefined) {
-          return windowedResult(JSON.stringify(result.data), offset, limit, { documentId });
+          return windowedResult(JSON.stringify(result.data, null, 2), offset, limit, { documentId });
         }
         return jsonResult(result.data);
       }
@@ -2644,11 +2687,12 @@ const handler = createMcpHandler(
         }
 
         const { url, requestId, targetHash } = await mintApprovalLink(DASHBOARD_URL, conn.user.id, conn.proxyKeyId, action);
-        await recordApprovalMint({
+        const mintCount = await recordApprovalMint({
           requestId, userId: conn.user.id, proxyKeyId: conn.proxyKeyId, action: action.action, targetHash,
         });
         captureServerEvent(conn.user.clerkUserId, 'approval_link_minted', {
           action: action.action, via: 'request_access', request_id: requestId, target_hash: targetHash,
+          mint_count: mintCount,
         });
         addToolCallProps({ approval_request_id: requestId });
         return jsonResult({

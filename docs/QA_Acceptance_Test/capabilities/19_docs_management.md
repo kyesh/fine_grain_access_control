@@ -122,8 +122,9 @@ intentionally differs, the assertion says so.
   2. the docs-setup page offers the pick-first recovery (no sheets demo video
      is embedded for docs — intentional until a docs video exists);
   3. an MCP docs call in this stranded state returns the honest post-policy
-     error pointing at `/dashboard/docs-setup?did=<id>` (never a bare
-     "check the ID");
+     ❌ guidance pointing at `/dashboard/docs-setup?did=<id>` (never a bare
+     "check the ID") — outcome `failed`, NOT `isError`, per the
+     directory-error demotion (capability 17 A7 / 16 A17);
   4. a magic-link approval for this doc lands in the pick-first state
      (`docs-flow-pick-first` testid), and `verify-docs-access?did=<id>`
      reports `missing` → after a Picker pick, `ok` with the title

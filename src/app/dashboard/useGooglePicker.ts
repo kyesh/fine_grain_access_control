@@ -141,6 +141,10 @@ export function useGooglePicker(
         if (context) params.set('pickerContext', context);
         const autoRedirectUrl = `${window.location.origin}${window.location.pathname}?${params.toString()}`;
 
+        // The consent round-trip is the funnel's riskiest hop — a redirect with
+        // no subsequent picker_opened is a user who never came back. Captured
+        // BEFORE the await so the event can't be lost mid-redirect.
+        posthog?.capture('picker_scope_redirect', { kind });
         try {
           window.location.href = await startGoogleReconnect(
             user as unknown as ClerkUserLike, autoRedirectUrl,
@@ -165,7 +169,10 @@ export function useGooglePicker(
             id: doc.id,
             name: doc.name || `${fallbackNoun} (${doc.id.slice(0, 6)})`
           }));
+          posthog?.capture('picker_picked', { kind, count: docs.length });
           onSheetsPicked(docs, context);
+        } else if (data.action === window.google.picker.Action.CANCEL) {
+          posthog?.capture('picker_cancelled', { kind });
         }
         setIsLoading(false);
       };
@@ -189,12 +196,13 @@ export function useGooglePicker(
 
       const picker = builder.build();
 
+      posthog?.capture('picker_opened', { kind, from_oauth_return: fromOAuthReturn });
       picker.setVisible(true);
     } catch (err) {
       failFlow('open_picker', err,
         'Something went wrong opening the Google Picker. Retry the pick button; if it keeps failing, reconnect Google from Dashboard → Accounts and then return to this link.');
     }
-  }, [user, onSheetsPicked, failFlow, kind, kindDesc]);
+  }, [user, onSheetsPicked, failFlow, kind, kindDesc, posthog]);
 
   // Automatically launch Google Picker if returning from OAuth reauthorization
   // redirect. The component consuming this hook must live on the page the
