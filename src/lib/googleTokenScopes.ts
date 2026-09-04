@@ -17,6 +17,45 @@
  * leak — but the key is the token, so it must never be logged or exposed.
  */
 
+export const GMAIL_SCOPES = ['https://www.googleapis.com/auth/gmail.modify', 'https://mail.google.com/'];
+export const DRIVE_FILE_SCOPES = ['https://www.googleapis.com/auth/drive.file', 'https://www.googleapis.com/auth/drive'];
+
+export type ScopeVerdict = {
+  /** undefined = no scope information at all; never enforce on it. */
+  hasGmailScope?: boolean;
+  hasDriveFileScope?: boolean;
+  /** Clerk's record said a scope was missing that the token actually carries. */
+  recordStale: boolean;
+  /** tokeninfo was needed (the record showed a gap) — callers decide whether to fetch. */
+  needsLive: boolean;
+};
+
+/**
+ * Pure decision behind the MCP pre-flight: Clerk's recorded scopes decide the
+ * happy path; when they show a gap, the token's live scopes (tokeninfo) are
+ * the truth — a stale record can only be corrected toward what the token
+ * carries, never trusted to grant more than it has. `live` null means
+ * tokeninfo was unavailable, so the record stands.
+ */
+export function reconcileScopes(recorded: string[] | undefined, live: string[] | null | undefined): ScopeVerdict {
+  const has = (scopes: string[], wanted: string[]) => scopes.some(s => wanted.includes(s));
+  if (!recorded) return { recordStale: false, needsLive: false };
+  const recGmail = has(recorded, GMAIL_SCOPES);
+  const recDrive = has(recorded, DRIVE_FILE_SCOPES);
+  const needsLive = !recGmail || !recDrive;
+  if (!needsLive || !live) {
+    return { hasGmailScope: recGmail, hasDriveFileScope: recDrive, recordStale: false, needsLive };
+  }
+  const liveGmail = has(live, GMAIL_SCOPES);
+  const liveDrive = has(live, DRIVE_FILE_SCOPES);
+  return {
+    hasGmailScope: liveGmail,
+    hasDriveFileScope: liveDrive,
+    recordStale: (liveGmail && !recGmail) || (liveDrive && !recDrive),
+    needsLive,
+  };
+}
+
 const TOKENINFO_URL = 'https://oauth2.googleapis.com/tokeninfo';
 const CACHE_TTL_MS = 5 * 60_000;
 const CACHE_MAX_ENTRIES = 500;
