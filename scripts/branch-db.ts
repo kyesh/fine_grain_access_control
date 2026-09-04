@@ -112,8 +112,9 @@ async function main() {
     console.log(`🌿 Branch '${branchName}' not found. Creating from 'main'...`);
     // Neon caps the project at 10 branches; stale branches of merged work
     // accumulate until creation fails. Self-heal: on a limit error, prune
-    // stale branches (scripts/cleanup-neon-branches.ts — safe rules: never
-    // the current branch, never an open PR's preview) and retry once.
+    // stale branches (scripts/cleanup-neon-branches.ts — safe rules: never the
+    // primary, never a branch checked out in any worktree, never an open PR's
+    // preview, only provably-merged work) and retry once.
     let created = tryNeonCmd(`branches create --project-id ${projectId} --name ${branchName} --compute`);
     if (created.error) {
       if (!/limit/i.test(created.error)) {
