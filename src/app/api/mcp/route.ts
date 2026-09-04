@@ -291,12 +291,15 @@ const textResult = (text: string) => ({ content: [{ type: 'text' as const, text 
 
 /** Genuine unhealth — FGAC or Google is broken: 5xx, timeouts, network
  * failures, throttling 403s, unhandled exceptions. Marked isError so clients
- * (and the Connector Directory's health metrics, via $mcp_is_error) see it as
- * a real tool error. Conditions the USER or CALLING AGENT can fix by acting
- * differently — a missing drive.file grant, a stale message/attachment/
- * comment id — are ❌-prefixed textResult instead (outcome `failed`),
- * deliberately kept out of the directory's error field; see the
- * ResolveFailureReason comment for the original rationale. */
+ * see a real tool error. The three-way boundary (2026-09-03): genuine
+ * unhealth and caller mistakes Google diagnoses (bad payloads, stale ids)
+ * are errorResult or ❌ textResult (`failed`) — BOTH count in the Connector
+ * Directory's published error rate (measured: its 18.3% for
+ * google_api_modify, 7d to 2026-09-03, matches outcome error+failed, so ❌
+ * alone does not keep a result out of the metric). Deterministic
+ * access/grant refusals that carry their own remediation are 🚫 textResult
+ * (`denied_by_policy`) — the tool working as designed, excluded from the
+ * metric; see gmailScopeDenial / fileGrantErrorResult. */
 const errorResult = (text: string) => ({ content: [{ type: 'text' as const, text }], isError: true });
 
 const jsonResult = (data: unknown) => textResult(JSON.stringify(data, null, 2));
@@ -824,22 +827,26 @@ async function googleFetch(
  * the ID" text sent the whole 2026-08 connector cohort into a retry loop;
  * say what is actually wrong and where the one-click fix lives.
  *
- * The 403/404 branch is ❌ textResult (outcome `failed`), not errorResult:
- * a missing drive.file grant or a mistyped id is a condition the user or
- * calling agent fixes, not FGAC/Google unhealth, and it must not feed the
- * Connector Directory's error rate — same rationale as ResolveFailureReason.
- * error_status/error_reason props are stamped at the googleFetch layer, so
- * internal observability is unaffected. Other statuses stay errorResult.
+ * The 403/404 branch is a 🚫 refusal (outcome `denied_by_policy`), not an
+ * error and not a ❌ failure: it is a per-file access grant that does not
+ * exist yet, answered with the exact one-click setup step — the same class
+ * as an FGAC rule denial. The published error-rate math counts ❌ `failed`
+ * results as tool errors too (see gmailScopeDenial), which is why the
+ * 2026-09-02 isError→❌ demotion was not enough. `denial_code` marks the
+ * class; error_status/error_reason props are stamped at the googleFetch
+ * layer, so internal observability is unaffected. Other statuses stay
+ * errorResult.
  */
 function fileGrantErrorResult(kind: DriveFileKind, result: { error: string; status?: number }, fileId: string) {
   if (result.status === 403 || result.status === 404) {
     const d = DRIVE_FILE_KINDS[kind];
     const short = kind === 'sheet' ? 'sheet' : d.noun;
+    addToolCallProps({ denial_code: 'file_grant_missing_at_google' });
     // Only the sheets setup page embeds a demo video today — the error must
     // not promise docs users a video that isn't there (QA 19 A12 finding).
     const setupBlurb = kind === 'sheet' ? ' (includes a short how-to video)' : '';
     return textResult(
-      `❌ FGAC allows this ${d.noun}, but Google hasn't shared the ${short} itself with FGAC yet, so Google rejected the call (${result.status}). ` +
+      `🚫 Not available yet: FGAC allows this ${d.noun}, but Google hasn't shared the ${short} itself with FGAC, so Google rejected the call (${result.status}). ` +
       `This is a one-time setup step only the user can do: they must pick this ${short} in Google's file picker. ` +
       `👉 Send the user here to finish setup${setupBlurb}: ${DASHBOARD_URL}${d.setupPath}?${d.setupIdParam}=${encodeURIComponent(fileId)} ` +
       `Note: a wrong ${d.noun} ID produces this same error — the setup page verifies real access before reporting success, so it resolves either case. Retry after the user confirms.`,
@@ -865,8 +872,9 @@ function commentsErrorResult(
 ) {
   if (commentId && result.status === 404) {
     // Stale caller-supplied commentId → ❌ textResult (outcome `failed`), not
-    // isError: the calling agent fixes it by re-reading comments, so it stays
-    // out of the directory error rate (see fileGrantErrorResult).
+    // isError and not 🚫: a stale id the agent supplied is a caller-data
+    // error, not an access refusal FGAC can honestly claim (contrast
+    // fileGrantErrorResult, where a grant is genuinely missing).
     return textResult(
       `❌ Google returned 404 for comment '${commentId}' on this ${DRIVE_FILE_KINDS[kind].noun} — the comment id is stale or belongs to a different file, ` +
       `or the file itself is not granted to FGAC at Google. ` +
@@ -898,10 +906,10 @@ function commentsErrorResult(
  * Each branch states a stop condition. The repeat-count signature says the
  * missing piece was the stop, not the explanation.
  *
- * Both 404 branches are ❌ textResult (outcome `failed`), not errorResult:
- * a stale caller-supplied id is fixed by the calling agent acting
- * differently, not by FGAC or Google, so it stays out of the Connector
- * Directory error rate (see fileGrantErrorResult / ResolveFailureReason).
+ * Both 404 branches are ❌ textResult (outcome `failed`), not errorResult
+ * and not 🚫: a stale caller-supplied id is a caller-data error the agent
+ * fixes by acting differently — there is no grant to repair, so claiming a
+ * policy refusal would be dishonest (contrast fileGrantErrorResult).
  * The gmail_404_site prop keeps the two sites separable internally.
  * Non-404 statuses stay errorResult.
  */
@@ -1396,10 +1404,12 @@ type ToolAnalyticsResult = { isError?: boolean; content?: Array<{ type?: string;
  * ⚠️ (size-capped: a deliberate refusal to return an oversized payload —
  * the tool worked, so it must not count as a tool error in any error-rate
  * metric; before 2026-08-24 it classified as `failed` and inflated the
- * gmail_get_attachment error rate). By the same precedent, caller/user-
- * fixable Google 403/404 guidance (missing drive.file grant, stale
- * message/attachment/comment ids) was demoted from isError to ❌ `failed`
- * on 2026-09-02 — see errorResult's doc-comment for the boundary.
+ * gmail_get_attachment error rate). Caller/user-fixable Google 403/404
+ * guidance was demoted from isError to ❌ `failed` on 2026-09-02, and the
+ * subset that is a deterministic grant refusal with remediation (missing
+ * scope, file not shared with FGAC at Google) graduated to 🚫
+ * `denied_by_policy` on 2026-09-03, since ❌ `failed` still counts in the
+ * published error rate — see errorResult's doc-comment for the boundary.
  */
 function classifyToolOutcome(result: ToolAnalyticsResult): string {
   if (result.isError) return 'error';
@@ -1477,11 +1487,13 @@ type ResolvedError = { error: string };
  *
  * `failure_reason` is deliberately a SEPARATE property from `error_status`
  * (which means "Google returned this HTTP status" — these calls never got
- * that far), and these stay `textResult`, NOT `errorResult`: classifyToolOutcome
- * maps them to `failed`, and `$mcp_is_error` is true only for `error`/
- * `exception`. Promoting them would move them into the error field that
- * Anthropic's Connector Directory reads — worsening our published error rate
- * purely to gain internal visibility we can get for free here.
+ * that far), and these stay `textResult`, NOT `errorResult`. Note the ❌
+ * `failed` class still counts in the Connector Directory's published error
+ * rate (see errorResult's doc-comment) — that is correct for these: a
+ * missing key or inaccessible account is a real malfunction of the
+ * connection. The scope pre-flights below graduated to 🚫 refusals
+ * (2026-09-03) because they are grant-state denials with a one-click fix,
+ * not malfunctions.
  */
 type ResolveFailureReason =
   | 'no_proxy_key'
@@ -1540,9 +1552,15 @@ async function resolveAccountAndToken(
  * Pre-flight for Gmail surfaces only (sheets/docs/drive don't need the Gmail
  * scope): a token whose grant lacks the Gmail scope 403s on every Gmail call
  * until the account is reconnected, so calling Google is pointless and the
- * generic 403 text used to send agents into retry loops. Deterministic and
- * never-reached-Google, so it is the `failed` class (textResult), not an
- * upstream `error` — see the ResolveFailureReason comment above.
+ * generic 403 text used to send agents into retry loops. Deterministic,
+ * never-reached-Google, and carrying the exact remediation, so it is a 🚫
+ * refusal (outcome `denied_by_policy`), not a ❌ failure: the published
+ * error-rate math counts `failed` results as tool errors too (the directory's
+ * 18.3% for google_api_modify, 7d to 2026-09-03, matches error+failed, not
+ * error alone), and a grant-state refusal with a one-click fix is the tool
+ * working as designed — the same class as an FGAC rule denial.
+ * `failure_reason` stays stamped for pre-2026-09-03 query continuity;
+ * `denial_code` carries the same string in the denial taxonomy.
  *
  * Two signals, same pattern as google_token_identity_fallback: the tool-call
  * properties attribute the denial to the call; the standalone event is
@@ -1551,14 +1569,14 @@ async function resolveAccountAndToken(
  */
 function gmailScopeDenial(conn: ConnectionApproved, resolved: ResolvedAccount) {
   if (resolved.hasGmailScope !== false) return null;
-  addToolCallProps({ failure_reason: 'gmail_scope_missing', google_scope_missing: true });
+  addToolCallProps({ failure_reason: 'gmail_scope_missing', denial_code: 'gmail_scope_missing', google_scope_missing: true });
   captureServerEvent(conn.user.clerkUserId, 'google_scope_missing', {
     via: 'mcp',
     scope: 'gmail',
     account_delegated: resolved.targetEmail.toLowerCase() !== conn.user.email.toLowerCase(),
   });
   return textResult(
-    `❌ The Google account '${resolved.targetEmail}' is connected WITHOUT Gmail permission — ` +
+    `🚫 Not available yet: the Google account '${resolved.targetEmail}' is connected WITHOUT Gmail permission — ` +
     `most likely the Gmail checkbox was left unchecked on Google's consent screen when connecting. ` +
     `STOP — every Gmail call on this account will fail until it is reconnected; retrying will NOT help. ` +
     `👉 Send the account owner this one-click link — it opens Google's consent screen directly; they must approve Gmail access there: ` +
@@ -1574,20 +1592,21 @@ function gmailScopeDenial(conn: ConnectionApproved, resolved: ResolvedAccount) {
  * Google's consent screen — 403 on every one of these calls (observed as the
  * 403s on POST v4/spreadsheets, 2026-08 production), and the upstream 403
  * body often carries no reason the agent can act on. Deterministic and
- * never-reached-Google, so it is the `failed` class (textResult), not an
- * upstream `error`. Applied by every typed per-file tool (sheets_*, docs_*,
- * comments_*) and by non-Gmail raw google_api_get/modify calls.
+ * never-reached-Google, so it is a 🚫 refusal (outcome `denied_by_policy`),
+ * not a ❌ failure — same rationale and property treatment as
+ * gmailScopeDenial above. Applied by every typed per-file tool (sheets_*,
+ * docs_*, comments_*) and by non-Gmail raw google_api_get/modify calls.
  */
 function driveFileScopeDenial(conn: ConnectionApproved, resolved: ResolvedAccount) {
   if (resolved.hasDriveFileScope !== false) return null;
-  addToolCallProps({ failure_reason: 'drive_file_scope_missing', google_scope_missing: true });
+  addToolCallProps({ failure_reason: 'drive_file_scope_missing', denial_code: 'drive_file_scope_missing', google_scope_missing: true });
   captureServerEvent(conn.user.clerkUserId, 'google_scope_missing', {
     via: 'mcp',
     scope: 'drive_file',
     account_delegated: resolved.targetEmail.toLowerCase() !== conn.user.email.toLowerCase(),
   });
   return textResult(
-    `❌ The Google account '${resolved.targetEmail}' is connected WITHOUT the Google Drive file permission (drive.file) — ` +
+    `🚫 Not available yet: the Google account '${resolved.targetEmail}' is connected WITHOUT the Google Drive file permission (drive.file) — ` +
     `most likely the account was connected before FGAC requested it, or the Drive checkbox was left unchecked on Google's consent screen. ` +
     `Every Sheets, Docs, Slides, and Drive call on this account will fail until it is reconnected; retrying will NOT help. ` +
     `👉 Send the account owner this one-click link — it opens Google's consent screen directly; they must approve Drive file access there: ` +
@@ -1641,16 +1660,28 @@ function classifyAndStampRawCall(path: string, method: string): RawCallClass {
  * retry loops on ids that were never going to appear (observed on
  * drive/v3/files/{id}/permissions and PATCH drive/v3/files/{id}, 2026-08
  * production); say what the 404 can and cannot prove, and where the fix is.
+ *
+ * When the path is id-addressed (its analytics template carries an `{id}`),
+ * that 404 is the per-file-grant refusal class and answers as 🚫
+ * `denied_by_policy` with the user-side fix, same as fileGrantErrorResult
+ * (observed: POST drive/v3/files/{id}/copy, 2026-09 production). A 404 on a
+ * path WITHOUT an id has no grant to fix — it is a wrong path spelling or a
+ * Google routing miss — and stays a genuine error so real breakage (like the
+ * pre-2026-08-29 Slides misrouting) keeps showing up in error rates.
  */
-function passthroughErrorResult(result: { error: string; status?: number }) {
+function passthroughErrorResult(result: { error: string; status?: number }, path: string) {
   if (result.status !== 404) return errorResult(result.error);
-  return errorResult(
+  const explanation =
     `${result.error} ` +
     `NOTE: FGAC's Google grant is per-file (drive.file) — files the user never exposed to FGAC and this agent did not create are INVISIBLE to this token, ` +
     `and Google reports them with this exact 404 even though they exist. A wrong id looks identical, so do NOT retry the same id. ` +
     `If this id is a Google Sheet or Doc, call request_access with the spreadsheetId/documentId to send the user a one-click approval link; ` +
-    `for other Drive files, ask the user to expose the file via the FGAC dashboard, or create the file through FGAC so it is granted automatically.`,
-  );
+    `for other Drive files, ask the user to expose the file via the FGAC dashboard, or create the file through FGAC so it is granted automatically.`;
+  if (!templateGoogleApiPath(path).includes('{id}')) return errorResult(explanation);
+  addToolCallProps({ denial_code: 'file_grant_missing_at_google' });
+  // The refusal must not carry the upstream ❌ prefix inside it — 🚫 is the
+  // outcome marker (classifyToolOutcome reads the first characters).
+  return textResult(`🚫 Not available yet: ${explanation.replace(/^❌\s*/, '')}`);
 }
 
 /**
@@ -1798,7 +1829,7 @@ async function executeRawGoogleCall(
     // (family/kind/endpoint were already stamped at classification above).
     addToolCallProps({ raw_api_passthrough: true });
     const result = await googleFetch(rawUrl(cleanPath), resolved.token, method, serializeBody(body), resolved.targetEmail);
-    if (!result.ok) return passthroughErrorResult(result);
+    if (!result.ok) return passthroughErrorResult(result, cleanPath);
     return jsonResult(result.data);
   }
 
