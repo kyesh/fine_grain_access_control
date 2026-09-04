@@ -1609,8 +1609,9 @@ function driveFileScopeDenial(conn: ConnectionApproved, resolved: ResolvedAccoun
     `❌ The Google account '${resolved.targetEmail}' is connected WITHOUT the Google Drive file permission (drive.file) — ` +
     `most likely the owner signed in to FGAC with Google again since connecting (a plain sign-in resets the Drive permission), ` +
     `the account was connected before FGAC requested it, or the Drive checkbox was left unchecked on Google's consent screen. ` +
-    `Every Sheets, Docs, Slides, and Drive call on this account will fail until it is reconnected; retrying will NOT help. ` +
-    `👉 Send the account owner this one-click link — it opens Google's consent screen directly; they must approve Drive file access there: ` +
+    `Every Sheets, Docs, Slides, and Drive call on this account will fail until it is reconnected; retrying now will NOT help. ` +
+    `If the owner signed in to FGAC within the last hour, the permission usually returns on its own when the token refreshes (about an hour after the sign-in) — otherwise ` +
+    `👉 send the account owner this one-click link — it opens Google's consent screen directly; they must approve Drive file access there: ` +
     `${reconnectLink(resolved.targetEmail)} — then retry once after they confirm. ` +
     `Gmail tools are unaffected.`,
   );

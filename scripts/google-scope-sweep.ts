@@ -12,8 +12,9 @@
  * READ-ONLY. Prints COUNTS ONLY — never an email, Clerk id, or resource id —
  * so the output is safe to paste into a public issue.
  *
- *   npx tsx scripts/google-scope-sweep.ts            # branch DB + dev Clerk
- *   npx tsx scripts/google-scope-sweep.ts --prod     # PRODUCTION (read-only)
+ *   npx tsx scripts/google-scope-sweep.ts                    # branch DB + dev Clerk
+ *   npx tsx scripts/google-scope-sweep.ts --prod             # PRODUCTION (read-only)
+ *   npx tsx scripts/google-scope-sweep.ts --prod --tokens    # + what each served token really carries
  *
  * --prod reads .secrets/prod.env (pull it with
  * `npx vercel env pull .secrets/prod.env --environment=production`, delete it
@@ -139,7 +140,55 @@ async function main() {
   for (const [k, n] of [...scopeSetsAtSignIn].sort((a, b) => b[1] - a[1])) console.log(`  ${String(n).padStart(4)}  ${k}`);
   console.log('Scope sets on all other grants:');
   for (const [k, n] of [...scopeSetsOther].sort((a, b) => b[1] - a[1])) console.log(`  ${String(n).padStart(4)}  ${k}`);
-  console.log(`\nBROKEN NOW: ${c.without.driveUsers} users have Sheets/Docs configured but no drive.file on the Clerk grant.`);
+  console.log(`\nBROKEN PER CLERK METADATA: ${c.without.driveUsers} users have Sheets/Docs configured but no drive.file on the Clerk grant.`);
+
+  // --tokens: Clerk's record is not the token. Measured 2026-09-04: a sign-in
+  // without consent returns no refresh token, so Clerk keeps the older, wider
+  // one and the NEXT refreshed access token carries drive.file again while
+  // `approved_scopes` still says it is gone. Ask Google what each served
+  // token really carries (fetching the token makes Clerk refresh an expired
+  // one — read-only from our side, and what every tool call does anyway).
+  if (process.argv.includes('--tokens')) {
+    const t = {
+      driveUsers: { wide: 0, narrow: 0, failed: 0 },
+      others: { wide: 0, narrow: 0, failed: 0 },
+    };
+    const targets = users.filter(u => {
+      const g = u.external_accounts.find(a =>
+        (a.provider === 'oauth_google' || a.provider === 'google') && a.verification?.status === 'verified');
+      if (!g) return false;
+      const scopes = (g.approved_scopes ?? '').split(/\s+/);
+      return !scopes.includes(DRIVE_FILE) && !scopes.includes(DRIVE_FULL);
+    });
+    console.log(`\nChecking the served token of ${targets.length} accounts without drive.file in Clerk metadata…`);
+    const CONCURRENCY = 4;
+    let i = 0;
+    await Promise.all(Array.from({ length: CONCURRENCY }, async () => {
+      while (i < targets.length) {
+        const u = targets[i++];
+        const bucket = driveUsers.has(u.id) ? t.driveUsers : t.others;
+        try {
+          const res = await fetch(`https://api.clerk.com/v1/users/${u.id}/oauth_access_tokens/oauth_google`,
+            { headers: { Authorization: `Bearer ${secret}` } });
+          if (!res.ok) { bucket.failed++; continue; }
+          const toks = (await res.json()) as Array<{ token?: string }>;
+          const token = toks?.[0]?.token;
+          if (!token) { bucket.failed++; continue; }
+          const info = await fetch(`https://oauth2.googleapis.com/tokeninfo?access_token=${encodeURIComponent(token)}`);
+          if (!info.ok) { bucket.failed++; continue; }
+          const live: string[] = String((await info.json()).scope ?? '').split(' ');
+          if (live.includes(DRIVE_FILE) || live.includes(DRIVE_FULL)) bucket.wide++; else bucket.narrow++;
+        } catch {
+          bucket.failed++;
+        }
+      }
+    }));
+    console.log('                                   token HAS drive.file   token lacks it   token unavailable (Clerk refresh failed / revoked)');
+    console.log(`  with Sheets/Docs rules           ${String(t.driveUsers.wide).padStart(19)}   ${String(t.driveUsers.narrow).padStart(14)}   ${String(t.driveUsers.failed).padStart(10)}`);
+    console.log(`  without Sheets/Docs rules        ${String(t.others.wide).padStart(19)}   ${String(t.others.narrow).padStart(14)}   ${String(t.others.failed).padStart(10)}`);
+    console.log(`\nTRULY BROKEN NOW: ${t.driveUsers.narrow} Sheets/Docs users whose served token lacks drive.file (need a consent reconnect).`);
+    console.log(`STALE-RECORD ONLY: ${t.driveUsers.wide} Sheets/Docs users whose token is fine — denied by metadata-only pre-flights before 2026-09-04.`);
+  }
 }
 
 main().catch(e => { console.error(e); process.exit(1); });

@@ -32,7 +32,7 @@ export function describeMissingGoogleAccess(
       title: 'Action Required: Grant Google Drive file access',
       body: needsDriveFile
         ? 'Gmail is connected, but the Google Drive file permission (drive.file) that your Sheets and Docs rules depend on is missing — every Sheets and Docs call fails until it is restored. ' +
-          'This usually happens after signing in with Google again: a sign-in resets the Drive permission. Reconnect to restore it.'
+          'This usually happens after signing in with Google again: a sign-in resets the Drive permission on the current token (it normally returns on its own within an hour). Reconnect to restore it now.'
         : 'Gmail is connected, but the Google Drive file permission (drive.file) is missing, so Sheets and Docs tools will fail. ' +
           'Reconnect Google and leave the Drive checkbox checked.',
       button: 'Reconnect Google',

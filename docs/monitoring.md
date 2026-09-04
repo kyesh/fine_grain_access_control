@@ -522,11 +522,21 @@ keeps one Google external account per user and rewrites its scope record — and
 the stored token — with the scope set of whatever OAuth request last completed.
 A plain Google sign-in requests the dashboard-configured set (`openid email
 profile gmail.modify`), never `drive.file`, so every sign-in strips the Drive
-permission a user granted through the Picker. Measured 2026-09-04 with
+permission a user granted through the Picker — from the ACCESS TOKEN for about
+an hour, and from Clerk's scope record for good. The sign-in shows no consent
+screen, so Google returns no refresh token and Clerk keeps the older, wider
+one: the first refresh after expiry serves a token that carries `drive.file`
+again while `approved_scopes` still says it is gone (measured 2026-09-04, dev
+instance, USER_A). Measured the same day with
 `npm run google:scope-sweep -- --prod` (read-only, counts only): of 213
 production grants, 0 of the 77 carrying `drive.file` had last been written by a
-sign-in, versus 75 of the 136 without it. Since 2026-09-04 the dashboard emits
-one `sign_in_completed` per sign-in with the scope state it measured on arrival:
+sign-in, versus 75 of the 136 without it; with `--tokens`, 8 of those 136 served
+a token that DID carry `drive.file` (4 of the 6 Sheets/Docs users among them),
+120 served a narrow token, 8 could not be refreshed. Until 2026-09-04 the MCP
+pre-flight denied on the record alone, so those 8 were locked out of Sheets/Docs
+indefinitely (the 33-user `google_scope_missing` population of the trailing
+14 days). Since 2026-09-04 the dashboard emits one `sign_in_completed` per
+sign-in with the scope state it measured on arrival:
 
 ```sql
 SELECT toDate(timestamp) AS day,
