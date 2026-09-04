@@ -470,10 +470,14 @@ original reading ("that user is silently broken") was wrong for all of them:
   accompany roughly one initialize in ten. One extra small round trip per
   client per quarter hour — not a cost worth an SDK migration on its own.
 - `unsupported_protocol_version` — the same message on any *other* method
-  (`initialize`, `tools/call`): a client that shipped a version the deployed
-  SDK refuses **and never sends the legacy handshake**. That user IS refused
-  until the SDK is bumped (the supported list is printed in the message).
-  This is the row the event exists for; it has never fired as of 2026-09-04.
+  (`tools/list`, `tools/call`, …): a client that shipped a version the
+  deployed SDK refuses **and never sends the legacy handshake**. That user IS
+  refused until the SDK is bumped (the supported list is printed in the
+  message). This is the row the event exists for; it has never fired in
+  production as of 2026-09-04. (`initialize` can never produce it: SDK 1.x
+  skips the header check on initialization requests and negotiates the
+  version down instead — verified on the PR #116 preview, an `initialize`
+  under the 2026-07-28 header answers 200 with `2025-11-25`.)
 - `sdk` — everything else. "Only one initialization request is allowed" is a
   batching client; 406 is a missing `Accept`.
 - `parse_error` — our own 400 for a non-JSON body.

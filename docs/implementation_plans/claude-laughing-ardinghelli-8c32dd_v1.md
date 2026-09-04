@@ -124,8 +124,16 @@ hazards above each need an assertion in `mcp:lint` before the flag defaults on.
 
 - Local: `npx tsx scripts/test-transport-rejections.ts`, `npx tsc --noEmit`,
   `npm run lint` — all green.
-- Preview (`/deploy-pr-preview`): an authenticated `server/discover` under
-  `MCP-Protocol-Version: 2026-07-28` and an authenticated `initialize` under the
-  same header, against the preview URL, then the 7.9 query filtered to
-  `properties.environment = 'preview'` showing `reason = 'discover_probe'` /
-  `'unsupported_protocol_version'` with `rpc_method` populated.
+- Preview (`/deploy-pr-preview`, PR #116): authenticated requests against the
+  preview URL with a DCR bearer for USER_A, then the 7.9 query filtered to
+  `properties.environment = 'preview'`:
+  - `server/discover` under `MCP-Protocol-Version: 2026-07-28` → HTTP 400,
+    row `reason = 'discover_probe'`, `rpc_method = 'server/discover'`. ✅
+  - `initialize` under the same header → **HTTP 200**, no event. SDK 1.x skips
+    `validateProtocolVersion` for initialization requests and negotiates down
+    (`2025-11-25` in the result). So `unsupported_protocol_version` is reachable
+    only from a post-handshake request — which is exactly what a modern-only
+    client sends. Runbook wording corrected accordingly.
+  - `tools/list` under the same header → HTTP 400, row
+    `reason = 'unsupported_protocol_version'`, `rpc_method = 'tools/list'`. ✅
+  - control `initialize` (2025-06-18, no header) → HTTP 200. ✅

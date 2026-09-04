@@ -37,10 +37,14 @@ check('server/discover with no readable body is still the probe',
   classifyTransportRejection(undefined, ['server/discover']).reason === 'discover_probe');
 {
   const r = classifyTransportRejection(UNSUPPORTED, ['initialize']);
-  check('initialize + unsupported-version 400 → unsupported_protocol_version (a truly refused client)',
+  // SDK 1.x never actually 400s an initialize on the header (it negotiates
+  // down) — the classifier still answers correctly should a future SDK do so.
+  check('initialize + unsupported-version 400 → unsupported_protocol_version',
     r.reason === 'unsupported_protocol_version');
   check('…with rpc_method initialize', r.rpc_method === 'initialize');
 }
+check('tools/list + unsupported-version 400 → unsupported_protocol_version (the reachable modern-only-client case, verified on preview)',
+  classifyTransportRejection(UNSUPPORTED, ['tools/list']).reason === 'unsupported_protocol_version');
 check('tools/call + unsupported-version 400 → unsupported_protocol_version',
   classifyTransportRejection(UNSUPPORTED, ['tools/call']).reason === 'unsupported_protocol_version');
 check('unsupported-version message with an unparsed body (no methods) → unsupported_protocol_version',
