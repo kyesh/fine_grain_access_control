@@ -516,3 +516,34 @@ Read together with 7.9/7.10 for the same person and window: a report of
 failure (result dropped or not shown); rows in 7.9 are transport refusals;
 rows in 7.10 are the agent's request shape; no rows anywhere means the call
 was never sent.
+
+**7.12 — Clerk token-fetch retry (the daily delegated-mailbox race).**
+Measured 2026-09-04 over 30 days of production: every MCP-path
+`google_token_fetch_failed` was `reason='clerk_error'`, one per day came
+from a single healthy delegated mailbox, and the per-call sequence showed a
+race — the agent fires two calls on that mailbox within ~100 ms on its first
+touch of the day, one fails at Clerk in ~80-120 ms (`token_ms`), the other
+succeeds, and every later call succeeds. Since 2026-09-04 the route retries
+an unknown Clerk error once (300 ms) and stamps the result on the tool call:
+
+```sql
+SELECT toDate(timestamp) AS day, properties.google_token_retry AS retry,
+       properties.account_delegated AS delegated, count() AS calls, uniq(person_id) AS users
+FROM events
+WHERE event = '$mcp_tool_call' AND properties.google_token_retry IS NOT NULL
+  AND timestamp > now() - INTERVAL 30 DAY
+GROUP BY day, retry, delegated ORDER BY day
+```
+
+Healthy: `recovered` rows at roughly the pre-deploy daily failure rate (≈1/day
+from the one account) and **zero** `retry_failed`. `google_token_fetch_failed`
+fires only on FINAL failure, so a `clerk_error` there now means the retry did
+not help — pair it with the new `clerk_status` / `clerk_code` props before
+deciding whether it is a Clerk incident (many users, one window) or a broken
+grant (one user, every call). Since the same date the event also fires for
+`no_token`, and the tool result for `no_token` / `refresh_failed` is a 🚫
+refusal (`denial_code: 'google_token_unavailable'`, outcome
+`denied_by_policy`) that names who must reconnect; `clerk_error` / `timeout`
+stay ❌ `failed` with retry-first text. A rising `retry_failed` count, or a
+`recovered` count far above the old failure rate, means Clerk is degrading
+rather than racing.

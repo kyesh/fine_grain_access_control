@@ -45,11 +45,17 @@
   mailbox
 - **Expected**: The response carries `account_details` alongside the
   unchanged `accounts` string array — one entry per account with `email`,
-  `delegated`, and three-state `gmail` / `drive_file` values
+  `delegated`, `google_token` (`ok` / `unavailable` / `unknown`, plus
+  `google_token_failure` naming the class when `unavailable`), and three-state
+  `gmail` / `drive_file` values
   (`granted`/`missing`/`unknown`; a scope Clerk cannot report is `unknown`,
-  never coerced to `missing`). A healthy QA account reports both scopes
-  `granted` with no `reconnect_url`; an account with a missing scope carries
-  a `reconnect_url` ending in `?reconnect=1&for=<that account's email>`
-  (URL-encoded — the link is bound to the account it repairs), and
-  `next_steps.sheets`/`next_steps.docs` point at that link when `drive_file`
-  is `missing`
+  never coerced to `missing`). A healthy QA account reports `google_token:
+  'ok'` and both scopes `granted` with no `reconnect_url`; an account with a
+  missing scope (or a token failure that cannot clear on its own —
+  `no_token` / `refresh_failed`) carries a `reconnect_url` ending in
+  `?reconnect=1&for=<that account's email>` (URL-encoded — the link is bound
+  to the account it repairs) and a `reconnect_by` that, for a delegated
+  mailbox, names the OWNER as the one who must open it signed in as that
+  account; a transient token failure, a timed-out probe, or an inactive
+  delegation carries NO link. `next_steps.sheets`/`next_steps.docs` point at
+  the link when `drive_file` is `missing`

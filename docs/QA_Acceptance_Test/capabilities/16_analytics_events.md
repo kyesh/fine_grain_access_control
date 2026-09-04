@@ -98,9 +98,19 @@ attributable to it.
     enum strings.
   - Every `outcome=failed` event produced by account/token resolution carries
     `failure_reason`, one of `no_proxy_key`, `no_accessible_accounts`,
-    `account_not_permitted`, `google_token_unavailable`. Capability 03
-    (multi-email scoping) and 07 (key lifecycle) generate the
+    `account_not_permitted`, `google_token_unavailable`, `delegation_inactive`.
+    Capability 03 (multi-email scoping) and 07 (key lifecycle) generate the
     `account_not_permitted` and `no_proxy_key` cases respectively.
+  - `google_token_unavailable` rows additionally carry `google_token_error`
+    (`no_token` / `refresh_failed` / `clerk_error` / `timeout`), and the
+    outcome follows the cause (2026-09-04): `no_token` / `refresh_failed`
+    classify `denied_by_policy` with `denial_code: 'google_token_unavailable'`
+    (🚫 text naming who must reconnect, `failure_reason` still stamped);
+    `clerk_error` / `timeout` classify `failed` (❌ retry-first text). A
+    `no_token` or `refresh_failed` row classifying `failed` is a regression.
+    A call whose first Clerk fetch failed and whose single retry succeeded
+    carries `google_token_retry: 'recovered'` on a `success` row and fires no
+    `google_token_fetch_failed`; `retry_failed` accompanies a final failure.
   - Since the directory-error demotion (PR #72 salvage, 2026-09), a second
     class of `outcome=failed` events exists: user/caller-fixable Google
     results demoted from `error` — the not-picked sheet/doc 403/404
