@@ -91,3 +91,44 @@
   shows its own "missing" error badge — never one combined state rendering
   both green from a single boolean. The Connected Google Account card's
   reconnect guidance still appears when either scope is missing
+
+### A9: A Google sign-in that strips drive.file is repaired right after sign-in
+- As a QA user who holds `drive.file` AND has at least one Sheets or Docs rule,
+  sign out of FGAC and sign back in with Google (a plain sign-in rewrites
+  Clerk's grant with the sign-in scope set, which lacks `drive.file` —
+  2026-09-04 finding; confirm with the Clerk external account's
+  `approved_scopes` or the Accounts page badges)
+- **Expected**: Landing on the dashboard after the sign-in, the access card
+  starts the reconnect on its own (no click): the browser goes to Google's
+  consent (one Continue), returns to `/dashboard/accounts?reconnected=1`, and
+  the page verifies "✓ Google reconnected — gmail.modify and drive.file
+  confirmed." A `google_reconnect_started` event fires with
+  `source: sign_in_auto`, and a `sign_in_completed` event fired first with
+  `drive_file_narrowed: true`. Gates: it fires at most ONCE per sign-in (reload
+  the dashboard after abandoning the consent screen — no second redirect;
+  the card with its manual button renders instead), never when Gmail is also
+  missing, never when the user has no Sheets/Docs rules, and never on an
+  OAuth return leg (`?reconnected=1`, `?autoOpenPicker=…`)
+
+### A10: The access card names the scope that is missing
+- With an account holding gmail.modify but NOT drive.file, open the dashboard;
+  then the reverse (drive.file but not gmail.modify) if a grant can be arranged
+- **Expected**: The card title/body name the missing scope — "Grant Google
+  Drive file access" / "Sheets and Docs" for a drive.file gap (for a user with
+  Sheets/Docs rules it also says a sign-in resets the permission), "Grant Gmail
+  access" / "checkbox" for a Gmail gap — and never tells a user whose Gmail
+  works that they "have not granted access to your Gmail". Only a grant
+  missing both scopes gets the generic "Connect Google Account" copy
+
+### A11: The MCP pre-flight trusts the token, not Clerk's stale scope record
+- With a Clerk external account whose `approved_scopes` lack `drive.file`
+  while the access token Clerk serves still carries it (tokeninfo shows
+  `drive.file` — arises when Clerk refreshes with an older, wider refresh
+  token), call `sheets_read_range` on an exposed sheet
+- **Expected**: The call succeeds (no "connected WITHOUT the Google Drive file
+  permission" denial), and the `$mcp_tool_call` event carries
+  `clerk_scope_cache_stale: true`. When tokeninfo agrees the scope is missing,
+  the denial fires as before, and its message names a repeat Google sign-in as
+  a likely cause alongside the unchecked-checkbox case. If the token state
+  cannot be arranged, record this assertion as blocked with the reason — never
+  as a pass
