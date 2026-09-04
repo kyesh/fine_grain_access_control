@@ -98,19 +98,9 @@ attributable to it.
     enum strings.
   - Every `outcome=failed` event produced by account/token resolution carries
     `failure_reason`, one of `no_proxy_key`, `no_accessible_accounts`,
-    `account_not_permitted`, `google_token_unavailable`, `delegation_inactive`.
-    Capability 03 (multi-email scoping) and 07 (key lifecycle) generate the
+    `account_not_permitted`, `google_token_unavailable`. Capability 03
+    (multi-email scoping) and 07 (key lifecycle) generate the
     `account_not_permitted` and `no_proxy_key` cases respectively.
-  - `google_token_unavailable` rows additionally carry `google_token_error`
-    (`no_token` / `refresh_failed` / `clerk_error` / `timeout`), and the
-    outcome follows the cause (2026-09-04): `no_token` / `refresh_failed`
-    classify `denied_by_policy` with `denial_code: 'google_token_unavailable'`
-    (🚫 text naming who must reconnect, `failure_reason` still stamped);
-    `clerk_error` / `timeout` classify `failed` (❌ retry-first text). A
-    `no_token` or `refresh_failed` row classifying `failed` is a regression.
-    A call whose first Clerk fetch failed and whose single retry succeeded
-    carries `google_token_retry: 'recovered'` on a `success` row and fires no
-    `google_token_fetch_failed`; `retry_failed` accompanies a final failure.
   - Since the directory-error demotion (PR #72 salvage, 2026-09), a second
     class of `outcome=failed` events exists: user/caller-fixable Google
     results demoted from `error` — the not-picked sheet/doc 403/404
@@ -333,3 +323,32 @@ attributable to it.
   signature for abandoned consent or a session dropped during the OAuth
   round-trip (monitoring.md §7.8); a run where the return leg fires neither
   terminal event is a regression.
+
+### A19: Google token failures classify by cause and name who must reconnect
+- Inspect `$mcp_tool_call` events from this run with
+  `failure_reason = 'google_token_unavailable'` or `'delegation_inactive'`,
+  and any `google_token_retry` rows. (Inducing a Clerk-side token failure on
+  demand is not possible with the QA accounts — see the A10 evidence note —
+  so this assertion is satisfied by the absence of regressions on the rows
+  that do occur, plus `npx tsx scripts/test-google-token-failure.ts`, which
+  pins the per-class wording.)
+- **Expected** (since 2026-09-04):
+  - `google_token_unavailable` rows carry `google_token_error` (`no_token` /
+    `refresh_failed` / `clerk_error` / `timeout`) and the outcome follows the
+    cause: `no_token` / `refresh_failed` classify `denied_by_policy` with
+    `denial_code: 'google_token_unavailable'` (🚫 text that says STOP and
+    names who must reconnect — for a delegated mailbox, the OWNER signed in as
+    that account); `clerk_error` / `timeout` classify `failed` (❌ text that
+    says retry ONCE before offering the reconnect link). A `no_token` or
+    `refresh_failed` row classifying `failed`, or a `clerk_error` row
+    classifying `denied_by_policy`, is a regression.
+  - `delegation_inactive` rows (access row present, delegation no longer
+    active) classify `failed` with re-delegate guidance and NO reconnect link.
+  - A call whose first Clerk fetch failed and whose single server-side retry
+    succeeded carries `google_token_retry: 'recovered'` on a `success` row and
+    fires NO `google_token_fetch_failed`; `retry_failed` accompanies a final
+    failure, whose standalone event carries `retried: true` and, when Clerk
+    threw an API error, `clerk_status` / `clerk_code`. `google_token_fetch_failed`
+    also fires for `reason = 'no_token'` (it did not before this date).
+  - `error_reason` stays absent on every token-layer row — it is the
+    Google-response property and the token layer never reached Google.
