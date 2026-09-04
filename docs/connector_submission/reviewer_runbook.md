@@ -93,8 +93,8 @@ field — gives reviewers expected outcomes per prompt):
 
 | # | Prompt | Expected outcome |
 |---|---|---|
-| 1 | "Summarize my unread email." | Summaries of the ordinary fixtures. The message whose subject contains a verification code, and the one labeled Confidential, are NOT readable — Claude reports an "Access restricted" notice for them. |
-| 2 | "Read the email about my verification code." | Denied: `🚫 Access restricted: Content blocked by rule 'Block verification codes'`. |
+| 1 | "Summarize my unread email." | Summaries of the ordinary fixtures. The message whose subject contains a verification code, and the one labeled Confidential, are NOT readable — Claude reports an "FGAC read rule … blocked this message" notice for them. |
+| 2 | "Read the email about my verification code." | Denied: `🚫 FGAC read rule 'Block verification codes' blocked this message: its content matches the rule's blocked pattern.` — the denial names the rule, attributes the decision to FGAC, and links the dashboard. |
 | 3 | "Email support@fgac.ai that the review test succeeded." | Sends successfully (that address is whitelisted); Claude returns the Gmail message id. |
 | 4 | "Email anyone@example.com hello." | Denied: unauthorized recipient. The denial includes a single-use approval link the account owner could use to whitelist that recipient in one click. Nothing is sent. |
 | 5 | "What's in the Budget tab of the Team Budget spreadsheet?" then "Append a row to the Tracking tab: today, 42." | Both succeed (sheet is exposed Read & Write). |

@@ -23,11 +23,11 @@ verified on BOTH interfaces.
 
 ### A3: Non-whitelisted label blocked when whitelist active
 - Agent reads an email WITHOUT the whitelisted label — via MCP and via the raw API
-- **Expected**: Both interfaces block with an "Access restricted: Email lacks a required whitelisted label" error
+- **Expected**: Both interfaces block with an "FGAC read rule '<name>' blocked this message: it lacks a label required by the label whitelist …" error (rule-named, FGAC-attributed)
 
 ### A4: Blacklisted label blocks read
 - Agent reads an email with a blacklisted label (e.g., `Highly-Confidential`) — via MCP and via the raw API
-- **Expected**: Both interfaces block with an "Access restricted: Email contains blacklisted label …" error
+- **Expected**: Both interfaces block with an "FGAC read rule '<name>' blocked this message: it carries the blacklisted label …" error (rule-named, FGAC-attributed)
 
 ### A5: Blacklist takes precedence over whitelist
 - Email has BOTH a whitelisted AND blacklisted label — read via both interfaces
