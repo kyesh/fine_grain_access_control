@@ -99,10 +99,13 @@
   2026-09-04 finding; confirm with the Clerk external account's
   `approved_scopes` or the Accounts page badges)
 - **Expected**: Landing on the dashboard after the sign-in, the access card
-  starts the reconnect on its own (no click): the browser goes to Google's
-  consent (one Continue), returns to `/dashboard/accounts?reconnected=1`, and
-  the page verifies "✓ Google reconnected — gmail.modify and drive.file
-  confirmed." A `google_reconnect_started` event fires with
+  starts the reconnect on its own (no click): the browser goes to Google,
+  which shows only a one-account chooser (NO consent screen — Google still
+  holds the drive.file grant; the sign-in only narrowed Clerk's copy), bounces
+  back to `/dashboard/accounts?reconnected=1`, and the page verifies "✓ Google
+  reconnected — gmail.modify and drive.file confirmed." About an hour later
+  the token still refreshes with drive.file (the no-consent pass must not
+  leave a refresh-less grant — probe Clerk's token after expiry). A `google_reconnect_started` event fires with
   `source: sign_in_auto`, and a `sign_in_completed` event fired first with
   `drive_file_narrowed: true`. Gates: it fires at most ONCE per sign-in (reload
   the dashboard after abandoning the consent screen — no second redirect;

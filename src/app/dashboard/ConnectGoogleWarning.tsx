@@ -33,11 +33,18 @@ import { describeMissingGoogleAccess, type GoogleAccessLike } from "@/lib/google
 const AUTO_REPAIR_WINDOW_MS = 10 * 60_000;
 
 /**
- * `consent` is the measured-safe prompt: Google returns a refresh token only
- * on a consent pass, and a grant without one dies at the first access-token
- * expiry. Revisit after the 2026-09-04 silent-reauthorize measurement.
+ * Measured 2026-09-04 (dev instance, USER_B): the sign-in that narrowed the
+ * grant showed no consent screen, so Google returned no refresh token and
+ * Clerk kept the older, wider one. A reauthorize for drive.file with
+ * `select_account` then bounces off a one-account chooser with no consent
+ * screen (Google already holds the scope), Clerk records drive.file again,
+ * and the grant refreshed cleanly after its first expiry. `consent` would
+ * cost three Google screens for the same result. If Google does NOT hold the
+ * scope (hand-typed sheet id, never picked), `select_account` still shows the
+ * consent screen — and should that pass come back incomplete, the Accounts
+ * page's manual button runs the full `consent` leg.
  */
-const AUTO_REPAIR_PROMPT: ReconnectPrompt = "consent";
+const AUTO_REPAIR_PROMPT: ReconnectPrompt = "select_account";
 
 export function ConnectGoogleWarning({
   access,
