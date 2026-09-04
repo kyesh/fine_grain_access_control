@@ -279,7 +279,7 @@ Click **"Revoke"** to permanently disable a key. Revoked keys return `401 Unauth
 | `401 This API key has been revoked` | Key was revoked | Create a new key or roll the existing one |
 | `403 This API key does not have access to 'email'` | Key wasn't granted access to that email | Edit the key's email access on the dashboard |
 | `403 Access to 'email' has been revoked or is not delegated` | Delegation was revoked by owner | Ask the owner to re-delegate |
-| `403 Email content blocked by rule` | A read blacklist rule matched | Check your access rules |
+| `403 FGAC read rule '<name>' blocked this message` | A read rule matched (the error names the rule) | Adjust that rule on the dashboard |
 | `403 Unauthorized email address` | No send whitelist matches the recipient | Add a send whitelist rule |
 | `403 Could not fetch Google access token` | The email owner needs to reconnect Google | Sign out and sign back in with Google |
 

@@ -36,9 +36,58 @@ export function installFingerprint(req: Request): string | undefined {
   return createHash('sha256').update(`${salt}|${ip}|${ua}`).digest('hex').slice(0, 32);
 }
 
+/**
+ * Support-correlation hash for Gmail/Drive resource ids stamped on tool-call
+ * events (`message_id_hash`, `resource_id_hash`). Deliberately UNSALTED and
+ * truncated: a message id is not a secret (it is meaningless outside the
+ * owner's mailbox), and the point is that an operator holding an id from a
+ * support email can compute the same hash and find the calls —
+ * `sha256(id).slice(0, 16)` — without the raw id ever reaching PostHog.
+ */
+export function resourceIdHash(id: string): string {
+  return createHash('sha256').update(id).digest('hex').slice(0, 16);
+}
+
 export interface McpClientInfo {
   name: string;
   version?: string;
+}
+
+export interface RpcEnvelope {
+  /** JSON-RPC methods in the body (one, or several for a batch). */
+  methods: string[];
+  /** `params.name` of the first tools/call in the body, if any. */
+  toolName?: string;
+  /** True when the body could not be parsed as JSON at all. */
+  parseError: boolean;
+}
+
+/**
+ * Cheap shape of an already-read POST body: which JSON-RPC method(s) it
+ * carries and, for tools/call, which tool — the two facts the transport-
+ * rejection and input-validation events need to be attributable to a call.
+ * Never throws; a non-JSON body reports parseError so the caller can answer
+ * with the JSON-RPC parse error the MCP handler itself fails to produce.
+ */
+export function parseRpcEnvelope(text: string): RpcEnvelope {
+  let body: unknown;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    return { methods: [], parseError: true };
+  }
+  const messages = Array.isArray(body) ? body : [body];
+  const methods: string[] = [];
+  let toolName: string | undefined;
+  for (const msg of messages) {
+    const m = msg as { method?: unknown; params?: { name?: unknown } };
+    if (typeof m?.method !== 'string') continue;
+    methods.push(m.method.slice(0, 64));
+    if (m.method === 'tools/call' && toolName === undefined && typeof m.params?.name === 'string') {
+      toolName = m.params.name.slice(0, 64);
+    }
+  }
+  return { methods, toolName, parseError: false };
 }
 
 /**

@@ -33,6 +33,94 @@ export async function loadApplicableRules(userId: string, proxyKeyId: string, ta
 
 export type ApplicableRules = Awaited<ReturnType<typeof loadApplicableRules>>;
 
+// ─── Message content extraction (shared with parseGmailMessage) ──────────────
+
+export function decodeB64Url(s: string): string {
+  try { return Buffer.from(s, 'base64url').toString('utf8'); } catch { return ''; }
+}
+
+/** Reduce an HTML body to its visible text, the way parseGmailMessage renders it. */
+export function stripHtmlToText(html: string): string {
+  return html
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+const MAX_CONTENT_WALK_DEPTH = 10;
+
+/**
+ * Collect the human-readable content of every Gmail message nested in a
+ * response (single message, thread, or listing): header lines, snippets,
+ * attachment filenames, and DECODED text bodies (text/plain, plus text/html
+ * reduced to visible text).
+ *
+ * This exists because Gmail's `format=full` JSON carries body text
+ * base64url-ENCODED — a content rule tested against the raw serialization can
+ * never see the body (the one place users expect a content rule to look), and
+ * matches only the plaintext fields (snippet/headers/filenames), which made
+ * enforcement look format- and size-dependent (support case, 2026-09-03).
+ *
+ * Returns null when the value carries no recognizable message fields, so the
+ * caller can fall back to the raw serialization instead of silently
+ * un-enforcing on shapes this walker does not understand.
+ */
+export function collectMessageContent(value: unknown): string | null {
+  const chunks: string[] = [];
+
+  const walk = (v: unknown, depth: number) => {
+    if (depth > MAX_CONTENT_WALK_DEPTH || v === null || typeof v !== 'object') return;
+    if (Array.isArray(v)) {
+      for (const item of v) walk(item, depth + 1);
+      return;
+    }
+    const obj = v as Record<string, unknown>;
+    if (typeof obj.snippet === 'string' && obj.snippet) chunks.push(obj.snippet);
+    if (typeof obj.filename === 'string' && obj.filename) chunks.push(obj.filename);
+    if (Array.isArray(obj.headers)) {
+      for (const h of obj.headers) {
+        const header = h as { name?: unknown; value?: unknown };
+        if (typeof header?.name === 'string' && typeof header?.value === 'string') {
+          chunks.push(`${header.name}: ${header.value}`);
+        }
+      }
+    }
+    const body = obj.body as { data?: unknown } | undefined;
+    if (typeof obj.mimeType === 'string' && typeof body?.data === 'string' && body.data) {
+      if (obj.mimeType.startsWith('text/html')) {
+        chunks.push(stripHtmlToText(decodeB64Url(body.data)));
+      } else if (obj.mimeType.startsWith('text/')) {
+        chunks.push(decodeB64Url(body.data));
+      }
+    }
+    for (const key of Object.keys(obj)) {
+      if (key === 'headers') continue;
+      walk(obj[key], depth + 1);
+    }
+  };
+
+  walk(value, 0);
+  return chunks.length > 0 ? chunks.join('\n') : null;
+}
+
+// ─── Read-time enforcement ───────────────────────────────────────────────────
+
+const RULES_DASHBOARD_URL = 'https://fgac.ai/dashboard';
+
+/**
+ * Every denial names the governing rule, says FGAC made the decision, and
+ * links the dashboard. The self-identification is load-bearing: a hosted
+ * agent's own failure messages (client-side tool approval, dropped results)
+ * otherwise get attributed to FGAC rules — that mis-attribution is exactly
+ * what the 2026-09-03 support case reported.
+ */
+function denial(ruleName: string, detail: string): string {
+  return `🚫 FGAC read rule '${ruleName}' blocked this message: ${detail} ` +
+    `This decision was made by FGAC.ai policy (not by your agent or client). ` +
+    `The FGAC account owner can review or adjust rules at ${RULES_DASHBOARD_URL}.`;
+}
+
 /**
  * Read-time enforcement, shared by every path that returns message content.
  * Policy: messages may APPEAR in listings, but reading content must respect
@@ -42,6 +130,9 @@ export type ApplicableRules = Awaited<ReturnType<typeof loadApplicableRules>>;
  * Label rules consider every labelIds array in the response (thread and list
  * responses nest messages). Whitelists only apply when the response carries
  * labels at all — ID-only listings stay visible, matching the policy above.
+ * Content rules are tested against the DECODED message content (headers,
+ * snippet, filenames, decoded text bodies) — see collectMessageContent — with
+ * the raw serialization as a fallback for unrecognized response shapes.
  * Returns a user-facing restriction message, or null if the read is allowed.
  */
 export function checkReadRestrictions(
@@ -53,22 +144,26 @@ export function checkReadRestrictions(
 
   for (const rule of gmailRules.filter(r => r.actionType === 'label_blacklist')) {
     if (rule.regexPattern && labelIds.includes(rule.regexPattern)) {
-      return `🚫 Access restricted: Email contains blacklisted label '${rule.regexPattern}'.`;
+      return denial(rule.ruleName, `it carries the blacklisted label '${rule.regexPattern}'.`);
     }
   }
 
   const whitelists = gmailRules.filter(r => r.actionType === 'label_whitelist' && !!r.regexPattern);
   if (whitelists.length > 0 && labelIds.length > 0 && !whitelists.some(r => labelIds.includes(r.regexPattern!))) {
-    return '🚫 Access restricted: Email lacks a required whitelisted label.';
+    const names = whitelists.map(r => `'${r.ruleName}'`).join(', ');
+    return denial(whitelists[0].ruleName, `it lacks a label required by the label whitelist (${names}).`);
   }
 
-  const bodyStr = JSON.stringify(message);
-  for (const rule of gmailRules.filter(r => r.actionType === 'read_blacklist')) {
-    if (!rule.regexPattern) continue;
-    const regex = compileRulePattern(rule.regexPattern);
-    if (!regex) continue;
-    if (regex.test(bodyStr)) {
-      return `🚫 Access restricted: Content blocked by rule '${rule.ruleName}'.`;
+  const contentRules = gmailRules.filter(r => r.actionType === 'read_blacklist');
+  if (contentRules.length > 0) {
+    const corpus = collectMessageContent(message) ?? JSON.stringify(message);
+    for (const rule of contentRules) {
+      if (!rule.regexPattern) continue;
+      const regex = compileRulePattern(rule.regexPattern);
+      if (!regex) continue;
+      if (regex.test(corpus)) {
+        return denial(rule.ruleName, `its content matches the rule's blocked pattern.`);
+      }
     }
   }
 
