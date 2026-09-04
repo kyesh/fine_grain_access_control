@@ -50,6 +50,7 @@ import { clerkPrimaryEmail } from '@/lib/clerkPrimaryEmail';
 import { ownClerkEmailMatch } from '@/lib/identityDrift';
 import { slugifyProfileLabel } from '@/lib/profileSlugs';
 import { logAndSanitize, describeErrorForLog, toolErrorResult } from '@/lib/serverErrors';
+import { liveTokenScopes } from '@/lib/googleTokenScopes';
 
 /** Env URL values have shipped with trailing whitespace/newlines (pasted
  * Vercel vars); a whitespace-only value must also not win the fallback chain.
@@ -475,14 +476,32 @@ async function getGoogleToken(
       if (!quiet) addToolCallProps({ google_token_error: 'no_token' });
       return null;
     }
-    // Clerk reports the scopes Google actually granted (the dashboard's
-    // checkGoogleAccess already treats a missing scope here as "not
-    // connected"). Only computed here — gmailScopeDenial does the enforcement
-    // and the analytics, so a sheets-only call by a Gmail-scope-less user
-    // records nothing.
+    // Clerk's `scopes` is the scope set of the last OAuth request that
+    // completed for the account — not necessarily what the token in hand
+    // carries. A plain Google sign-in rewrites it without drive.file
+    // (2026-09-04 finding; the dashboard reads tokeninfo instead and the two
+    // disagreed). Only computed here — gmailScopeDenial / driveFileScopeDenial
+    // do the enforcement and the analytics, so a sheets-only call by a
+    // Gmail-scope-less user records nothing.
     const scopes = Array.isArray(grant.scopes) ? grant.scopes : undefined;
-    const hasGmailScope = scopes ? scopes.some(s => GMAIL_SCOPES.includes(s)) : undefined;
-    const hasDriveFileScope = scopes ? scopes.some(s => DRIVE_FILE_SCOPES.includes(s)) : undefined;
+    let hasGmailScope = scopes ? scopes.some(s => GMAIL_SCOPES.includes(s)) : undefined;
+    let hasDriveFileScope = scopes ? scopes.some(s => DRIVE_FILE_SCOPES.includes(s)) : undefined;
+    // Before denying on metadata, ask Google what the token really carries
+    // (cached per token). Happy-path calls never pay for this; a stale Clerk
+    // record can only ever be corrected toward the truth, never trusted to
+    // grant more than the token has.
+    if (scopes && (!hasGmailScope || !hasDriveFileScope)) {
+      const live = await liveTokenScopes(grant.token);
+      if (live) {
+        const liveGmail = live.some(s => GMAIL_SCOPES.includes(s));
+        const liveDrive = live.some(s => DRIVE_FILE_SCOPES.includes(s));
+        if (!quiet && ((liveGmail && !hasGmailScope) || (liveDrive && !hasDriveFileScope))) {
+          addToolCallProps({ clerk_scope_cache_stale: true });
+        }
+        hasGmailScope = liveGmail;
+        hasDriveFileScope = liveDrive;
+      }
+    }
     return { token: grant.token, hasGmailScope, hasDriveFileScope };
   } catch (err) {
     // Observability for the "Clerk cannot refresh the Google token" failure
@@ -1588,7 +1607,8 @@ function driveFileScopeDenial(conn: ConnectionApproved, resolved: ResolvedAccoun
   });
   return textResult(
     `❌ The Google account '${resolved.targetEmail}' is connected WITHOUT the Google Drive file permission (drive.file) — ` +
-    `most likely the account was connected before FGAC requested it, or the Drive checkbox was left unchecked on Google's consent screen. ` +
+    `most likely the owner signed in to FGAC with Google again since connecting (a plain sign-in resets the Drive permission), ` +
+    `the account was connected before FGAC requested it, or the Drive checkbox was left unchecked on Google's consent screen. ` +
     `Every Sheets, Docs, Slides, and Drive call on this account will fail until it is reconnected; retrying will NOT help. ` +
     `👉 Send the account owner this one-click link — it opens Google's consent screen directly; they must approve Drive file access there: ` +
     `${reconnectLink(resolved.targetEmail)} — then retry once after they confirm. ` +

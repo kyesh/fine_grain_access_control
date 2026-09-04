@@ -516,3 +516,40 @@ Read together with 7.9/7.10 for the same person and window: a report of
 failure (result dropped or not shown); rows in 7.9 are transport refusals;
 rows in 7.10 are the agent's request shape; no rows anywhere means the call
 was never sent.
+
+**7.12 — Google sign-ins that narrow the grant (`sign_in_completed`).** Clerk
+keeps one Google external account per user and rewrites its scope record — and
+the stored token — with the scope set of whatever OAuth request last completed.
+A plain Google sign-in requests the dashboard-configured set (`openid email
+profile gmail.modify`), never `drive.file`, so every sign-in strips the Drive
+permission a user granted through the Picker. Measured 2026-09-04 with
+`npm run google:scope-sweep -- --prod` (read-only, counts only): of 213
+production grants, 0 of the 77 carrying `drive.file` had last been written by a
+sign-in, versus 75 of the 136 without it. Since 2026-09-04 the dashboard emits
+one `sign_in_completed` per sign-in with the scope state it measured on arrival:
+
+```sql
+SELECT toDate(timestamp) AS day,
+       count() AS sign_ins,
+       countIf(properties.needs_drive_file) AS sheets_docs_users,
+       countIf(properties.drive_file_narrowed) AS arrived_without_drive_file,
+       uniqIf(person_id, properties.drive_file_narrowed) AS people_narrowed
+FROM events
+WHERE event = 'sign_in_completed' AND timestamp > now() - INTERVAL 30 DAY
+GROUP BY day ORDER BY day
+```
+
+`arrived_without_drive_file` is the population the post-sign-in auto-repair
+targets: the dashboard card starts the reconnect itself for those users
+(`google_reconnect_started` with `source = 'sign_in_auto'`), returning to the
+Accounts page so §7.8's `returned`/`verified` funnel closes it. Healthy: every
+`sign_in_auto` start is followed by a `google_reconnect_verified` within
+minutes. A `sign_in_auto` start with no `returned` is a user who abandoned
+Google's consent screen right after signing in — if that grows, the extra
+screen is costing more than the broken Sheets calls it prevents, and the
+alternative (adding `drive.file` to the Clerk dashboard's sign-in scope set,
+rejected in `docs/implementation_plans/google-sign-in-scope-narrowing_v1.md`
+because Google re-prompts every sign-in until the scope is granted) should be
+re-weighed. The MCP pre-flight no longer over-denies on the stale record:
+`$mcp_tool_call` rows with `clerk_scope_cache_stale = true` count the calls
+that Clerk metadata alone would have refused.
