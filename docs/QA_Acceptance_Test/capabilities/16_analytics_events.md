@@ -334,11 +334,16 @@ attributable to it.
   pins the per-class wording.)
 - **Expected** (since 2026-09-04):
   - `google_token_unavailable` rows carry `google_token_error` (`no_token` /
-    `refresh_failed` / `clerk_error` / `timeout`) and the outcome follows the
-    cause: `no_token` / `refresh_failed` classify `denied_by_policy` with
+    `refresh_failed` / `owner_not_found` / `clerk_error` / `timeout`) and the
+    outcome follows the cause: `no_token` / `refresh_failed` /
+    `owner_not_found` classify `denied_by_policy` with
     `denial_code: 'google_token_unavailable'` (🚫 text that says STOP and
-    names who must reconnect — for a delegated mailbox, the OWNER signed in as
-    that account); `clerk_error` / `timeout` classify `failed` (❌ text that
+    names who must act — for a delegated mailbox, the OWNER signed in as that
+    account; `owner_not_found` carries NO reconnect link and says the owner
+    must sign in to FGAC again). On a Vercel preview every delegated mailbox
+    is expected to land in `owner_not_found`: the preview database is a copy
+    of production, so the delegator's row carries a production Clerk id the
+    dev Clerk instance 404s on — an environment artifact, not a regression; `clerk_error` / `timeout` classify `failed` (❌ text that
     says retry ONCE before offering the reconnect link). A `no_token` or
     `refresh_failed` row classifying `failed`, or a `clerk_error` row
     classifying `denied_by_policy`, is a regression.

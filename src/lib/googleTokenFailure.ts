@@ -31,13 +31,19 @@ export type GoogleTokenFailureReason =
   /** Clerk answered cleanly but holds no Google token for the user: no
    * Google external account, or one with no stored grant. */
   | 'no_token'
+  /** Clerk has no user with the id FGAC stored for the mailbox owner
+   * (404 resource_not_found): the owner's FGAC account was deleted, or the
+   * row was created against a different Clerk instance. Deterministic, and
+   * a reconnect link cannot repair a missing account — the owner must sign
+   * in again. Seen 2026-09-04 on a preview (production data + dev Clerk). */
+  | 'owner_not_found'
   /** The target address is an access-row entry whose delegation is no longer
    * active (or whose owner row is gone) and is not the key owner's own
    * mailbox either. Nothing to reconnect — the owner must re-delegate. */
   | 'delegation_inactive';
 
 export interface ClassifiedClerkTokenError {
-  reason: Extract<GoogleTokenFailureReason, 'timeout' | 'refresh_failed' | 'clerk_error'>;
+  reason: Extract<GoogleTokenFailureReason, 'timeout' | 'refresh_failed' | 'clerk_error' | 'owner_not_found'>;
   /** Worth one immediate server-side retry. Timeouts already burned the
    * budget; refresh failures are deterministic. */
   retryable: boolean;
@@ -62,6 +68,9 @@ export function classifyClerkTokenError(err: unknown): ClassifiedClerkTokenError
   const clerkCode = typeof firstCode === 'string' ? firstCode : undefined;
 
   if (isTimeout) return { reason: 'timeout', retryable: false, clerkStatus, clerkCode };
+  if (clerkStatus === 404 || clerkCode === 'resource_not_found') {
+    return { reason: 'owner_not_found', retryable: false, clerkStatus, clerkCode };
+  }
   if (/refresh/i.test(message) || (clerkCode !== undefined && /refresh/i.test(clerkCode))) {
     return { reason: 'refresh_failed', retryable: false, clerkStatus, clerkCode };
   }
@@ -73,6 +82,13 @@ export function classifyClerkTokenError(err: unknown): ClassifiedClerkTokenError
  * action. `delegation_inactive` is deterministic too but is not a token
  * problem — it gets its own text. */
 export function isDeterministicTokenFailure(reason: GoogleTokenFailureReason): boolean {
+  return reason === 'no_token' || reason === 'refresh_failed' || reason === 'owner_not_found';
+}
+
+/** Subset of the deterministic reasons that a reconnect actually repairs —
+ * what list_accounts mints a reconnect link for. A missing owner account
+ * has nothing to reconnect. */
+export function reconnectRepairs(reason: GoogleTokenFailureReason): boolean {
   return reason === 'no_token' || reason === 'refresh_failed';
 }
 
@@ -112,6 +128,10 @@ function reconnectInstruction(input: TokenFailureGuidanceInput): string {
     `👉 Ask the user to forward this one-click link to the owner of '${input.targetEmail}', who must open it while signed in to FGAC as that account: ${input.reconnectUrl}`;
 }
 
+function safeOrigin(url: string): string {
+  try { return new URL(url).origin; } catch { return url; }
+}
+
 export function tokenFailureGuidance(input: TokenFailureGuidanceInput): TokenFailureGuidance {
   const { targetEmail, reason } = input;
   const reconnect = reconnectInstruction(input);
@@ -120,6 +140,19 @@ export function tokenFailureGuidance(input: TokenFailureGuidanceInput): TokenFai
     return {
       text: `❌ '${targetEmail}' is listed on this key, but its delegation to '${input.keyOwnerEmail}' is no longer active, so there is no Google token to use. ` +
         `STOP — retrying will not help. The owner of '${targetEmail}' must re-delegate the mailbox from "Delegations You've Granted" on their own Accounts page; it then works here again without any change to the key.`,
+    };
+  }
+
+  if (reason === 'owner_not_found') {
+    const origin = safeOrigin(input.reconnectUrl);
+    const delegated = targetEmail.toLowerCase() !== input.keyOwnerEmail.toLowerCase();
+    return {
+      denialCode: 'google_token_unavailable',
+      text: `🚫 Not available yet: FGAC's auth provider has no record of the user who owns '${targetEmail}' — the FGAC account behind that mailbox was deleted or never finished signing up. ` +
+        `STOP — retrying will NOT help, and a reconnect link cannot repair a missing account. ` +
+        (delegated
+          ? `The owner of '${targetEmail}' must sign in to FGAC again at ${origin} (that recreates their account), then re-delegate the mailbox to '${input.keyOwnerEmail}' from "Delegations You've Granted" on their Accounts page.`
+          : `The user must sign in to FGAC again at ${origin} and reconnect Google from the Accounts page.`),
     };
   }
 

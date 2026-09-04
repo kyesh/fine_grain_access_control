@@ -541,7 +541,11 @@ fires only on FINAL failure, so a `clerk_error` there now means the retry did
 not help — pair it with the new `clerk_status` / `clerk_code` props before
 deciding whether it is a Clerk incident (many users, one window) or a broken
 grant (one user, every call). Since the same date the event also fires for
-`no_token`, and the tool result for `no_token` / `refresh_failed` is a 🚫
+`no_token`, a Clerk 404 for the owner's stored user id classifies
+`owner_not_found` (deterministic — a deleted owner account, or a row from a
+different Clerk instance, which is exactly what a preview against a copy of
+production data produces for every delegated mailbox), and the tool result
+for `no_token` / `refresh_failed` / `owner_not_found` is a 🚫
 refusal (`denial_code: 'google_token_unavailable'`, outcome
 `denied_by_policy`) that names who must reconnect; `clerk_error` / `timeout`
 stay ❌ `failed` with retry-first text. A rising `retry_failed` count, or a

@@ -16,7 +16,7 @@
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import {
-  classifyClerkTokenError, isDeterministicTokenFailure, tokenFailureGuidance,
+  classifyClerkTokenError, isDeterministicTokenFailure, reconnectRepairs, tokenFailureGuidance,
 } from '../src/lib/googleTokenFailure';
 
 let failures = 0;
@@ -47,6 +47,16 @@ console.log('classifyClerkTokenError');
   const oc = classifyClerkTokenError(other);
   check('unknown Clerk error → clerk_error, retryable once', oc.reason === 'clerk_error' && oc.retryable);
   check('non-Error rejection still classifies', classifyClerkTokenError('boom').reason === 'clerk_error');
+
+  // The exact shape Clerk returned on the 2026-09-04 preview (production
+  // data + dev Clerk instance): the owner's user id does not exist.
+  const nf = Object.assign(new Error('Not Found'), {
+    status: 404, errors: [{ code: 'resource_not_found', message: 'not found' }],
+  });
+  const nfc = classifyClerkTokenError(nf);
+  check('Clerk 404 resource_not_found → owner_not_found, not retryable', nfc.reason === 'owner_not_found' && !nfc.retryable);
+  const nfCodeOnly = Object.assign(new Error('x'), { errors: [{ code: 'resource_not_found' }] });
+  check('resource_not_found code alone → owner_not_found', classifyClerkTokenError(nfCodeOnly).reason === 'owner_not_found');
 }
 
 // ---- deterministic boundary --------------------------------------------------
@@ -56,6 +66,8 @@ check('no_token is deterministic', isDeterministicTokenFailure('no_token'));
 check('refresh_failed is deterministic', isDeterministicTokenFailure('refresh_failed'));
 check('clerk_error is NOT deterministic (the production race)', !isDeterministicTokenFailure('clerk_error'));
 check('timeout is NOT deterministic', !isDeterministicTokenFailure('timeout'));
+check('owner_not_found is deterministic', isDeterministicTokenFailure('owner_not_found'));
+check('reconnect repairs no_token / refresh_failed only', reconnectRepairs('no_token') && reconnectRepairs('refresh_failed') && !reconnectRepairs('owner_not_found') && !reconnectRepairs('clerk_error'));
 
 // ---- guidance wording ------------------------------------------------------
 
@@ -99,6 +111,15 @@ const LINK = 'https://fgac.example/dashboard/accounts?reconnect=1&for=owner%40ex
   const g = tokenFailureGuidance({ targetEmail: OWNER, keyOwnerEmail: KEY, reason: 'delegation_inactive', reconnectUrl: LINK, retried: false });
   check('inactive delegation → ❌, no reconnect link (nothing to reconnect)', g.text.startsWith('❌') && !g.text.includes(LINK));
   check('inactive delegation → owner must re-delegate', /re-delegate/.test(g.text) && /Delegations You've Granted/.test(g.text));
+}
+{
+  const g = tokenFailureGuidance({ targetEmail: OWNER, keyOwnerEmail: KEY, reason: 'owner_not_found', reconnectUrl: LINK, retried: false });
+  check('owner_not_found → 🚫 with denial code', g.text.startsWith('🚫 Not available yet:') && g.denialCode === 'google_token_unavailable');
+  check('owner_not_found → no reconnect link (nothing to reconnect)', !g.text.includes(LINK));
+  check('owner_not_found → says the account is missing and a link cannot repair it', /no record of the user/.test(g.text) && /cannot repair a missing account/.test(g.text));
+  check('owner_not_found delegated → owner signs in again at the dashboard origin, then re-delegates', g.text.includes('https://fgac.example') && /re-delegate/.test(g.text));
+  const own = tokenFailureGuidance({ targetEmail: OWNER, keyOwnerEmail: OWNER, reason: 'owner_not_found', reconnectUrl: LINK, retried: false });
+  check('owner_not_found own → user signs in again', /sign in to FGAC again/.test(own.text) && !/re-delegate/.test(own.text));
 }
 {
   // Case-insensitive own-account match: a key owner stored as Mixed.Case must

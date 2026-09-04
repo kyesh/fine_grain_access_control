@@ -51,7 +51,7 @@ import { ownClerkEmailMatch } from '@/lib/identityDrift';
 import { slugifyProfileLabel } from '@/lib/profileSlugs';
 import { logAndSanitize, describeErrorForLog, toolErrorResult } from '@/lib/serverErrors';
 import {
-  classifyClerkTokenError, isDeterministicTokenFailure, tokenFailureGuidance,
+  classifyClerkTokenError, reconnectRepairs, tokenFailureGuidance,
   type GoogleTokenFailureReason,
 } from '@/lib/googleTokenFailure';
 
@@ -2018,13 +2018,14 @@ const handler = createMcpHandler(
           const failure = settled && 'failure' in settled ? settled.failure : null;
           const gmail = token ? scopeState(token.hasGmailScope) : 'unknown';
           const driveFile = token ? scopeState(token.hasDriveFileScope) : 'unknown';
-          // A definitive scope miss — or a token failure that cannot clear
-          // on its own (no grant, cannot refresh) — gets the bound reconnect
-          // link. A timed-out probe, a transient Clerk error, or an inactive
-          // delegation stays link-free: none of those is fixed by
-          // reconnecting, and a false link here sends the agent (and the
-          // user) to repair a grant that is fine.
-          const needsReconnect = (failure !== null && isDeterministicTokenFailure(failure))
+          // A definitive scope miss — or a token failure a reconnect
+          // actually repairs (no grant, cannot refresh) — gets the bound
+          // reconnect link. A timed-out probe, a transient Clerk error, a
+          // missing owner account, or an inactive delegation stays
+          // link-free: none of those is fixed by reconnecting, and a false
+          // link here sends the agent (and the user) to repair a grant that
+          // is fine or does not exist.
+          const needsReconnect = (failure !== null && reconnectRepairs(failure))
             || gmail === 'missing' || driveFile === 'missing';
           return {
             email: e.targetEmail,
