@@ -31,7 +31,8 @@ import { compileRulePattern } from '@/lib/rulePatterns';
 import { captureServerEvent } from '@/lib/posthogServer';
 import { runWithToolCallProps, addToolCallProps, getToolCallProps } from '@/lib/toolCallContext';
 import { GOOGLE_FETCH_TIMEOUT_MS, CLERK_TOKEN_TIMEOUT_MS, withTimeout, isUpstreamTimeout } from '@/lib/upstreamTimeouts';
-import { installFingerprint, parseInitializeClientInfo, type McpClientInfo } from '@/lib/mcpClientSignals';
+import { installFingerprint, parseInitializeClientInfo, parseRpcEnvelope, resourceIdHash, type McpClientInfo } from '@/lib/mcpClientSignals';
+import { after } from 'next/server';
 import { inSuccessSample, AUTH_SUCCESS_SAMPLE } from '@/lib/authSampling';
 import { ensureDefaultProfile } from '@/db/defaultProfile';
 import { mintApprovalLink, type ApprovalAction } from '@/lib/approvalLinks';
@@ -1313,11 +1314,22 @@ function parseGmailMessage(msg: Record<string, unknown>, opts: { fullBody?: bool
     }
   }
 
-  if (!bodyText && htmlFallback) {
+  const usedHtmlFallback = !bodyText && !!htmlFallback;
+  if (usedHtmlFallback) {
     bodyText = stripHtmlToText(htmlFallback);
   }
 
   const truncated = !opts.fullBody && bodyText.length > MAX_BODY_CHARS;
+  // Response-shape observability: lets a support report ("format=full fails
+  // on THIS message") be checked against what the parser actually produced —
+  // an attachment-heavy message legitimately parses to a few KB, which reads
+  // as "empty" without these. No-op outside a wrapped tool call.
+  addToolCallProps({
+    parsed_body_chars: bodyText.length,
+    parsed_body_truncated: truncated,
+    parsed_attachments: attachments.length,
+    parsed_html_fallback: usedHtmlFallback,
+  });
   return {
     id: msg.id,
     threadId: msg.threadId,
@@ -1611,6 +1623,13 @@ function classifyAndStampRawCall(path: string, method: string): RawCallClass {
     ...(family ? { raw_api_family: family } : {}),
   });
   if (cls.kind === 'denied') addToolCallProps({ denial_code: cls.code });
+  // Support correlation: the id-stripped template above says WHAT was read,
+  // never WHICH message — a reporter's message id could not be matched to
+  // its calls (2026-09-03 case). Hash it the same way gmail_read does.
+  const resourceId = path.match(/\/(?:messages|threads|drafts)\/([^/?#]+)/)?.[1];
+  if (resourceId && !['send', 'import', 'batchModify', 'batchDelete'].includes(resourceId)) {
+    addToolCallProps({ resource_id_hash: resourceIdHash(resourceId) });
+  }
   return cls;
 }
 
@@ -2003,6 +2022,15 @@ const handler = createMcpHandler(
         limit: z.number().int().min(1).optional().describe('Max chars to return in this response (server caps at 200000). Size this to YOUR tool-result budget. Passing offset or limit switches to the windowed envelope.'),
       }),
       async ({ account, messageId, format, offset, limit }, { authInfo }) => {
+        // Request fingerprint, stamped before any check can short-circuit:
+        // which message (hashed — see resourceIdHash), which format, whether
+        // the caller windowed. Without these a reporter's "format=full fails
+        // on message X" could not be matched to its events (2026-09-03 case).
+        addToolCallProps({
+          message_id_hash: resourceIdHash(messageId),
+          format: format ?? 'full',
+          windowed: offset !== undefined || limit !== undefined,
+        });
         const conn = await requireApproval(authInfo);
         if ('content' in conn) return conn;
 
@@ -2054,6 +2082,10 @@ const handler = createMcpHandler(
         limit: z.number().int().min(1).optional().describe('Max chars of base64url data to return in this response (server caps at 200000). Size this to YOUR tool-result budget. Passing offset or limit switches to the windowed envelope.'),
       }),
       async ({ messageId, attachmentId, filename, account, offset, limit }, { authInfo }) => {
+        addToolCallProps({
+          message_id_hash: resourceIdHash(messageId),
+          windowed: offset !== undefined || limit !== undefined,
+        });
         const conn = await requireApproval(authInfo);
         if ('content' in conn) return conn;
 
@@ -3092,11 +3124,100 @@ const verifyMcpAuth = async (req: Request, bearerToken?: string) => {
   return authInfo;
 };
 
+// ─── Transport-layer observability ──────────────────────────────────────────
+
+const TRANSPORT_REJECT_STATUSES = new Set([400, 404, 406, 415]);
+const MAX_REJECT_BODY_CHARS = 100_000;
+
+/**
+ * Everything the MCP transport refuses BEFORE a tool callback runs was
+ * invisible: the SDK writes its own 4xx (unsupported protocol version,
+ * batched initialize, missing Accept) and its own `isError` tool results for
+ * argument-validation failures and unknown tools, none of which pass through
+ * withToolAnalytics — so a client that kept sending calls the transport
+ * rejected produced ZERO events and looked like a client that never called
+ * (2026-09-03 support case: HTTP 400s at human cadence, unattributable).
+ *
+ * Runs inside experimental_withMcpAuth, so `req.auth` is resolved and every
+ * event here lands on the caller's person. Three captures:
+ *   - mcp_transport_rejected: our own 400 for an unparseable JSON body (the
+ *     handler awaits `req.json()` unguarded and otherwise never answers —
+ *     the request hangs to the function timeout), plus every SDK 4xx with
+ *     its JSON-RPC error message.
+ *   - mcp_input_validation_failed: SDK-emitted `isError` results for
+ *     -32602 (invalid arguments / unknown tool), detected from a tee of the
+ *     POST response body AFTER it has been returned, so the client is never
+ *     delayed. GET (the long-lived SSE stream) is never buffered.
+ */
+type AuthedRequest = Request & { auth?: { clientId?: string; extra?: { userId?: string } } };
+
+const withTransportObservability =
+  (h: (req: Request) => Promise<Response>) =>
+  async (req: Request): Promise<Response> => {
+    const auth = (req as AuthedRequest).auth;
+    const distinctId = auth?.extra?.userId ?? 'anonymous-mcp';
+    const base = () => ({
+      client_id: auth?.clientId,
+      user_agent: req.headers.get('user-agent') ?? undefined,
+      protocol_version_header: req.headers.get('mcp-protocol-version') ?? undefined,
+      method: req.method,
+    });
+
+    let envelope: ReturnType<typeof parseRpcEnvelope> | undefined;
+    if (req.method === 'POST' && (req.headers.get('content-type') ?? '').includes('application/json')) {
+      let text = '';
+      try { text = await req.clone().text(); } catch { /* unreadable body: let the handler decide */ }
+      envelope = parseRpcEnvelope(text);
+      if (envelope.parseError) {
+        captureServerEvent(distinctId, 'mcp_transport_rejected', {
+          ...base(), status: 400, reason: 'parse_error', body_chars: text.length,
+        });
+        return Response.json(
+          { jsonrpc: '2.0', error: { code: -32700, message: 'Parse error: request body is not valid JSON' }, id: null },
+          { status: 400 },
+        );
+      }
+    }
+
+    const res = await h(req);
+
+    if (TRANSPORT_REJECT_STATUSES.has(res.status)) {
+      let message: string | undefined;
+      try {
+        const body = await res.clone().text();
+        const parsed = JSON.parse(body.slice(0, MAX_REJECT_BODY_CHARS)) as { error?: { message?: unknown } };
+        message = typeof parsed?.error?.message === 'string' ? parsed.error.message.slice(0, 300) : body.slice(0, 300);
+      } catch { /* non-JSON rejection body */ }
+      captureServerEvent(distinctId, 'mcp_transport_rejected', {
+        ...base(), status: res.status, reason: 'sdk', message,
+        rpc_methods: envelope?.methods, tool: envelope?.toolName,
+      });
+      return res;
+    }
+
+    if (req.method === 'POST' && envelope?.toolName && res.ok && res.body) {
+      const tool = envelope.toolName;
+      const tee = res.clone();
+      after(async () => {
+        try {
+          const body = await tee.text();
+          if (!/"isError"\s*:\s*true/.test(body)) return;
+          const m = body.match(/MCP error -32602: (Input validation error|Tool [^"\\]{1,64} not found)[^"\\]{0,300}/);
+          if (!m) return;
+          captureServerEvent(distinctId, 'mcp_input_validation_failed', {
+            ...base(), tool, kind: m[1].startsWith('Tool') ? 'unknown_tool' : 'invalid_arguments', message: m[0].slice(0, 300),
+          });
+        } catch { /* tee read failed — nothing to record */ }
+      });
+    }
+    return res;
+  };
+
 // All verbs run behind auth: unauthenticated requests — including the
 // streamable-HTTP GET (SSE) and DELETE (session teardown) — must get the
 // 401 + WWW-Authenticate handshake, not an unauthenticated handler.
 const authedHandler = experimental_withMcpAuth(
-  handler,
+  withTransportObservability(handler),
   verifyMcpAuth,
   {
     required: true,

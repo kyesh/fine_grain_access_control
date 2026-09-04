@@ -432,3 +432,79 @@ no `returned` within ~15 minutes is the alertable unit. Pair with
 granted without fresh consent) to separate the two repair paths. ClickHouse
 LEFT JOIN note: missing right-side rows fill 0, not NULL, so the subtraction
 is safe.
+
+**7.9 — Transport-layer rejections (`mcp_transport_rejected`).** Added
+2026-09-03 after a support case in which a client's calls were refused by the
+MCP transport (HTTP 400) at human cadence for an hour and produced no event at
+all — the SDK writes its own 4xx before any tool callback runs. Every such
+rejection is now captured on the caller's person with the JSON-RPC error
+message, the request's RPC method(s)/tool, and the `MCP-Protocol-Version`
+header. Our own `reason='parse_error'` 400 replaces what used to be a hang:
+`mcp-handler` awaits `req.json()` unguarded, so a malformed/empty JSON body
+never got a response until the function timeout.
+
+```sql
+SELECT properties.status AS status, properties.reason AS reason,
+       properties.message AS message, properties.protocol_version_header AS pv,
+       properties.client_id AS client, uniq(distinct_id) AS users, count() AS n
+FROM events
+WHERE event = 'mcp_transport_rejected' AND timestamp > now() - INTERVAL 7 DAY
+GROUP BY status, reason, message, pv, client ORDER BY n DESC
+```
+
+Healthy: a steady, low, `anonymous-mcp`/probe-only trickle. Any row with a
+real person and `message` starting "Bad Request: Unsupported protocol version"
+means a client shipped a protocol version the deployed SDK does not accept —
+that user is silently broken until the SDK is bumped (supported list is
+printed in the message). "Only one initialization request is allowed" is a
+batching client. Correlate with `$mcp_tool_call` volume for the same
+`client_id`: rejections WITHOUT successes is a fully locked-out client.
+
+**7.10 — Tool calls the SDK refused before our code ran
+(`mcp_input_validation_failed`).** Zod argument validation and unknown-tool
+lookups happen inside the SDK, which answers with an `isError` tool result
+that never reaches `withToolAnalytics` — a client passing `offset: "0"`
+(string) or `format: "FULL"` failed invisibly. Detected from a tee of the
+POST response after it is sent (never delays the client; GET/SSE is never
+buffered).
+
+```sql
+SELECT properties.tool AS tool, properties.kind AS kind,
+       properties.client_id AS client, uniq(distinct_id) AS users, count() AS n,
+       any(properties.message) AS example
+FROM events
+WHERE event = 'mcp_input_validation_failed' AND timestamp > now() - INTERVAL 7 DAY
+GROUP BY tool, kind, client ORDER BY n DESC
+```
+
+Healthy: near zero. A single user repeating the same `invalid_arguments` on
+one tool is an agent stuck on a schema misunderstanding — the tool's
+description is the fix, not the user. `unknown_tool` bursts after a release
+mean a client cached an old tool list.
+
+**7.11 — Support lookup: "gmail_read fails on message X".** `$mcp_tool_call`
+now carries a request fingerprint (`message_id_hash` on `gmail_read` /
+`gmail_get_attachment`, `resource_id_hash` on raw Gmail `google_api_get`
+calls — both `sha256(id).slice(0, 16)`, unsalted so an operator can compute
+it from a reported id), `format`, `windowed`, and the parser's view of the
+message (`parsed_body_chars`, `parsed_body_truncated`, `parsed_attachments`,
+`parsed_html_fallback`). Compute the hash locally
+(`node -e "console.log(require('crypto').createHash('sha256').update('<id>').digest('hex').slice(0,16))"`)
+and query:
+
+```sql
+SELECT timestamp, properties.$mcp_tool_name AS tool, properties.outcome AS outcome,
+       properties.format AS format, properties.windowed AS windowed,
+       properties.response_chars AS chars, properties.parsed_body_chars AS body_chars,
+       properties.parsed_attachments AS attachments, properties.parsed_html_fallback AS html
+FROM events
+WHERE event = '$mcp_tool_call' AND timestamp > now() - INTERVAL 14 DAY
+  AND (properties.message_id_hash = '<hash>' OR properties.resource_id_hash = '<hash>')
+ORDER BY timestamp
+```
+
+Read together with 7.9/7.10 for the same person and window: a report of
+"fails" with successful rows here and nothing in 7.9/7.10 is a client-side
+failure (result dropped or not shown); rows in 7.9 are transport refusals;
+rows in 7.10 are the agent's request shape; no rows anywhere means the call
+was never sent.

@@ -76,6 +76,43 @@ size/path" experience the user described:
 Existing user rules keep their stored patterns; only enforcement semantics (what text
 the pattern is tested against) and denial copy change.
 
+## Follow-up: what the runtime logs added, and the detectability gap
+
+Vercel runtime logs for the reporter's window (retained ~1 day on Pro) showed
+`POST /api/mcp` → **HTTP 400** at human cadence throughout the hour in which the
+failures were experienced, and a 400 one second before each of the first
+successful calls afterwards (a client retrying after a rejection). No 5xx. A 400 is
+written by the MCP transport before any tool callback runs, so it never became a
+PostHog event — "zero server traces" was true of our *analytics*, not of the
+server. Attribution is not possible from the request log, and the 400 body was not
+recorded anywhere, so whether those were the reporter's calls — and why they were
+refused — remains unproven. Locally, the only client behaviours that produce a 400
+on this build are an unsupported `MCP-Protocol-Version` header and a batch that
+carries `initialize` alongside other requests.
+
+Three classes of failure were confirmed to be invisible to analytics:
+
+1. **Transport-layer 4xx** (400/406/415 written by the SDK): no event.
+2. **Argument validation / unknown tool**: the SDK answers with an `isError` tool
+   result *before* `withToolAnalytics` runs — verified locally: malformed
+   `gmail_read` arguments (`offset: "0"`, `format: "FULL"`) produced no event.
+3. **No request fingerprint**: `$mcp_tool_call` carried no (hashed) message id,
+   format, or window flag, so a reported message id could not be matched to its
+   calls; the match above was inferred from response sizes.
+
+Plus one bug: a malformed or empty JSON POST body makes `/api/mcp` hang to the
+function timeout (mcp-handler awaits `req.json()` unguarded) instead of answering
+`400 Parse error`.
+
+**Instrumentation shipped (same PR):** `mcp_transport_rejected` (our own parse-error
+400 plus every SDK 4xx, with the JSON-RPC message, RPC method/tool, protocol-version
+header, client id), `mcp_input_validation_failed` (from a post-send tee of POST
+responses; GET/SSE never buffered), and request/response-shape props on
+`$mcp_tool_call` (`message_id_hash`/`resource_id_hash` = `sha256(id).slice(0,16)`,
+`format`, `windowed`, `parsed_body_chars`, `parsed_body_truncated`,
+`parsed_attachments`, `parsed_html_fallback`). Named queries: `docs/monitoring.md`
+§7.9–7.11.
+
 ## Verification
 
 - Unit-style reproduction against a local build with the QA accounts: a pattern present
