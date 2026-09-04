@@ -93,11 +93,19 @@
   reconnect guidance still appears when either scope is missing
 
 ### A9: A Google sign-in that strips drive.file is repaired right after sign-in
+- **Fixture note (2026-09-04, later the same day):** `drive.file` was added to
+  the Google connection's scope list on the dev Clerk dashboard, so a plain
+  sign-in no longer narrows the grant there (measured: chooser only, record
+  stays wide, auto-repair does not fire — that non-firing is itself the
+  expected result on a correctly configured instance). To exercise this
+  assertion, arrange a Clerk record that lacks `drive.file` while Google still
+  holds the grant by another route (e.g. temporarily remove the scope from the
+  dev dashboard list, sign in, restore it), and record which route was used.
 - As a QA user who holds `drive.file` AND has at least one Sheets or Docs rule,
-  sign out of FGAC and sign back in with Google (a plain sign-in rewrites
-  Clerk's grant with the sign-in scope set, which lacks `drive.file` —
-  2026-09-04 finding; confirm with the Clerk external account's
-  `approved_scopes` or the Accounts page badges)
+  sign out of FGAC and sign back in with Google (on an instance whose sign-in
+  scope set lacks `drive.file`, the sign-in rewrites Clerk's grant without it —
+  confirm with the Clerk external account's `approved_scopes` or the Accounts
+  page badges)
 - **Expected**: Landing on the dashboard after the sign-in, the access card
   starts the reconnect on its own (no click): the browser goes to Google,
   which shows only a one-account chooser (NO consent screen — Google still
