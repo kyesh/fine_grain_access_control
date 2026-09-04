@@ -31,7 +31,7 @@ import { compileRulePattern } from '@/lib/rulePatterns';
 import { captureServerEvent } from '@/lib/posthogServer';
 import { runWithToolCallProps, addToolCallProps, getToolCallProps } from '@/lib/toolCallContext';
 import { GOOGLE_FETCH_TIMEOUT_MS, CLERK_TOKEN_TIMEOUT_MS, withTimeout, isUpstreamTimeout } from '@/lib/upstreamTimeouts';
-import { installFingerprint, parseInitializeClientInfo, parseRpcEnvelope, resourceIdHash, type McpClientInfo } from '@/lib/mcpClientSignals';
+import { classifyTransportRejection, installFingerprint, parseInitializeClientInfo, parseRpcEnvelope, resourceIdHash, type McpClientInfo } from '@/lib/mcpClientSignals';
 import { after } from 'next/server';
 import { inSuccessSample, AUTH_SUCCESS_SAMPLE } from '@/lib/authSampling';
 import { ensureDefaultProfile } from '@/db/defaultProfile';
@@ -3143,7 +3143,9 @@ const MAX_REJECT_BODY_CHARS = 100_000;
  *   - mcp_transport_rejected: our own 400 for an unparseable JSON body (the
  *     handler awaits `req.json()` unguarded and otherwise never answers —
  *     the request hangs to the function timeout), plus every SDK 4xx with
- *     its JSON-RPC error message.
+ *     its JSON-RPC error message, classified by `reason` (see
+ *     classifyTransportRejection — `discover_probe` is expected traffic
+ *     from MCP 2026-07-28 clients, not a refused user).
  *   - mcp_input_validation_failed: SDK-emitted `isError` results for
  *     -32602 (invalid arguments / unknown tool), detected from a tee of the
  *     POST response body AFTER it has been returned, so the client is never
@@ -3188,8 +3190,11 @@ const withTransportObservability =
         const parsed = JSON.parse(body.slice(0, MAX_REJECT_BODY_CHARS)) as { error?: { message?: unknown } };
         message = typeof parsed?.error?.message === 'string' ? parsed.error.message.slice(0, 300) : body.slice(0, 300);
       } catch { /* non-JSON rejection body */ }
+      // `reason` separates the 2026-07-28 `server/discover` probe (benign: the
+      // client falls back to `initialize` on this very 400) from a client the
+      // SDK genuinely refuses — the runbook reads them oppositely (7.9).
       captureServerEvent(distinctId, 'mcp_transport_rejected', {
-        ...base(), status: res.status, reason: 'sdk', message,
+        ...base(), status: res.status, ...classifyTransportRejection(message, envelope?.methods), message,
         rpc_methods: envelope?.methods, tool: envelope?.toolName,
       });
       return res;
