@@ -157,6 +157,14 @@ Production, last 12h, read 2026-08-23 (project → Observability → Functions):
 | Cold start rate | 6.7% |
 | CPU throttle P75 (Hobby) | 15.4% |
 
+(The baseline above was read while the team was on the Vercel Hobby plan; the
+team upgraded to Pro in September 2026, so the throttle row is a Hobby-era
+artifact. Pro has no per-metric caps — usage draws from a $20/month included
+credit and then bills on-demand, so budget questions are cost-pace questions,
+not exhaustion questions. The Neon org moved to the Launch plan at the same
+time: pay-as-you-go compute/storage, 10 included branches then
+$1.50/branch-month, no service pause on overage.)
+
 After the production deploy, re-read the same view and compare Active CPU per
 request and error rate. Expected: CPU down 30–50%; error rate unchanged at ~0%.
 
