@@ -8,7 +8,7 @@
     "build": "npm run mcp:lint && tsx src/db/migrate.ts && next build",
     "start": "next start",
     "lint": "npm run mcp:lint && eslint .",
-    "mcp:lint": "tsx scripts/mcp-tool-lint.ts && tsx scripts/test-google-api-policy.ts && tsx scripts/test-approval-links.ts && tsx scripts/test-auth-sampling.ts && tsx scripts/test-server-errors.ts && tsx scripts/test-mcp-tool-errors.ts && tsx scripts/test-rule-patterns.ts && tsx scripts/test-profile-slugs.ts && tsx scripts/test-identity-drift.ts && tsx scripts/test-neon-branch-cleanup.ts && tsx scripts/test-google-scope-copy.ts && tsx scripts/test-google-token-scopes.ts && tsx scripts/test-google-token-failure.ts",
+    "mcp:lint": "tsx scripts/mcp-tool-lint.ts && tsx scripts/test-google-api-policy.ts && tsx scripts/test-approval-links.ts && tsx scripts/test-auth-sampling.ts && tsx scripts/test-server-errors.ts && tsx scripts/test-mcp-tool-errors.ts && tsx scripts/test-rule-patterns.ts && tsx scripts/test-profile-slugs.ts && tsx scripts/test-identity-drift.ts && tsx scripts/test-neon-branch-cleanup.ts && tsx scripts/test-google-scope-copy.ts && tsx scripts/test-google-token-scopes.ts && tsx scripts/test-google-token-failure.ts && tsx scripts/test-transport-rejections.ts",
     "db:branch": "tsx scripts/branch-db.ts",
     "db:push": "drizzle-kit push",
     "db:migrate": "tsx src/db/migrate.ts",

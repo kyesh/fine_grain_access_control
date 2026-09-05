@@ -90,6 +90,51 @@ export function parseRpcEnvelope(text: string): RpcEnvelope {
   return { methods, toolName, parseError: false };
 }
 
+export type TransportRejectionReason =
+  | 'parse_error'
+  | 'discover_probe'
+  | 'unsupported_protocol_version'
+  | 'sdk';
+
+export interface TransportRejectionClass {
+  reason: Exclude<TransportRejectionReason, 'parse_error'>;
+  /** First JSON-RPC method in the body — a scalar the runbook can GROUP BY. */
+  rpc_method?: string;
+}
+
+const UNSUPPORTED_VERSION_MESSAGE = /^Bad Request: Unsupported protocol version/;
+const DISCOVER_METHOD = 'server/discover';
+
+/**
+ * Why the MCP transport refused a request, at the granularity the runbook
+ * needs to tell benign noise from a broken client.
+ *
+ * MCP 2026-07-28 replaced `initialize` with a `server/discover` probe that a
+ * dual-era client sends FIRST, with `MCP-Protocol-Version: 2026-07-28`. A
+ * legacy (SDK 1.x) server like this one answers the header check with the
+ * 400 the 2025-06-18 transport spec mandates, and the spec's fallback rule
+ * tells the client to read that 400 as "legacy server" and retry with
+ * `initialize` — which is exactly what claude.ai does (2026-09-04 analytics
+ * review: 148 probes from 59 clients in 10 h, every one followed by a
+ * successful initialize within seconds). That row is therefore
+ * `discover_probe`: expected, one extra round trip, nobody locked out.
+ *
+ * The same message on any OTHER method is the opposite: a client that never
+ * sends the legacy handshake, i.e. one that is truly refused until the SDK is
+ * bumped — `unsupported_protocol_version`. Everything else stays `sdk`.
+ */
+export function classifyTransportRejection(
+  message: string | undefined,
+  methods: string[] | undefined,
+): TransportRejectionClass {
+  const rpc_method = methods?.[0];
+  if (rpc_method === DISCOVER_METHOD) return { reason: 'discover_probe', rpc_method };
+  if (message && UNSUPPORTED_VERSION_MESSAGE.test(message)) {
+    return { reason: 'unsupported_protocol_version', rpc_method };
+  }
+  return { reason: 'sdk', rpc_method };
+}
+
 /**
  * clientInfo from an MCP `initialize` request body, if this request is one.
  *

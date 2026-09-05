@@ -452,22 +452,88 @@ header. Our own `reason='parse_error'` 400 replaces what used to be a hang:
 `mcp-handler` awaits `req.json()` unguarded, so a malformed/empty JSON body
 never got a response until the function timeout.
 
+**Read `reason` first — the same "Unsupported protocol version" message means
+opposite things depending on the RPC method.** Corrected 2026-09-04, when the
+first day of data was 100% claude.ai clients on MCP 2026-07-28 and the
+original reading ("that user is silently broken") was wrong for all of them:
+
+- `discover_probe` — **expected, nobody is locked out.** MCP 2026-07-28
+  replaced `initialize` with a `server/discover` probe that a dual-era client
+  sends first, under `MCP-Protocol-Version: 2026-07-28`. Our SDK 1.x server
+  answers the header check with the 400 the transport spec mandates, and the
+  2026-07-28 spec's fallback rule tells the client to read a 400 *without* a
+  modern error body as "legacy server" and retry with `initialize`
+  ([versioning](https://modelcontextprotocol.io/specification/2026-07-28/basic/versioning),
+  [Streamable HTTP → Backward Compatibility](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/streamable-http)).
+  Measured on the first day: every probe was followed by a successful
+  `initialize` from the same `client_id` within seconds; probes recur about
+  every 15 minutes per client (the client caches the legacy verdict), so they
+  accompany roughly one initialize in ten. One extra small round trip per
+  client per quarter hour — not a cost worth an SDK migration on its own.
+- `unsupported_protocol_version` — the same message on any *other* method
+  (`tools/list`, `tools/call`, …): a client that shipped a version the
+  deployed SDK refuses **and never sends the legacy handshake**. That user IS
+  refused until the SDK is bumped (the supported list is printed in the
+  message). This is the row the event exists for; it has never fired in
+  production as of 2026-09-04. (`initialize` can never produce it: SDK 1.x
+  skips the header check on initialization requests and negotiates the
+  version down instead — verified on the PR #116 preview, an `initialize`
+  under the 2026-07-28 header answers 200 with `2025-11-25`.)
+- `sdk` — everything else. "Only one initialization request is allowed" is a
+  batching client; 406 is a missing `Accept`.
+- `parse_error` — our own 400 for a non-JSON body.
+
 ```sql
 SELECT properties.status AS status, properties.reason AS reason,
-       properties.message AS message, properties.protocol_version_header AS pv,
-       properties.client_id AS client, uniq(distinct_id) AS users, count() AS n
+       properties.rpc_method AS rpc_method, properties.message AS message,
+       properties.protocol_version_header AS pv,
+       uniq(properties.client_id) AS clients, uniq(distinct_id) AS users, count() AS n
 FROM events
-WHERE event = 'mcp_transport_rejected' AND timestamp > now() - INTERVAL 7 DAY
-GROUP BY status, reason, message, pv, client ORDER BY n DESC
+WHERE event = 'mcp_transport_rejected' AND properties.environment = 'production'
+  AND timestamp > now() - INTERVAL 7 DAY
+GROUP BY status, reason, rpc_method, message, pv ORDER BY n DESC
 ```
 
-Healthy: a steady, low, `anonymous-mcp`/probe-only trickle. Any row with a
-real person and `message` starting "Bad Request: Unsupported protocol version"
-means a client shipped a protocol version the deployed SDK does not accept —
-that user is silently broken until the SDK is bumped (supported list is
-printed in the message). "Only one initialization request is allowed" is a
-batching client. Correlate with `$mcp_tool_call` volume for the same
-`client_id`: rejections WITHOUT successes is a fully locked-out client.
+Healthy: `discover_probe` rows at roughly 10% of `mcp_client_initialize`
+volume, a steady low `sdk`/`parse_error` trickle, and **zero**
+`unsupported_protocol_version` rows. Any `unsupported_protocol_version` row on
+a real person is a refused user: correlate with `$mcp_tool_call` for the same
+`client_id` — rejections WITHOUT successes is a fully locked-out client.
+
+**Probes by protocol version, 7 days.** The day a NEW version string appears
+here is the day a client moved ahead of the deployed SDK — that is the early
+warning, weeks before any client drops its legacy fallback:
+
+```sql
+SELECT toDate(timestamp) AS day, properties.protocol_version_header AS pv,
+       properties.reason AS reason, properties.rpc_method AS rpc_method,
+       count() AS n, uniq(properties.client_id) AS clients
+FROM events
+WHERE event = 'mcp_transport_rejected' AND properties.environment = 'production'
+  AND timestamp > now() - INTERVAL 7 DAY
+GROUP BY day, pv, reason, rpc_method ORDER BY day, n DESC
+```
+
+**Lockout alarm: clients that probed and never initialized (24 h).** A
+modern-only client (SDK v2 `versionNegotiation: { pin: '2026-07-28' }`, no
+fallback) would show up here — probes, no `initialize`, no tool calls. This
+is the trigger for the `mcp-handler` 2.x / SDK v2 migration (plan:
+`docs/implementation_plans/claude-laughing-ardinghelli-8c32dd_v1.md`); the
+other trigger is `discover_probe` share of initializes climbing well past 10%
+(a client that stopped caching the legacy verdict). Expected value: 0.
+
+```sql
+SELECT uniq(cid) AS locked_out_clients, sum(probes) AS probes
+FROM (SELECT properties.client_id AS cid,
+             countIf(event = 'mcp_transport_rejected') AS probes,
+             countIf(event = 'mcp_client_initialize') AS inits,
+             countIf(event = '$mcp_tool_call') AS calls
+      FROM events
+      WHERE event IN ('mcp_transport_rejected', 'mcp_client_initialize', '$mcp_tool_call')
+        AND properties.environment = 'production'
+        AND timestamp > now() - INTERVAL 24 HOUR
+      GROUP BY cid HAVING probes > 0 AND inits = 0 AND calls = 0)
+```
 
 **7.10 — Tool calls the SDK refused before our code ran
 (`mcp_input_validation_failed`).** Zod argument validation and unknown-tool
