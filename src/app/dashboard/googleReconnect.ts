@@ -1,17 +1,29 @@
 /**
  * Shared client-side Google reconnect leg.
  *
- * One flow, two entry points: the Google Picker (adds drive.file before a
- * pick) and the Accounts page's explicit "Reconnect Google" button (repairs a
- * broken/expired grant). A verified account is reauthorized in place with the
- * extra scopes; anything else (expired/unverified — e.g. an abandoned consent
- * attempt) is destroyed and recreated, which is Clerk's designed recovery.
- * Returns the Google URL to send the user to; throws with a real message when
- * Clerk gives us nowhere to go — callers surface it, never swallow it.
+ * One flow, several entry points: the Google Picker (adds drive.file before a
+ * pick), the Accounts page's explicit "Reconnect Google" button (repairs a
+ * broken/expired grant), and the dashboard's access card (including its
+ * post-sign-in auto-repair). A verified account is reauthorized in place with
+ * the extra scopes; anything else (expired/unverified — e.g. an abandoned
+ * consent attempt) is destroyed and recreated, which is Clerk's designed
+ * recovery. Returns the Google URL to send the user to; throws with a real
+ * message when Clerk gives us nowhere to go — callers surface it, never
+ * swallow it.
  */
 
 export const DRIVE_FILE_SCOPE = 'https://www.googleapis.com/auth/drive.file';
 export const GMAIL_MODIFY_SCOPE = 'https://www.googleapis.com/auth/gmail.modify';
+
+/**
+ * Google's `prompt` for the reauthorize leg. `consent` always shows the
+ * consent screen and is the only value Google returns a refresh token for —
+ * a grant stored without one dies when its access token expires (the hourly
+ * lockout seen on the dev instance, 2026-08-20). `select_account`/`none`
+ * bounce straight back when Google already holds the scopes, but the
+ * resulting grant may be access-token-only; use them only where measured.
+ */
+export type ReconnectPrompt = 'consent' | 'select_account' | 'none';
 
 type ExternalAccountLike = {
   provider: string;
@@ -38,6 +50,7 @@ export async function startGoogleReconnect(
   user: ClerkUserLike,
   redirectUrl: string,
   additionalScopes: string[] = [DRIVE_FILE_SCOPE],
+  prompt: ReconnectPrompt = 'consent',
 ): Promise<string> {
   const existing = user.externalAccounts.find(
     acc => acc.provider === 'google' || acc.provider === 'oauth_google',
@@ -48,7 +61,7 @@ export async function startGoogleReconnect(
     const response = await existing.reauthorize({
       additionalScopes,
       redirectUrl,
-      oidcPrompt: 'consent',
+      oidcPrompt: prompt,
     });
     verificationUrl = response.verification?.externalVerificationRedirectURL?.href;
   } else {
@@ -57,7 +70,8 @@ export async function startGoogleReconnect(
     }
     // Same scopes and forced consent as the reauthorize branch — a recreated
     // grant that silently omitted drive.file was one leg of the 2026-08-30
-    // scope-lockout incident class.
+    // scope-lockout incident class. Always `consent` here: a brand-new
+    // external account needs the refresh token only a consent pass returns.
     const response = await user.createExternalAccount({
       strategy: 'oauth_google',
       redirectUrl,

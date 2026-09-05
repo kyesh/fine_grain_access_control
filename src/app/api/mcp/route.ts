@@ -50,6 +50,7 @@ import { clerkPrimaryEmail } from '@/lib/clerkPrimaryEmail';
 import { ownClerkEmailMatch } from '@/lib/identityDrift';
 import { slugifyProfileLabel } from '@/lib/profileSlugs';
 import { logAndSanitize, describeErrorForLog, toolErrorResult } from '@/lib/serverErrors';
+import { liveTokenScopes, reconcileScopes } from '@/lib/googleTokenScopes';
 
 /** Env URL values have shipped with trailing whitespace/newlines (pasted
  * Vercel vars); a whitespace-only value must also not win the fallback chain.
@@ -376,10 +377,8 @@ async function checkOwnClerkEmail(
  * path must too, or the user is silently locked out of Gmail tools while
  * everything else half-works.
  */
-const GMAIL_SCOPES = ['https://www.googleapis.com/auth/gmail.modify', 'https://mail.google.com/'];
-// Every non-Gmail surface (Sheets, Docs, Slides, Drive) rides drive.file;
-// the full drive scope would also satisfy it if a grant ever carried one.
-const DRIVE_FILE_SCOPES = ['https://www.googleapis.com/auth/drive.file', 'https://www.googleapis.com/auth/drive'];
+// The scope lists (Gmail; drive.file for every non-Gmail surface) and the
+// record-vs-token decision live in @/lib/googleTokenScopes (reconcileScopes).
 
 type GoogleTokenResult = {
   token: string;
@@ -478,15 +477,25 @@ async function getGoogleToken(
       if (!quiet) addToolCallProps({ google_token_error: 'no_token' });
       return null;
     }
-    // Clerk reports the scopes Google actually granted (the dashboard's
-    // checkGoogleAccess already treats a missing scope here as "not
-    // connected"). Only computed here — gmailScopeDenial does the enforcement
-    // and the analytics, so a sheets-only call by a Gmail-scope-less user
-    // records nothing.
+    // Clerk's `scopes` is the scope set of the last OAuth request that
+    // completed for the account — not necessarily what the token in hand
+    // carries. A plain Google sign-in rewrites it without drive.file
+    // (2026-09-04 finding; the dashboard reads tokeninfo instead and the two
+    // disagreed). Only computed here — gmailScopeDenial / driveFileScopeDenial
+    // do the enforcement and the analytics, so a sheets-only call by a
+    // Gmail-scope-less user records nothing.
     const scopes = Array.isArray(grant.scopes) ? grant.scopes : undefined;
-    const hasGmailScope = scopes ? scopes.some(s => GMAIL_SCOPES.includes(s)) : undefined;
-    const hasDriveFileScope = scopes ? scopes.some(s => DRIVE_FILE_SCOPES.includes(s)) : undefined;
-    return { token: grant.token, hasGmailScope, hasDriveFileScope };
+    // Ask Google what the token really carries (cached per token, ~one
+    // lookup per account per token lifetime). The record is wrong in both
+    // directions in practice, so the token decides whenever tokeninfo
+    // answers; the record only stands in when it does not
+    // (reconcileScopes, unit-tested).
+    const verdict = reconcileScopes(scopes, await liveTokenScopes(grant.token));
+    if (!quiet) {
+      if (verdict.recordStale) addToolCallProps({ clerk_scope_cache_stale: true });
+      if (verdict.recordOverstates) addToolCallProps({ clerk_scope_record_overstates: true });
+    }
+    return { token: grant.token, hasGmailScope: verdict.hasGmailScope, hasDriveFileScope: verdict.hasDriveFileScope };
   } catch (err) {
     // Observability for the "Clerk cannot refresh the Google token" failure
     // mode (Clerk 422: grant stored without a refresh token — seen on the
@@ -1607,7 +1616,8 @@ function driveFileScopeDenial(conn: ConnectionApproved, resolved: ResolvedAccoun
   });
   return textResult(
     `🚫 Not available yet: the Google account '${resolved.targetEmail}' is connected WITHOUT the Google Drive file permission (drive.file) — ` +
-    `most likely the account was connected before FGAC requested it, or the Drive checkbox was left unchecked on Google's consent screen. ` +
+    `most likely the owner signed in to FGAC with Google again since connecting (a plain sign-in resets the Drive permission), ` +
+    `the account was connected before FGAC requested it, or the Drive checkbox was left unchecked on Google's consent screen. ` +
     `Every Sheets, Docs, Slides, and Drive call on this account will fail until it is reconnected; retrying will NOT help. ` +
     `👉 Send the account owner this one-click link — it opens Google's consent screen directly; they must approve Drive file access there: ` +
     `${reconnectLink(resolved.targetEmail)} — then retry once after they confirm. ` +
