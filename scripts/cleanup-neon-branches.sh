@@ -8,9 +8,15 @@
 # classifier-blocked despite the script being allowlisted. This wrapper
 # resolves Node 22 itself (system Node may be too old for tsx).
 #
-# Safety properties live in cleanup-neon-branches.ts: never deletes
-# main/primary, deletes only Neon branches with no matching remote git
-# branch, and deletes nothing at all when git refs can't be fetched.
+# Safety properties live in scripts/lib/neon-branch-classifier.ts (unit-tested
+# by scripts/test-neon-branch-cleanup.ts): never deletes the primary branch or
+# a branch named exactly `main`; never deletes a branch checked out in any git
+# worktree (preview/ or local-dev form); never deletes a preview branch backing
+# an open PR; deletes a local-dev branch only when its git branch is proven
+# merged (origin ref merged, or origin ref gone AND a local ref merged into
+# origin/main, or a merged/closed PR head ref matches); keeps anything that
+# maps to no git branch at all; and deletes nothing when git refs can't be
+# fetched. Pass --dry-run to print the plan without deleting.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 

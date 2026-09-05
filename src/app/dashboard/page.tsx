@@ -1,5 +1,6 @@
 import { redirect } from 'next/navigation';
 import { ConnectGoogleWarning } from './ConnectGoogleWarning';
+import { SignInTelemetry } from './SignInTelemetry';
 import { AgentProfilesView } from './AgentProfilesView';
 import { loadDashboardData, defaultProfileSlug } from './loadDashboard';
 
@@ -35,9 +36,18 @@ export default async function DashboardPage({
 
   return (
     <>
+      <SignInTelemetry
+        lastSignInAt={data.lastSignInAt}
+        access={data.googleAccess}
+        needsDriveFile={data.needsDriveFile}
+      />
       {!data.hasCompleteGoogleAccess && (
         <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 pt-8">
-          <ConnectGoogleWarning />
+          <ConnectGoogleWarning
+            access={data.googleAccess}
+            needsDriveFile={data.needsDriveFile}
+            lastSignInAt={data.lastSignInAt}
+          />
         </div>
       )}
 

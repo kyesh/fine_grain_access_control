@@ -30,6 +30,7 @@ keep internal/QA traffic out of the numbers.
 | `directory_link_clicked` | client (`DirectoryCta.tsx`, all links to the Claude connectors directory listing) | `cta_location`: announcement_bar / setup_step1 / docs_support / dashboard_connect |
 | `flyer_scanned` | server (`/go/[slug]` QR redirect) | `slug`, `slug_known`, `campaign`, `variant`, `channel`, `destination`, `device`, `$raw_user_agent`/`$useragent` (the visitor's UA — without it PostHog's virtual traffic classification marks every scan `$virt_is_bot` / `no_user_agent` and bot-filtered views drop all real scans; added 2026-08-30), `geo_city`/`geo_country` (from Vercel headers; `$geoip_disable` set so the server IP isn't resolved). **Bot-filtered** (link-preview crawlers get the redirect but no event) and captured with a random distinct id per scan — `count()` is scans, not people. Joins to the web funnel via `utm_content`/`ref` = slug on the landing `$pageview`. Links managed via `npm run links` (`scripts/short-links.ts`); per-slug running totals also live in the `short_links.scan_count` column |
 | `sign_up_completed` | server (Clerk webhook, `user.created`) | `$set.email` |
+| `sign_in_completed` | client (`SignInTelemetry.tsx`, dashboard pages) | `gmail_scope`, `drive_file_scope`, `needs_drive_file` (user has Sheets/Docs rules), `drive_file_narrowed` (= needs it and arrived without it). Once per Clerk `lastSignInAt` (localStorage-keyed; fires only within 10 min of the sign-in). Added 2026-09-04: PostHog had no sign-in signal, and a plain Google sign-in rewrites Clerk's grant with the sign-in scope set — no `drive.file` — so `drive_file_narrowed` is the per-sign-in count of users whose Sheets/Docs access a sign-in just broke. Detection query: monitoring.md §7.12 |
 | `video_played` | client (`TrackedVideoEmbed.tsx`, all Descript demo embeds) | `video_id`, `video_title`, `page` |
 | `$mcp_tool_call` | server (`/api/mcp`, every tool) | `$mcp_tool_name`, `$mcp_duration_ms`, `$mcp_is_error`, `client_id`, `client_name`, `user_agent`, `outcome`, `account_email`, `account_delegated`; raw tools add `raw_api_kind`, `raw_api_family`, `raw_api_endpoint`, `raw_api_mutating`; denials add `denial_code`, and denials carrying an approval link add `approval_request_id` (joins to the approval funnel); failures add `error_status`, `error_reason`, `error_domain`, `failure_reason`, `gmail_404_site`; per-file sheets/docs calls add `file_id` + `file_service` (stamped in `checkFilePermission`, so every typed sheets/docs tool, comments tool, and raw per-file API call carries them — denied outcomes included — making per-file time-to-first-success queryable and joining to `rule_saved.file_id`); `gmail_get_attachment` adds `attachment_selector` and, on 404 recovery paths, `attachment_selfheal`; windowed reads (`gmail_get_attachment`, `gmail_read`, `docs_read_document`, `sheets_get_spreadsheet`, `sheets_read_range`, `google_api_get`) add `window_offset`, `window_chars`, `window_total_chars`; calls that reach Google add `google_ms` (cumulative wall-clock inside `googleFetch`) and `token_ms` (Clerk token fetch); calls whose Clerk token fetch failed on the first attempt add `google_token_retry` (`recovered` = the single server-side retry got the token and the call went on normally; `retry_failed` = it did not, and the event also carries `google_token_error`) |
 | `proxy_request` | server (`/api/proxy/[...path]`) | `service` (gmail/sheets/drive), `method`, `status`, `outcome` (`success`/`auth_failed`/`denied`/`timeout`/`error`), `duration_ms`, `proxy_key_id`, `account_email`, `account_delegated`, `google_ms`, `token_ms`; upstream failures add `error_status` (`timeout`/`network`) |
@@ -53,9 +54,9 @@ keep internal/QA traffic out of the numbers.
 | `sheets_grant_verification` | server (approve-page load via `/api/rules/verify-sheets-access`, approval in `actions.ts`, rule creation in `createRule`/`grantFileAccessPOST`, recovery re-checks) | `result` (`ok`/`missing`/`unknown`), `via` (`link_open`/`magic_link`/`post_approval`/`dashboard_manual`/`grant_api`/`recovery`), `spreadsheet_id`. `grant_api` (and `dashboard_manual`, for direct server-action calls — the manual modal is Gmail-only today) = grant verified at rule birth (the stranded-at-birth case — telemetry only, a Google hiccup never fails rule creation); `recovery` = EVERY recovery-UI re-check, captured regardless of result (attempts that stay `missing` are the funnel's stuck users — before this, only successes were visible via `sheets_grant_recovered`, which still fires on `ok`) |
 | `sheets_grant_recovered` | server (`/api/rules/verify-sheets-access`) | `spreadsheet_id` |
 | `docs_grant_verification` / `docs_grant_recovered` | server (`/api/rules/verify-docs-access`, approval in `actions.ts`) | docs twins of the sheets grant-funnel events, with `document_id` |
-| `google_token_fetch_failed` | server (MCP `getGoogleToken`, proxy `fetchClerkGoogleToken`, `getOwnerGoogleToken`) | `reason` (`refresh_failed` = Clerk 422 cannot-refresh, `clerk_error`, `timeout` = MCP-path Clerk call exceeded 15 s, `no_token` = Clerk answered with no stored Google grant — MCP path only, fires since 2026-09-04; before that this class stamped only the tool-call prop; `owner_not_found` = Clerk 404 `resource_not_found` for the mailbox owner's stored user id — the owner's FGAC account was deleted, or the row came from another Clerk instance; MCP path, since 2026-09-04), `via` (`mcp`/`proxy`/`grant_check`), `account_delegated`; since 2026-09-04 the MCP path adds `retried` (a server-side retry already ran and failed — see `google_token_retry`) and, when Clerk threw an API error, `clerk_status` / `clerk_code` (Clerk's HTTP status and first error code — enum-like, so the next triage can see what Clerk said). The `$mcp_tool_call` event also carries `google_token_error` on affected calls. Added 2026-08-20 after the dev-instance refresh-token loss was found; this is the signal for whether production users hit it too. **The event fires only on FINAL failure**: a fetch that fails and recovers on the retry fires nothing here and stamps `google_token_retry: 'recovered'` on the tool call instead (docs/monitoring.md §7.12) |
+| `google_token_fetch_failed` | server (MCP `getGoogleToken`, proxy `fetchClerkGoogleToken`, `getOwnerGoogleToken`) | `reason` (`refresh_failed` = Clerk 422 cannot-refresh, `clerk_error`, `timeout` = MCP-path Clerk call exceeded 15 s, `no_token` = Clerk answered with no stored Google grant — MCP path only, fires since 2026-09-04; before that this class stamped only the tool-call prop; `owner_not_found` = Clerk 404 `resource_not_found` for the mailbox owner's stored user id — the owner's FGAC account was deleted, or the row came from another Clerk instance; MCP path, since 2026-09-04), `via` (`mcp`/`proxy`/`grant_check`), `account_delegated`; since 2026-09-04 the MCP path adds `retried` (a server-side retry already ran and failed — see `google_token_retry`) and, when Clerk threw an API error, `clerk_status` / `clerk_code` (Clerk's HTTP status and first error code — enum-like, so the next triage can see what Clerk said). The `$mcp_tool_call` event also carries `google_token_error` on affected calls. Added 2026-08-20 after the dev-instance refresh-token loss was found; this is the signal for whether production users hit it too. **The event fires only on FINAL failure**: a fetch that fails and recovers on the retry fires nothing here and stamps `google_token_retry: 'recovered'` on the tool call instead (docs/monitoring.md §7.13) |
 | `google_token_identity_fallback` | server (MCP `getGoogleToken`) | `via` (`mcp`). Fires when a key owner's own mailbox is reached through the identity-drift self-heal added in `4b551018` — the target address is not a delegation but IS one of the owner's verified Clerk addresses. Unsampled, and independent of `$mcp_tool_call`, so `uniq(person)` is exactly the drifted population still being rescued; the same call also carries `google_token_identity_fallback: true` on `$mcp_tool_call`. Expected to trend to zero as users self-heal — see docs/monitoring.md 7.4 |
-| `google_scope_missing` | server (MCP `gmailScopeDenial` / `driveFileScopeDenial`, proxy Gmail handler) | `via` (`mcp`/`proxy`), `scope` (`gmail` / `drive_file`; absent on pre-2026-08-29 events, all of which are gmail), `account_delegated`. Fires when a call is pre-flight denied because Clerk's granted scopes for the account lack what the surface rides on: Gmail calls need `gmail.modify` / `mail.google.com`; non-Gmail calls (typed sheets_*/docs_*/comments_* tools and raw Sheets/Docs/Slides/Drive paths) need `drive.file` — the "checkbox left unchecked at consent" (or pre-drive.file connection) states, which would 403 on every such call until reconnect. Unsampled and independent of `$mcp_tool_call`, so `uniq(person)` is the size of the locked-out population; the same call carries `google_scope_missing: true` on `$mcp_tool_call` and pre-flight-denies with `failure_reason: 'gmail_scope_missing'` / `'drive_file_scope_missing'` (outcome `failed`) instead of surfacing Google's 403 (outcome `error`). Added 2026-08-28 after repeated per-user gmail_list 403s; drive_file variant 2026-08-29 |
+| `google_scope_missing` | server (MCP `gmailScopeDenial` / `driveFileScopeDenial`, proxy Gmail handler) | `via` (`mcp`/`proxy`), `scope` (`gmail` / `drive_file`; absent on pre-2026-08-29 events, all of which are gmail), `account_delegated`. Fires when a call is pre-flight denied because Clerk's granted scopes for the account lack what the surface rides on: Gmail calls need `gmail.modify` / `mail.google.com`; non-Gmail calls (typed sheets_*/docs_*/comments_* tools and raw Sheets/Docs/Slides/Drive paths) need `drive.file` — the "checkbox left unchecked at consent" (or pre-drive.file connection) states, which would 403 on every such call until reconnect. Unsampled and independent of `$mcp_tool_call`, so `uniq(person)` is the size of the locked-out population; the same call carries `google_scope_missing: true` on `$mcp_tool_call` and pre-flight-denies with `denial_code` = `failure_reason` = `'gmail_scope_missing'` / `'drive_file_scope_missing'` (outcome `denied_by_policy` since 2026-09-03; `failed` from 2026-08-28 to then) instead of surfacing Google's 403 (outcome `error`). Added 2026-08-28 after repeated per-user gmail_list 403s; drive_file variant 2026-08-29. Since 2026-09-04 a metadata-based denial is confirmed against Google's tokeninfo before it fires — Clerk's scope record is a cache of the last completed OAuth request, and a plain Google sign-in rewrites it without `drive.file` — and when tokeninfo disagrees the call proceeds with `clerk_scope_cache_stale: true` on `$mcp_tool_call`. Since 2026-09-05 tokeninfo decides in BOTH directions (cached ~once per account per token lifetime): a record that claims a scope the token lacks — a no-consent sign-in over a narrow refresh token — is denied as usual and stamps `clerk_scope_record_overstates: true`; monitoring.md §7.12a |
 | `mcp_auth_attempt` | server (`/api/mcp` `verifyMcpAuth`) | `outcome` (`ok`/`invalid_token`/`no_token`), `client_id`, `strategy_used` (`clerk`/`direct`/`none`), `memo_hit`, `optimizations_enabled`, `success_sample_rate`, `error_class`, `kid` (on `invalid_token` only), `method`. Auth-health substrate for the JWKS/strategy optimizations. **Failures are unsampled; successes are a 1-in-20 per-request sample** — multiply `ok` by 20 for volume, valid only from the 2026-08-25 fix onward (two earlier versions sampled per-token and were biased; see docs/monitoring.md 1). `kid = 'probe'` marks our own synthetic probes, not users |
 | `agent_doc_created` | server (`/api/mcp`, raw `POST v1/documents`) | `document_id`, `auto_granted` (docs twin of `agent_sheet_created`) |
 | `connector_install_started` | server (`.well-known` OAuth discovery routes, `/api/mcp` auth layer) | `touchpoint` (`oauth_discovery`/`mcp_401`), `endpoint`, `reason` (`no_token`/`invalid_token`), `method`, `user_agent`, `install_fingerprint` (salted sha256 of ip+user-agent — the uniqueness key; see funnel note below), `client_name`/`client_version` (mcp_401 only, when the unauthenticated request was an MCP `initialize`) |
@@ -146,22 +147,31 @@ worked; before 2026-08-24 this classified as `failed` and inflated
 `error` (upstream Google failure), `exception`.
 Unauthenticated calls attribute to the `anonymous-mcp` / `anonymous-proxy` persons.
 
-**The `error` vs `failed` boundary (directory-error demotion, 2026-09):**
+**The `error` vs `failed` vs `denied_by_policy` boundary (2026-09):**
 `error` (`$mcp_is_error=true`) means FGAC or Google is unhealthy — 5xx,
 `timeout`, `network`, throttling 403s (`usageLimits`), exceptions. `failed`
 (`$mcp_is_error=false`) means the caller or user can fix it by acting
-differently. Three formerly-`error` Google-guidance results are demoted to ❌
-`failed` on that principle, because each names the exact user/caller fix:
-(a) the post-policy 403/404 "sheet/doc not picked in the Picker" setup-link
-guidance (`fileGrantErrorResult`), (b) the stale Gmail message-id /
-attachment-id 404 guidance (`gmailNotFoundResult`), and (c) the
-stale-comment-404 guidance (`commentsErrorResult`). `$mcp_is_error` feeds the
-Anthropic Connector Directory's published per-tool error rates, so this is
-also the optics fix for conditions FGAC cannot heal server-side. Internal
-observability is unchanged: the demoted rows still carry `error_status`,
-`error_reason`, `error_domain`, and `gmail_404_site`. Error-rate trend
-queries must not compare across the deploy — split on `outcome` (`error` vs
-`failed`) and date-bound at the deploy window.
+differently. The 2026-09-02 demotion moved three Google-guidance results from
+`error` to ❌ `failed` (`fileGrantErrorResult`, `gmailNotFoundResult`,
+`commentsErrorResult`) on the assumption that the Connector Directory reads
+`$mcp_is_error`. **Measured 2026-09-03, that assumption was wrong**: the
+directory's published per-tool error rate matches `outcome IN (error, failed)`
+(google_api_modify showed 18.3% = error+failed; error alone was ~12%), so ❌
+does not keep a result out of the public metric — only refusal-shaped 🚫
+results (`denied_by_policy`) are excluded. Accordingly, on 2026-09-03 the
+subset that is a *deterministic grant refusal carrying its own remediation*
+graduated from ❌ to 🚫: the scope pre-flights (`gmailScopeDenial` /
+`driveFileScopeDenial`, `denial_code: 'gmail_scope_missing' /
+'drive_file_scope_missing'`, `failure_reason` still stamped for continuity)
+and the per-file "not shared with FGAC at Google" 403/404 guidance
+(`fileGrantErrorResult`, and id-addressed passthrough 404s, `denial_code:
+'file_grant_missing_at_google'`). Stale-id 404s (`gmailNotFoundResult`,
+`commentsErrorResult`) stay ❌ `failed`: they are caller-data errors, not
+access refusals, and claiming otherwise would game the metric. Internal
+observability is unchanged: rows still carry `error_status`, `error_reason`,
+`error_domain`, and `gmail_404_site` where applicable. Error-rate trend
+queries must not compare across these deploys — split on `outcome` and
+date-bound at the deploy windows (2026-09-02 demotion, 2026-09-03 graduation).
 
 > **Legacy naming (before 2026-08):** tool calls were captured as a custom
 > `mcp_tool_call` event with `tool` / `duration_ms` properties. That name
@@ -287,13 +297,15 @@ for this class: it means "Google returned this reason", and the token layer
 never reached Google — `google_token_error` is the queryable cause.
 
 > **Do not "tidy" these into `errorResult`.** They stay `textResult` on
-> purpose. `classifyToolOutcome` maps them to `failed`, and `$mcp_is_error` is
-> true only for `error`/`exception` — so today they are *not* counted as
-> errors by the field Anthropic's Connector Directory reads. Promoting them
-> would import them into our published error rate purely to gain internal
-> visibility that `failure_reason` already provides for free. `failure_reason`
-> is also deliberately separate from `error_status`, which means "Google
-> returned this HTTP status"; overloading it would corrupt that series.
+> purpose. Note (2026-09-03): the ❌ `failed` class DOES count in the
+> Connector Directory's published error rate (see the boundary section above)
+> — these four stay `failed` anyway because a missing key, inaccessible
+> account, or unfetchable token is a genuine malfunction of the connection,
+> not a policy refusal. The scope pre-flights that used to sit alongside them
+> graduated to 🚫 `denied_by_policy` because those ARE grant-state refusals
+> with a one-click fix. `failure_reason` is also deliberately separate from
+> `error_status`, which means "Google returned this HTTP status"; overloading
+> it would corrupt that series.
 
 **Response-size monitoring (google-docs-support plan v5, D7 — monitoring
 only, no caps):** every `$mcp_tool_call` event carries `response_chars` and

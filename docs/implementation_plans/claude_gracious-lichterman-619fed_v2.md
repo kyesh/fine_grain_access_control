@@ -93,7 +93,7 @@ excluded; addresses stay out of this file (public repo).
   deterministic boundary, wording per class and per own/delegated, structural
   guard that the route uses the helper and the old text is gone.
 - Docs: `docs/analytics.md` (event props, tool-call prop, failure_reason split),
-  `docs/monitoring.md` §7.12 (retry watch query), QA capability 16 A10, 18 A4,
+  `docs/monitoring.md` §7.13 (retry watch query; numbered 7.12 until the merge with main, whose 7.12 is the sign-in scope-narrowing watch), QA capability 16 A10, 18 A4,
   04 (list_accounts fields).
 
 ## Interaction with PR #113
@@ -111,7 +111,7 @@ taxonomy (`failure_reason` value reused as the code).
   unchanged. Inducing a Clerk-side token failure on demand is not possible with
   the QA accounts (the same limitation QA 16 records for `google_token_unavailable`),
   so the per-class texts are covered by the unit test.
-- Post-deploy PostHog check (named): §7.12 query shows `google_token_retry =
+- Post-deploy PostHog check (named): §7.13 query shows `google_token_retry =
   'recovered'` rows appearing (≈1/day, `account_delegated=true`) and
   `google_token_fetch_failed` with `reason='clerk_error'` stopping; any
   `retry_failed` row is the signal to look at `clerk_status`/`clerk_code`.

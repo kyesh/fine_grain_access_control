@@ -4,7 +4,7 @@ import { getActiveDelegationsToEmail, filterLiveDelegatedAccess } from '@/db/del
 import { resolveDbUser } from '@/db/userHelpers';
 import { currentUser } from '@clerk/nextjs/server';
 import { db } from '@/db';
-import { checkGoogleAccess } from './googleAccess';
+import { checkGoogleAccess, type GoogleAccess } from './googleAccess';
 import { clerkPrimaryEmail } from '@/lib/clerkPrimaryEmail';
 import { slugifyProfileLabel } from '@/lib/profileSlugs';
 import type { Profile, Rule } from './AgentProfilesView';
@@ -26,6 +26,12 @@ export interface DashboardData {
   }[];
   mcpEndpoint: string;
   hasCompleteGoogleAccess: boolean;
+  /** Per-scope view behind hasCompleteGoogleAccess — the access card names the missing one. */
+  googleAccess: GoogleAccess;
+  /** The user has Sheets/Docs rules, so drive.file is load-bearing (post-sign-in auto-repair gate). */
+  needsDriveFile: boolean;
+  /** Clerk's last sign-in (ms) — keys the once-per-sign-in telemetry and auto-repair. */
+  lastSignInAt: number | null;
 }
 
 /**
@@ -111,5 +117,13 @@ export async function loadDashboardData(): Promise<DashboardData | null> {
   const appUrl = (process.env.NEXT_PUBLIC_APP_URL ?? 'https://fgac.ai').trim().replace(/\/+$/, '');
   const mcpEndpoint = `${appUrl}/api/mcp`;
 
-  return { profiles, rules, accessibleEmails, mcpEndpoint, hasCompleteGoogleAccess };
+  // Sheets/Docs rules are what drive.file is for; a user without any can lose
+  // the scope to a Google sign-in and notice nothing, while one with them has
+  // every Sheets/Docs call failing.
+  const needsDriveFile = userRules.some(r => r.service === 'sheets' || r.service === 'docs');
+
+  return {
+    profiles, rules, accessibleEmails, mcpEndpoint, hasCompleteGoogleAccess,
+    googleAccess, needsDriveFile, lastSignInAt: user.lastSignInAt,
+  };
 }

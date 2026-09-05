@@ -61,7 +61,8 @@ Current branch: !`git branch --show-current`
        once wrapped in the Node-22 PATH prefix, because the unmatched `export` segment
        drops the whole compound command to the ask-gated classifier. The wrapper resolves
        Node 22 itself, and the underlying script is merge-aware (never touches open-PR
-       previews or the current branch's DB branch).
+       previews or any branch checked out in a git worktree; deletes only provably
+       merged work).
      - `BUILD_ERROR` — fix the code.
      - `ENV_MISSING` — check Vercel project settings; env-var changes are ask-gated.
      - `OTHER` — diagnose from the quoted logs before touching anything.
