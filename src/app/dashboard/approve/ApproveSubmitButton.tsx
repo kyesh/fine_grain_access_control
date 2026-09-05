@@ -17,7 +17,7 @@ import { useFormStatus } from "react-dom";
  * approve form must render this, never a bare <button type="submit">.
  * Pinned by scripts/test-approve-submit-button.ts.
  */
-export function ApproveSubmitButton({ label = "Approve this grant" }: { label?: string } = {}) {
+export function ApproveSubmitButton({ label = "Approve this grant" }: { label?: string }) {
   const { pending } = useFormStatus();
   return (
     <button
