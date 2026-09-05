@@ -565,3 +565,25 @@ because Google re-prompts every sign-in until the scope is granted) should be
 re-weighed. The MCP pre-flight no longer over-denies on the stale record:
 `$mcp_tool_call` rows with `clerk_scope_cache_stale = true` count the calls
 that Clerk metadata alone would have refused.
+
+**7.12a — Records that overstate the token (`clerk_scope_record_overstates`).**
+The reverse failure (measured 2026-09-05, USER_B): once `drive.file` is in the
+Clerk sign-in scope list, a sign-in over an account whose refresh token is
+narrow bounces without consent, Clerk records drive.file, and every token
+after the first refresh lacks it. The MCP pre-flight now lets tokeninfo decide
+in both directions and stamps the disagreement:
+
+```sql
+SELECT toDate(timestamp) AS day,
+       countIf(properties.clerk_scope_cache_stale) AS record_narrower_than_token,
+       countIf(properties.clerk_scope_record_overstates) AS record_wider_than_token,
+       uniqIf(person_id, properties.clerk_scope_record_overstates) AS people_needing_consent
+FROM events
+WHERE event = '$mcp_tool_call' AND timestamp > now() - INTERVAL 30 DAY
+GROUP BY day ORDER BY day
+```
+
+`people_needing_consent` is the population whose only repair is a consent pass
+(the denial's reconnect link, or the dashboard card's button); expect it to
+drain as those users reconnect, and expect `record_narrower_than_token` to
+drain once the production sign-in scope list carries `drive.file`.

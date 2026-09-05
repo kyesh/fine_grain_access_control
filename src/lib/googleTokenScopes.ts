@@ -3,18 +3,18 @@
  * endpoint — as opposed to Clerk's `scopes` metadata, which is a record of
  * the last OAuth request that completed for the account.
  *
- * The two disagree in practice: a plain Google sign-in rewrites Clerk's record
- * with the sign-in request's scope set (no drive.file), and Clerk's record can
- * lag a consent round-trip by seconds. The dashboard (googleAccess.ts) and
- * the Picker token bridge already treat tokeninfo as the truth; the MCP
- * pre-flight consults it here before denying a call on Clerk metadata alone,
- * so the three readers cannot disagree in the direction that locks a user
- * out.
+ * The two disagree in practice, in both directions (measured 2026-09-04):
+ * a plain sign-in on an instance whose scope list lacks drive.file rewrites
+ * the record narrower than a later-refreshed token; a sign-in that bounces
+ * without consent over a narrow refresh token writes the record WIDER than
+ * every token minted after the first refresh. The dashboard (googleAccess.ts)
+ * and the Picker token bridge already treat tokeninfo as the truth; the MCP
+ * pre-flight does the same here, so the three readers never disagree.
  *
- * Cached per token (in-memory, per function instance) so a scope-less
- * account that hammers a denied tool costs one Google round-trip, not one
- * per call. The cache holds only the scope list, never anything it could
- * leak — but the key is the token, so it must never be logged or exposed.
+ * Cached per token (in-memory, per function instance) so the check costs
+ * about one Google round-trip per account per token lifetime, not one per
+ * call. The cache holds only the scope list, never anything it could leak —
+ * but the key is the token, so it must never be logged or exposed.
  */
 
 export const GMAIL_SCOPES = ['https://www.googleapis.com/auth/gmail.modify', 'https://mail.google.com/'];
@@ -26,38 +26,51 @@ export type ScopeVerdict = {
   hasDriveFileScope?: boolean;
   /** Clerk's record said a scope was missing that the token actually carries. */
   recordStale: boolean;
-  /** tokeninfo was needed (the record showed a gap) — callers decide whether to fetch. */
-  needsLive: boolean;
+  /**
+   * Clerk's record claims a scope the token does NOT carry — the sign-in
+   * bounced without consent and Clerk kept an older, narrower refresh token,
+   * so after the first refresh every token is narrower than the record
+   * (measured 2026-09-04, USER_B). Only a consent pass repairs this.
+   */
+  recordOverstates: boolean;
+  /** Which source decided: the token (tokeninfo) or, when unavailable, Clerk's record. */
+  source: 'token' | 'record' | 'none';
 };
 
 /**
- * Pure decision behind the MCP pre-flight: Clerk's recorded scopes decide the
- * happy path; when they show a gap, the token's live scopes (tokeninfo) are
- * the truth — a stale record can only be corrected toward what the token
- * carries, never trusted to grant more than it has. `live` null means
- * tokeninfo was unavailable, so the record stands.
+ * Pure decision behind the MCP pre-flight: the token's live scopes
+ * (tokeninfo) are the truth whenever available — Clerk's record disagrees
+ * with the token in BOTH directions (narrower after a plain sign-in, wider
+ * after a no-consent sign-in over a narrow refresh token). `live` null means
+ * tokeninfo was unavailable, so the record stands: an outage must never
+ * widen or narrow access on its own.
  */
 export function reconcileScopes(recorded: string[] | undefined, live: string[] | null | undefined): ScopeVerdict {
   const has = (scopes: string[], wanted: string[]) => scopes.some(s => wanted.includes(s));
-  if (!recorded) return { recordStale: false, needsLive: false };
-  const recGmail = has(recorded, GMAIL_SCOPES);
-  const recDrive = has(recorded, DRIVE_FILE_SCOPES);
-  const needsLive = !recGmail || !recDrive;
-  if (!needsLive || !live) {
-    return { hasGmailScope: recGmail, hasDriveFileScope: recDrive, recordStale: false, needsLive };
+  const recGmail = recorded ? has(recorded, GMAIL_SCOPES) : undefined;
+  const recDrive = recorded ? has(recorded, DRIVE_FILE_SCOPES) : undefined;
+  if (!live) {
+    return {
+      hasGmailScope: recGmail, hasDriveFileScope: recDrive,
+      recordStale: false, recordOverstates: false, source: recorded ? 'record' : 'none',
+    };
   }
   const liveGmail = has(live, GMAIL_SCOPES);
   const liveDrive = has(live, DRIVE_FILE_SCOPES);
   return {
     hasGmailScope: liveGmail,
     hasDriveFileScope: liveDrive,
-    recordStale: (liveGmail && !recGmail) || (liveDrive && !recDrive),
-    needsLive,
+    recordStale: (liveGmail && recGmail === false) || (liveDrive && recDrive === false),
+    recordOverstates: (!liveGmail && recGmail === true) || (!liveDrive && recDrive === true),
+    source: 'token',
   };
 }
 
 const TOKENINFO_URL = 'https://oauth2.googleapis.com/tokeninfo';
-const CACHE_TTL_MS = 5 * 60_000;
+// Google access tokens live an hour; a refreshed token is a new cache key, so
+// a long TTL costs nothing in staleness and keeps this to ~1 lookup per
+// account per hour per function instance.
+const CACHE_TTL_MS = 30 * 60_000;
 const CACHE_MAX_ENTRIES = 500;
 const DEFAULT_TIMEOUT_MS = 3_000;
 

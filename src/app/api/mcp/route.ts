@@ -485,15 +485,16 @@ async function getGoogleToken(
     // do the enforcement and the analytics, so a sheets-only call by a
     // Gmail-scope-less user records nothing.
     const scopes = Array.isArray(grant.scopes) ? grant.scopes : undefined;
-    // Before denying on metadata, ask Google what the token really carries
-    // (cached per token). Happy-path calls never pay for this; a stale Clerk
-    // record can only ever be corrected toward the truth, never trusted to
-    // grant more than the token has (reconcileScopes, unit-tested).
-    const recordOnly = reconcileScopes(scopes, null);
-    const verdict = recordOnly.needsLive
-      ? reconcileScopes(scopes, await liveTokenScopes(grant.token))
-      : recordOnly;
-    if (!quiet && verdict.recordStale) addToolCallProps({ clerk_scope_cache_stale: true });
+    // Ask Google what the token really carries (cached per token, ~one
+    // lookup per account per token lifetime). The record is wrong in both
+    // directions in practice, so the token decides whenever tokeninfo
+    // answers; the record only stands in when it does not
+    // (reconcileScopes, unit-tested).
+    const verdict = reconcileScopes(scopes, await liveTokenScopes(grant.token));
+    if (!quiet) {
+      if (verdict.recordStale) addToolCallProps({ clerk_scope_cache_stale: true });
+      if (verdict.recordOverstates) addToolCallProps({ clerk_scope_record_overstates: true });
+    }
     return { token: grant.token, hasGmailScope: verdict.hasGmailScope, hasDriveFileScope: verdict.hasDriveFileScope };
   } catch (err) {
     // Observability for the "Clerk cannot refresh the Google token" failure

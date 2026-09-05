@@ -52,3 +52,29 @@ whose refresh token is narrow. Only a user who cancels is asked again.
    token was narrow before) — result appended below when available.
 3. QA capability 18 A9 now needs its fixture arranged explicitly (a record
    narrowed by something other than a sign-in), see the assertion note.
+
+## Post-expiry probe result (2026-09-05 00:31Z) — the record can now OVERSTATE
+
+USER_B's refresh token was narrow before the wide sign-in (see v3). The
+sign-in bounced without consent, so Google issued no new refresh token and
+Clerk kept the narrow one. At the first refresh after expiry Clerk served a
+token WITHOUT drive.file while `approved_scopes` still listed it — the inverse
+of the original bug. The dashboard scope fixes the record; it cannot fix a
+narrow refresh token. Those users need one consent pass (the Accounts page
+button, or the incremental consent Google shows when a scope is not yet
+granted).
+
+Consequence for the branch: the pre-flight no longer skips tokeninfo when the
+record looks complete. `reconcileScopes` now lets the token decide in both
+directions (cached ~one lookup per account per token lifetime), flags
+`clerk_scope_cache_stale` (record narrower than token) and
+`clerk_scope_record_overstates` (record wider than token) on `$mcp_tool_call`,
+and the existing drive.file denial with its consent reconnect link is the
+repair path. The dashboard's tokeninfo-based card shows the same users the
+"Grant Google Drive file access" copy after their first hour.
+
+Sizing in production: `npm run google:scope-sweep -- --prod --tokens` counts
+narrow served tokens regardless of the record (120 of 136 narrow-record
+accounts today; after the production dashboard change the record column will
+flip wide for those Google already knows, and the token column is the one to
+watch).

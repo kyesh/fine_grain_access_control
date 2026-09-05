@@ -3,10 +3,11 @@
  * Run: npx tsx scripts/test-google-token-scopes.ts  (part of `npm run mcp:lint`)
  *
  * The invariant (2026-09-04): Clerk's recorded scopes are a cache of the last
- * OAuth request that completed, and a plain Google sign-in rewrites them
- * without drive.file. When the record shows a gap, the token's live scopes
- * decide; when the record is complete, tokeninfo is never consulted; and a
- * tokeninfo outage leaves the record's verdict in place.
+ * OAuth request that completed, and they disagree with the token in both
+ * directions — narrower after a plain sign-in whose scope list lacked
+ * drive.file, wider after a no-consent sign-in over a narrow refresh token.
+ * The token's live scopes decide whenever tokeninfo answers; a tokeninfo
+ * outage leaves the record's verdict in place.
  */
 import { reconcileScopes } from '../src/lib/googleTokenScopes';
 
@@ -22,32 +23,40 @@ const BASE = ['openid', 'email', 'profile'];
 
 console.log('reconcileScopes:');
 
-const full = reconcileScopes([...BASE, GMAIL, DRIVE], null);
-check('complete record: both scopes granted, no live lookup needed',
-  full.hasGmailScope === true && full.hasDriveFileScope === true && !full.needsLive && !full.recordStale);
-
-const narrow = reconcileScopes([...BASE, GMAIL], null);
-check('narrow record without tokeninfo: needs live, record stands (drive missing)',
-  narrow.needsLive && narrow.hasDriveFileScope === false && narrow.hasGmailScope === true && !narrow.recordStale);
+const agree = reconcileScopes([...BASE, GMAIL, DRIVE], [...BASE, GMAIL, DRIVE]);
+check('record and token agree: both granted, nothing flagged',
+  agree.hasGmailScope === true && agree.hasDriveFileScope === true && !agree.recordStale && !agree.recordOverstates && agree.source === 'token');
 
 const healed = reconcileScopes([...BASE, GMAIL], [...BASE, GMAIL, DRIVE]);
-check('narrow record but wide token (post-sign-in refresh): drive granted, record flagged stale',
-  healed.hasDriveFileScope === true && healed.hasGmailScope === true && healed.recordStale);
+check('narrow record, wide token (refresh over a wide refresh token): drive granted, record flagged stale',
+  healed.hasDriveFileScope === true && healed.recordStale && !healed.recordOverstates);
+
+const overstated = reconcileScopes([...BASE, GMAIL, DRIVE], [...BASE, GMAIL]);
+check('wide record, narrow token (no-consent sign-in over a narrow refresh token): drive DENIED, record flagged overstating',
+  overstated.hasDriveFileScope === false && overstated.hasGmailScope === true && overstated.recordOverstates && !overstated.recordStale);
 
 const stillNarrow = reconcileScopes([...BASE, GMAIL], [...BASE, GMAIL]);
-check('narrow record and narrow token (first hour after sign-in): drive denied, not stale',
-  stillNarrow.hasDriveFileScope === false && !stillNarrow.recordStale);
+check('narrow record and narrow token: drive denied, nothing flagged',
+  stillNarrow.hasDriveFileScope === false && !stillNarrow.recordStale && !stillNarrow.recordOverstates);
 
-const revoked = reconcileScopes([...BASE, DRIVE], [...BASE]);
-check('live token narrower than record: never widened by the record',
-  revoked.hasDriveFileScope === false && revoked.hasGmailScope === false && !revoked.recordStale);
+const outage = reconcileScopes([...BASE, GMAIL], null);
+check('tokeninfo unavailable: the record stands (drive missing), source = record',
+  outage.hasDriveFileScope === false && outage.hasGmailScope === true && outage.source === 'record' && !outage.recordStale && !outage.recordOverstates);
 
-const unknown = reconcileScopes(undefined, [...BASE, GMAIL, DRIVE]);
-check('no record at all: undefined verdicts (never enforce), live ignored',
-  unknown.hasGmailScope === undefined && unknown.hasDriveFileScope === undefined && !unknown.needsLive);
+const outageWide = reconcileScopes([...BASE, GMAIL, DRIVE], null);
+check('tokeninfo unavailable with a complete record: record stands (both granted)',
+  outageWide.hasDriveFileScope === true && outageWide.hasGmailScope === true);
 
-const fullDrive = reconcileScopes([...BASE, 'https://mail.google.com/', 'https://www.googleapis.com/auth/drive'], null);
-check('legacy full-Gmail and full-Drive scopes satisfy both', fullDrive.hasGmailScope === true && fullDrive.hasDriveFileScope === true);
+const noRecordLive = reconcileScopes(undefined, [...BASE, GMAIL, DRIVE]);
+check('no record but tokeninfo answers: the token decides, nothing flagged',
+  noRecordLive.hasGmailScope === true && noRecordLive.hasDriveFileScope === true && !noRecordLive.recordStale && !noRecordLive.recordOverstates);
+
+const nothing = reconcileScopes(undefined, null);
+check('no record and no tokeninfo: undefined verdicts (never enforce), source = none',
+  nothing.hasGmailScope === undefined && nothing.hasDriveFileScope === undefined && nothing.source === 'none');
+
+const fullDrive = reconcileScopes(null as unknown as undefined, [...BASE, 'https://mail.google.com/', 'https://www.googleapis.com/auth/drive']);
+check('legacy full-Gmail and full-Drive scopes on the token satisfy both', fullDrive.hasGmailScope === true && fullDrive.hasDriveFileScope === true);
 
 if (failures) { console.error(`\n${failures} failure(s)`); process.exit(1); }
 console.log('\nAll google-token-scopes checks passed.');
