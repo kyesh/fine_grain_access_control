@@ -94,3 +94,12 @@ OAuth-server route (DCR authorize page) showed Google's consent screens, unlike
 the app's modal sign-in — whether that pass issued USER_B a fresh wide refresh
 token is checked at 01:45Z against the deployed pre-flight and recorded in the
 PR.
+
+Result (01:45Z): the hosted-route sign-in had shown Google's consent screens, and
+that pass issued USER_B a fresh WIDE refresh token — the token refreshed after
+expiry carries drive.file, and `list_accounts` on the deployed build (commit
+3598f7b) reports `drive_file: granted`, agreeing with tokeninfo. Confirms the
+repair rule: one consent pass durably fixes a narrow refresh token. The
+overstating-record denial path therefore stays unit-tested rather than driven
+live in this session; `clerk_scope_record_overstates` on production
+`$mcp_tool_call` (monitoring §7.12a) is its live proof.
