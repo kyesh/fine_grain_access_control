@@ -206,7 +206,10 @@ function findTerms(text: string, terms: string[]): string[] {
 }
 
 function unescape(s: string): string {
-  return s.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;|&#x27;/g, "'").replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&');
+  return s
+    .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCodePoint(parseInt(h, 16)))
+    .replace(/&#(\d+);/g, (_, d) => String.fromCodePoint(Number(d)))
+    .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&');
 }
 function strip(html: string): string {
   // Feed bodies arrive as escaped HTML (&lt;div&gt;…) — unescape, drop tags,
@@ -278,13 +281,15 @@ function angle(lead: Lead): string {
   if (lead.kind === 'competitor' || competitor.length) {
     return `Mentions ${competitor.join(', ') || 'a gateway tool'}. Only reply if the thread asks for alternatives; the honest distinction is Google-Workspace-specific rules (labels, recipients, files) enforced at the proxy, hosted and free. Disclose affiliation.`;
   }
-  if (has('credentials') || has('oauth') || has('token') || has('consent') || has('scope')) {
-    return 'Setup pain (credentials/OAuth). If they are stuck, help with the actual problem first; a hosted proxy that holds the Google OAuth grant and exposes one MCP endpoint is a legitimate second option to mention, once.';
-  }
-  if (has('prompt injection') || has('exfiltrat') || has('leak') || has('delete')) {
+  // Generic words (access, token, permission, safe) are too common to pick an
+  // angle; only the specific pain vocabulary does.
+  if (has('prompt injection') || has('exfiltrat') || has('leak') || has('deleted') || has('wiped')) {
     return 'Safety question. Lead with the mechanism: rules enforced outside the model survive prompt injection and context compaction; a prompt-level "only read label X" does not. Mention the open-source enforcement code if trust comes up.';
   }
-  if (has('read-only') || has('readonly') || has('permission') || has('access') || has('safe')) {
+  if (has('credentials') || has('oauth') || has('consent')) {
+    return 'Setup pain (credentials/OAuth). If they are stuck, help with the actual problem first; a hosted proxy that holds the Google OAuth grant and exposes one MCP endpoint is a legitimate second option to mention, once.';
+  }
+  if (has('read-only') || has('readonly') || has('scope')) {
     return 'Scoping question ("read-only", "just this label"). Answer the question as asked; the FGAC-specific point is that Gmail\'s OAuth scopes are coarse and per-label/per-recipient limits need a layer that enforces them per request.';
   }
   return 'General "connect an agent to Gmail" thread. Participate on the merits; mention FGAC only if someone asks how to limit what the agent can do once connected.';
