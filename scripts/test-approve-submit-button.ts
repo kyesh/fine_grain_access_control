@@ -45,7 +45,7 @@ async function main() {
     win.document.body.appendChild(container);
     const root = createRoot(container as unknown as Element);
     await act(async () => {
-      root.render(h('form', { action }, h(ApproveSubmitButton, label ? { label } : {})));
+      root.render(h('form', { action }, h(ApproveSubmitButton, { label })));
     });
     const button = container.querySelector('button') as unknown as HTMLButtonElement;
     const form = container.querySelector('form') as unknown as HTMLFormElement;
