@@ -31,7 +31,7 @@ import { compileRulePattern } from '@/lib/rulePatterns';
 import { captureServerEvent } from '@/lib/posthogServer';
 import { runWithToolCallProps, addToolCallProps, getToolCallProps } from '@/lib/toolCallContext';
 import { GOOGLE_FETCH_TIMEOUT_MS, CLERK_TOKEN_TIMEOUT_MS, withTimeout, isUpstreamTimeout } from '@/lib/upstreamTimeouts';
-import { installFingerprint, parseInitializeClientInfo, parseRpcEnvelope, resourceIdHash, type McpClientInfo } from '@/lib/mcpClientSignals';
+import { classifyTransportRejection, installFingerprint, parseInitializeClientInfo, parseRpcEnvelope, resourceIdHash, type McpClientInfo } from '@/lib/mcpClientSignals';
 import { after } from 'next/server';
 import { inSuccessSample, AUTH_SUCCESS_SAMPLE } from '@/lib/authSampling';
 import { ensureDefaultProfile } from '@/db/defaultProfile';
@@ -50,6 +50,10 @@ import { clerkPrimaryEmail } from '@/lib/clerkPrimaryEmail';
 import { ownClerkEmailMatch } from '@/lib/identityDrift';
 import { slugifyProfileLabel } from '@/lib/profileSlugs';
 import { logAndSanitize, describeErrorForLog, toolErrorResult } from '@/lib/serverErrors';
+import {
+  classifyClerkTokenError, reconnectRepairs, tokenFailureGuidance,
+  type GoogleTokenFailureReason,
+} from '@/lib/googleTokenFailure';
 import { liveTokenScopes, reconcileScopes } from '@/lib/googleTokenScopes';
 
 /** Env URL values have shipped with trailing whitespace/newlines (pasted
@@ -83,6 +87,11 @@ function reconnectLink(targetEmail: string): string {
  * agents call, and the probes run one per accessible account. A probe that
  * misses the bound reports scope state 'unknown', never an error. */
 const LIST_ACCOUNTS_SCOPE_PROBE_TIMEOUT_MS = 4_000;
+
+/** Pause before the single retry of a failed Clerk token fetch. The
+ * production failure this absorbs (two calls on the same mailbox ~100 ms
+ * apart, one fails at Clerk, the other succeeds) resolves well inside this. */
+const CLERK_TOKEN_RETRY_DELAY_MS = 300;
 
 // ─── Connection Resolution ──────────────────────────────────────────────────
 
@@ -388,18 +397,25 @@ type GoogleTokenResult = {
   hasDriveFileScope?: boolean;
 };
 
+/** Why no token came back — the caller turns this into class-specific
+ * guidance (src/lib/googleTokenFailure.ts) instead of one "reconnect" text
+ * for every cause. `retried` = a server-side retry already ran and failed. */
+type GoogleTokenFailure = { failure: GoogleTokenFailureReason; retried: boolean };
+
 /**
  * `quiet` suppresses the PostHog captures and tool-call props this function
  * stamps (google_token_identity_fallback / google_token_fetch_failed /
- * google_token_error / token_ms). The list_accounts scope probe runs this
- * once per accessible account on the first tool most agents call — letting
- * those probes fire the events would corrupt the monitoring counts in
- * docs/monitoring.md §7.4/§7.6, whose queries count the events unfiltered.
+ * google_token_error / google_token_retry / token_ms). The list_accounts
+ * scope probe runs this once per accessible account on the first tool most
+ * agents call — letting those probes fire the events would corrupt the
+ * monitoring counts in docs/monitoring.md §7.4/§7.6, whose queries count
+ * the events unfiltered. Quiet does NOT suppress the retry: that is repair,
+ * not analytics.
  */
 async function getGoogleToken(
   targetEmail: string, keyOwner: { id: string; email: string; clerkUserId: string },
   { quiet = false }: { quiet?: boolean } = {},
-): Promise<GoogleTokenResult | null> {
+): Promise<GoogleTokenResult | GoogleTokenFailure> {
   let tokenOwnerClerkId: string;
 
   if (targetEmail.toLowerCase() === keyOwner.email.toLowerCase()) {
@@ -425,7 +441,10 @@ async function getGoogleToken(
     } else {
       const own = await checkOwnClerkEmail(keyOwner.clerkUserId, targetEmail);
       if (!own.own) {
-        return null;
+        // The access row exists (checkEmailAccess passed) but the delegation
+        // behind it is no longer active and the address is not the key
+        // owner's either. Not a token problem — nothing to reconnect.
+        return { failure: 'delegation_inactive', retried: false };
       }
       // Not a delegation — the address is the key owner's own mailbox under a
       // drifted `users.email`. Use their token and record that the fallback
@@ -466,57 +485,99 @@ async function getGoogleToken(
 
   const client = await clerkClient();
   const tokenStarted = Date.now();
+  const accountDelegated = targetEmail.toLowerCase() !== keyOwner.email.toLowerCase();
+  const fetchGrant = () => withTimeout(
+    client.users.getUserOauthAccessToken(tokenOwnerClerkId, 'oauth_google'),
+    CLERK_TOKEN_TIMEOUT_MS,
+  );
+  let tokenResponse: Awaited<ReturnType<typeof fetchGrant>>;
+  let retried = false;
   try {
-    const tokenResponse = await withTimeout(
-      client.users.getUserOauthAccessToken(tokenOwnerClerkId, 'oauth_google'),
-      CLERK_TOKEN_TIMEOUT_MS,
-    );
-    if (!quiet) addToolCallProps({ token_ms: Date.now() - tokenStarted });
-    const grant = tokenResponse.data?.[0];
-    if (!grant?.token) {
-      if (!quiet) addToolCallProps({ google_token_error: 'no_token' });
-      return null;
+    try {
+      tokenResponse = await fetchGrant();
+    } catch (firstErr) {
+      // One retry for unknown Clerk errors. Measured 2026-09-04 over 30 days
+      // of production: EVERY MCP-path token failure was `clerk_error`, and
+      // the account producing one per day was healthy — its agent fires two
+      // calls on the same delegated mailbox ~100 ms apart on its first
+      // touch of the day, one fails at Clerk in ~80-120 ms, the other
+      // succeeds, and every later call succeeds. Telling that agent to
+      // "reconnect" daily was the bug. Timeouts (budget already spent) and
+      // refresh failures (deterministic) are not retried.
+      const first = classifyClerkTokenError(firstErr);
+      if (!first.retryable) throw firstErr;
+      retried = true;
+      await new Promise(resolve => setTimeout(resolve, CLERK_TOKEN_RETRY_DELAY_MS));
+      tokenResponse = await fetchGrant();
+      // Keep the race visible even though the agent never sees it: the
+      // recovered signal is what tells monitoring the retry is doing work
+      // (docs/monitoring.md §7.13).
+      if (!quiet) addToolCallProps({ google_token_retry: 'recovered' });
+      console.warn(
+        `[MCP] Google token fetch recovered on retry (${first.reason}${first.clerkStatus ? ` ${first.clerkStatus}` : ''}${first.clerkCode ? ` ${first.clerkCode}` : ''}):`,
+        describeErrorForLog(firstErr),
+      );
     }
-    // Clerk's `scopes` is the scope set of the last OAuth request that
-    // completed for the account — not necessarily what the token in hand
-    // carries. A plain Google sign-in rewrites it without drive.file
-    // (2026-09-04 finding; the dashboard reads tokeninfo instead and the two
-    // disagreed). Only computed here — gmailScopeDenial / driveFileScopeDenial
-    // do the enforcement and the analytics, so a sheets-only call by a
-    // Gmail-scope-less user records nothing.
-    const scopes = Array.isArray(grant.scopes) ? grant.scopes : undefined;
-    // Ask Google what the token really carries (cached per token, ~one
-    // lookup per account per token lifetime). The record is wrong in both
-    // directions in practice, so the token decides whenever tokeninfo
-    // answers; the record only stands in when it does not
-    // (reconcileScopes, unit-tested).
-    const verdict = reconcileScopes(scopes, await liveTokenScopes(grant.token));
-    if (!quiet) {
-      if (verdict.recordStale) addToolCallProps({ clerk_scope_cache_stale: true });
-      if (verdict.recordOverstates) addToolCallProps({ clerk_scope_record_overstates: true });
-    }
-    return { token: grant.token, hasGmailScope: verdict.hasGmailScope, hasDriveFileScope: verdict.hasDriveFileScope };
   } catch (err) {
-    // Observability for the "Clerk cannot refresh the Google token" failure
-    // mode (Clerk 422: grant stored without a refresh token — seen on the
-    // dev instance 2026-08-20, cause unconfirmed in prod). Without this,
-    // these failures are indistinguishable from generic errors in analytics.
-    const message = err instanceof Error ? err.message : String(err);
-    const reason = err instanceof Error && err.name === 'TimeoutError'
-      ? 'timeout'
-      : /refresh/i.test(message) ? 'refresh_failed' : 'clerk_error';
+    // Observability for the "Clerk cannot hand us a Google token" failure
+    // mode. The reason strings are unchanged since 2026-08-20 so the series
+    // stays comparable; clerk_status/clerk_code (enum-like, no customer
+    // data) are new so the next triage can see WHAT Clerk said instead of
+    // arguing from timing alone.
+    const cls = classifyClerkTokenError(err);
     if (!quiet) {
-      addToolCallProps({ token_ms: Date.now() - tokenStarted });
-      addToolCallProps({ google_token_error: reason });
+      addToolCallProps({
+        token_ms: Date.now() - tokenStarted,
+        google_token_error: cls.reason,
+        ...(retried ? { google_token_retry: 'retry_failed' } : {}),
+      });
       captureServerEvent(keyOwner.clerkUserId, 'google_token_fetch_failed', {
-        reason,
+        reason: cls.reason,
         via: 'mcp',
-        account_delegated: targetEmail.toLowerCase() !== keyOwner.email.toLowerCase(),
+        account_delegated: accountDelegated,
+        retried,
+        ...(cls.clerkStatus !== undefined ? { clerk_status: cls.clerkStatus } : {}),
+        ...(cls.clerkCode ? { clerk_code: cls.clerkCode } : {}),
       });
     }
-    console.error(`[MCP] Google token fetch failed (${reason}) for target mailbox:`, message);
-    return null;
+    console.error(`[MCP] Google token fetch failed (${cls.reason}${retried ? ', after retry' : ''}) for target mailbox:`, describeErrorForLog(err));
+    return { failure: cls.reason, retried };
   }
+  if (!quiet) addToolCallProps({ token_ms: Date.now() - tokenStarted });
+  const grant = tokenResponse.data?.[0];
+  if (!grant?.token) {
+    // Clerk answered cleanly and holds no Google grant for this user. Fires
+    // the standalone event too (it did not before 2026-09-04, so the event
+    // under-counted the token-failure population by this class).
+    if (!quiet) {
+      addToolCallProps({ google_token_error: 'no_token' });
+      captureServerEvent(keyOwner.clerkUserId, 'google_token_fetch_failed', {
+        reason: 'no_token', via: 'mcp', account_delegated: accountDelegated, retried: false,
+      });
+    }
+    return { failure: 'no_token', retried: false };
+  }
+  // Clerk's `scopes` is the scope set of the last OAuth request that
+  // completed for the account — not necessarily what the token in hand
+  // carries. A plain Google sign-in rewrites it without drive.file
+  // (2026-09-04 finding; the dashboard reads tokeninfo instead and the two
+  // disagreed). Only computed here — gmailScopeDenial / driveFileScopeDenial
+  // do the enforcement and the analytics, so a sheets-only call by a
+  // Gmail-scope-less user records nothing.
+  const scopes = Array.isArray(grant.scopes) ? grant.scopes : undefined;
+  // Ask Google what the token really carries (cached per token, ~one
+  // lookup per account per token lifetime). The record is wrong in both
+  // directions in practice, so the token decides whenever tokeninfo
+  // answers; the record only stands in when it does not
+  // (reconcileScopes, unit-tested). Deliberately OUTSIDE the Clerk
+  // try/catch above: liveTokenScopes never throws, and a tokeninfo problem
+  // must never be classified as a Clerk token failure.
+  const verdict = reconcileScopes(scopes, await liveTokenScopes(grant.token));
+  if (!quiet) {
+    if (verdict.recordStale) addToolCallProps({ clerk_scope_cache_stale: true });
+    if (verdict.recordOverstates) addToolCallProps({ clerk_scope_record_overstates: true });
+  }
+  return { token: grant.token, hasGmailScope: verdict.hasGmailScope, hasDriveFileScope: verdict.hasDriveFileScope };
 }
 
 // loadApplicableRules / checkReadRestrictions moved to src/lib/gmailRules.ts —
@@ -1509,6 +1570,7 @@ type ResolveFailureReason =
   | 'no_accessible_accounts'
   | 'account_not_permitted'
   | 'google_token_unavailable'
+  | 'delegation_inactive'
   | 'gmail_scope_missing';
 
 function resolveFailure(reason: ResolveFailureReason, error: string): ResolvedError {
@@ -1544,8 +1606,27 @@ async function resolveAccountAndToken(
   });
 
   const googleToken = await getGoogleToken(targetEmail, conn.user);
-  if (!googleToken) {
-    return resolveFailure('google_token_unavailable', `❌ Could not fetch Google token for '${targetEmail}'. The account owner may need to reconnect Google — one-click link: ${reconnectLink(targetEmail)}`);
+  if ('failure' in googleToken) {
+    // Class-specific text (src/lib/googleTokenFailure.ts): grant states that
+    // cannot clear on their own are a 🚫 refusal with denial_code (the tool
+    // working as designed — consistent with the scope pre-flights below);
+    // transient Clerk trouble that survived the retry stays a ❌ failure
+    // and says "retry once" BEFORE "reconnect", because in production that
+    // class has been a race on a healthy account every time it was
+    // inspected (2026-09-04). Delegated mailboxes are told WHO must open the
+    // link: the reconnect link is bound to the owner and refuses anyone else.
+    const guidance = tokenFailureGuidance({
+      targetEmail,
+      keyOwnerEmail: conn.user.email,
+      reason: googleToken.failure,
+      reconnectUrl: reconnectLink(targetEmail),
+      retried: googleToken.retried,
+    });
+    if (guidance.denialCode) addToolCallProps({ denial_code: guidance.denialCode });
+    return resolveFailure(
+      googleToken.failure === 'delegation_inactive' ? 'delegation_inactive' : 'google_token_unavailable',
+      guidance.text,
+    );
   }
 
   return {
@@ -1975,20 +2056,35 @@ const handler = createMcpHandler(
         );
         const accountDetails = emails.map((e, i) => {
           const probe = probes[i];
-          const token = probe.status === 'fulfilled' ? probe.value : null;
+          const settled = probe.status === 'fulfilled' ? probe.value : null;
+          const token = settled && !('failure' in settled) ? settled : null;
+          const failure = settled && 'failure' in settled ? settled.failure : null;
           const gmail = token ? scopeState(token.hasGmailScope) : 'unknown';
           const driveFile = token ? scopeState(token.hasDriveFileScope) : 'unknown';
-          // A definitive miss — or a definitive token failure — gets the
-          // bound reconnect link; a timed-out probe stays link-free (nothing
-          // is known to be wrong).
-          const tokenUnavailable = probe.status === 'fulfilled' && token === null;
-          const needsReconnect = tokenUnavailable || gmail === 'missing' || driveFile === 'missing';
+          // A definitive scope miss — or a token failure a reconnect
+          // actually repairs (no grant, cannot refresh) — gets the bound
+          // reconnect link. A timed-out probe, a transient Clerk error, a
+          // missing owner account, or an inactive delegation stays
+          // link-free: none of those is fixed by reconnecting, and a false
+          // link here sends the agent (and the user) to repair a grant that
+          // is fine or does not exist.
+          const needsReconnect = (failure !== null && reconnectRepairs(failure))
+            || gmail === 'missing' || driveFile === 'missing';
           return {
             email: e.targetEmail,
             delegated: !!e.delegationId,
+            google_token: failure ? 'unavailable' : token ? 'ok' : 'unknown',
+            ...(failure ? { google_token_failure: failure } : {}),
             gmail,
             drive_file: driveFile,
-            ...(needsReconnect ? { reconnect_url: reconnectLink(e.targetEmail) } : {}),
+            ...(needsReconnect ? {
+              reconnect_url: reconnectLink(e.targetEmail),
+              // The link is bound to the mailbox owner and refuses anyone
+              // else — for a delegated mailbox the key owner cannot use it.
+              reconnect_by: e.delegationId
+                ? `the owner of '${e.targetEmail}' (not this user) — they must open reconnect_url while signed in to FGAC as that account`
+                : 'this user',
+            } : {}),
           };
         });
         const driveMissing = accountDetails.find(d => d.drive_file === 'missing');
@@ -3184,7 +3280,9 @@ const MAX_REJECT_BODY_CHARS = 100_000;
  *   - mcp_transport_rejected: our own 400 for an unparseable JSON body (the
  *     handler awaits `req.json()` unguarded and otherwise never answers —
  *     the request hangs to the function timeout), plus every SDK 4xx with
- *     its JSON-RPC error message.
+ *     its JSON-RPC error message, classified by `reason` (see
+ *     classifyTransportRejection — `discover_probe` is expected traffic
+ *     from MCP 2026-07-28 clients, not a refused user).
  *   - mcp_input_validation_failed: SDK-emitted `isError` results for
  *     -32602 (invalid arguments / unknown tool), detected from a tee of the
  *     POST response body AFTER it has been returned, so the client is never
@@ -3229,8 +3327,11 @@ const withTransportObservability =
         const parsed = JSON.parse(body.slice(0, MAX_REJECT_BODY_CHARS)) as { error?: { message?: unknown } };
         message = typeof parsed?.error?.message === 'string' ? parsed.error.message.slice(0, 300) : body.slice(0, 300);
       } catch { /* non-JSON rejection body */ }
+      // `reason` separates the 2026-07-28 `server/discover` probe (benign: the
+      // client falls back to `initialize` on this very 400) from a client the
+      // SDK genuinely refuses — the runbook reads them oppositely (7.9).
       captureServerEvent(distinctId, 'mcp_transport_rejected', {
-        ...base(), status: res.status, reason: 'sdk', message,
+        ...base(), status: res.status, ...classifyTransportRejection(message, envelope?.methods), message,
         rpc_methods: envelope?.methods, tool: envelope?.toolName,
       });
       return res;

@@ -48,7 +48,9 @@
   bridge, (b) a Gmail MCP tool call, (c) the sheets picker
 - **Expected**: The token bridge returns `hasDriveFileScope: true`; the
   Clerk external account's verification status is `verified`; `gmail_list`
-  succeeds again (no "Could not fetch Google token"); the picker opens
+  succeeds again (no "🚫 Not available yet: FGAC's auth provider …" refusal
+  and no "❌ FGAC's auth provider … instead of a Google token" failure — the
+  token-failure texts from `src/lib/googleTokenFailure.ts`); the picker opens
   directly with no further OAuth detour
 
 ### A5: The OAuth return leg never loops

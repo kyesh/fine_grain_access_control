@@ -330,3 +330,37 @@ attributable to it.
   signature for abandoned consent or a session dropped during the OAuth
   round-trip (monitoring.md §7.8); a run where the return leg fires neither
   terminal event is a regression.
+
+### A19: Google token failures classify by cause and name who must reconnect
+- Inspect `$mcp_tool_call` events from this run with
+  `failure_reason = 'google_token_unavailable'` or `'delegation_inactive'`,
+  and any `google_token_retry` rows. (Inducing a Clerk-side token failure on
+  demand is not possible with the QA accounts — see the A10 evidence note —
+  so this assertion is satisfied by the absence of regressions on the rows
+  that do occur, plus `npx tsx scripts/test-google-token-failure.ts`, which
+  pins the per-class wording.)
+- **Expected** (since 2026-09-04):
+  - `google_token_unavailable` rows carry `google_token_error` (`no_token` /
+    `refresh_failed` / `owner_not_found` / `clerk_error` / `timeout`) and the
+    outcome follows the cause: `no_token` / `refresh_failed` /
+    `owner_not_found` classify `denied_by_policy` with
+    `denial_code: 'google_token_unavailable'` (🚫 text that says STOP and
+    names who must act — for a delegated mailbox, the OWNER signed in as that
+    account; `owner_not_found` carries NO reconnect link and says the owner
+    must sign in to FGAC again). On a Vercel preview every delegated mailbox
+    is expected to land in `owner_not_found`: the preview database is a copy
+    of production, so the delegator's row carries a production Clerk id the
+    dev Clerk instance 404s on — an environment artifact, not a regression; `clerk_error` / `timeout` classify `failed` (❌ text that
+    says retry ONCE before offering the reconnect link). A `no_token` or
+    `refresh_failed` row classifying `failed`, or a `clerk_error` row
+    classifying `denied_by_policy`, is a regression.
+  - `delegation_inactive` rows (access row present, delegation no longer
+    active) classify `failed` with re-delegate guidance and NO reconnect link.
+  - A call whose first Clerk fetch failed and whose single server-side retry
+    succeeded carries `google_token_retry: 'recovered'` on a `success` row and
+    fires NO `google_token_fetch_failed`; `retry_failed` accompanies a final
+    failure, whose standalone event carries `retried: true` and, when Clerk
+    threw an API error, `clerk_status` / `clerk_code`. `google_token_fetch_failed`
+    also fires for `reason = 'no_token'` (it did not before this date).
+  - `error_reason` stays absent on every token-layer row — it is the
+    Google-response property and the token layer never reached Google.
