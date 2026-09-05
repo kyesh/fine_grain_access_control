@@ -147,3 +147,25 @@
 - **Note**: This is the one property retained from the retired A4. Re-approval
   after the grant has been **revoked** is deliberately permitted (the URL is
   permanent by design) and is intentionally not asserted here
+
+### A15: The file-grant approve button locks while the approval runs
+- Open a sheets or docs approval link that reaches the confirm step (Google
+  already shares the file, or pick it first per capability 17). Click
+  "Approve this grant" and, within the same second, click it several more
+  times (the QA harness schedules 6 clicks 150 ms apart and records
+  `disabled`/label at each)
+- **Expected**: Only the first click submits. From then until the redirect the
+  button is `disabled` and reads "Approving…"; exactly ONE POST to
+  `/dashboard/approve` is sent and exactly one rule for the file appears on
+  the profile. The substitution wording ("Grant access to what I picked")
+  gets the same guard
+- **Server half**: even when two submits DO land (slow network — simulate with
+  `form.requestSubmit()` twice in one tick, which bypasses the disabled
+  button), the second writes no rule and the page still ends on the success
+  card. Both approve forms render `ApproveSubmitButton`; a bare
+  `<button type="submit">` on this page is a regression
+- **Regression**: until 2026-09-05 `FileApprovalFlow` had no pending state and
+  the picked-file path skipped the grant-level idempotency check. Rage-clicking
+  users produced one production link with 14 approve events and another
+  writing 11 duplicate rules for one sheet in 12 s (PostHog, 2026-08-30 →
+  2026-09-04); reproduced locally as 6 clicks → 6 POSTs → 6 duplicate rules
