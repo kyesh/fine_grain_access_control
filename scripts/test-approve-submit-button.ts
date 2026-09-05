@@ -17,7 +17,7 @@
  * not a function"), so the development build is forced before React loads —
  * every React import below is dynamic for exactly this reason.
  */
-process.env.NODE_ENV = 'development';
+(process.env as Record<string, string | undefined>).NODE_ENV = 'development';
 
 import { Window } from 'happy-dom';
 
