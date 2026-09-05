@@ -105,3 +105,6 @@ test/qa-envs/hosted-mcp/playwright-auth.js
 docs/QA_Acceptance_Test/qa-results*.json
 qa-webhook-log.json
 qa-webhook-fail
+
+# growth-prospecting digests + dedupe state (lead lists are not for a public repo)
+.growth/
