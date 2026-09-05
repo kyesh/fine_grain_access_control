@@ -13,6 +13,8 @@
 ```bash
 curl -sf https://fgac.ai/.well-known/oauth-authorization-server | jq .
 curl -sf https://fgac.ai/.well-known/oauth-protected-resource/mcp | jq .
+curl -sf https://fgac.ai/.well-known/mcp-registry-auth            # MCP Registry domain proof (text/plain, v=MCPv1; k=ed25519; p=…)
+curl -sf https://fgac.ai/.well-known/mcp/server-card.json | jq .serverInfo   # Smithery fallback card
 ```
 - [ ] Both return valid JSON
 - [ ] Authorization server has `authorization_endpoint`, `token_endpoint`, `registration_endpoint`
