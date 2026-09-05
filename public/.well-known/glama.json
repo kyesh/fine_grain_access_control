@@ -1,0 +1,9 @@
+{
+  "$schema": "https://glama.ai/mcp/schemas/server.json",
+  "maintainers": [
+    {
+      "name": "FGAC.ai",
+      "email": "support@fgac.ai"
+    }
+  ]
+}
