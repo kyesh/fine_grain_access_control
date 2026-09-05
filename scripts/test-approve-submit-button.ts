@@ -12,7 +12,13 @@
  * every label the approve page renders it with.
  *
  * Renders with happy-dom + react-dom/client under React's act() — no browser.
+ * React's production bundle does not export act(), and `next build` on Vercel
+ * runs this chain with NODE_ENV=production (build failed 2026-09-05: "act is
+ * not a function"), so the development build is forced before React loads —
+ * every React import below is dynamic for exactly this reason.
  */
+process.env.NODE_ENV = 'development';
+
 import { Window } from 'happy-dom';
 
 const win = new Window({ url: 'http://localhost/' });
