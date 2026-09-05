@@ -78,3 +78,19 @@ narrow served tokens regardless of the record (120 of 136 narrow-record
 accounts today; after the production dashboard change the record column will
 flip wide for those Google already knows, and the token column is the one to
 watch).
+
+## Post-expiry bracket (2026-09-05, both accounts, after the wide sign-ins)
+
+| account | refresh token before the sign-in | first refresh after expiry |
+|---|---|---|
+| USER_A | wide | token carries drive.file — durable |
+| USER_B | narrow | token lacks drive.file while the record lists it — needs one consent pass |
+
+So with `drive.file` in the sign-in scope list, an account heals durably iff its
+refresh token is wide. A consent pass (Accounts page button, denial link, or the
+incremental consent Google shows to users who never granted the scope) is what
+produces a wide refresh token. Follow-up: a Clerk sign-in through the hosted
+OAuth-server route (DCR authorize page) showed Google's consent screens, unlike
+the app's modal sign-in — whether that pass issued USER_B a fresh wide refresh
+token is checked at 01:45Z against the deployed pre-flight and recorded in the
+PR.
