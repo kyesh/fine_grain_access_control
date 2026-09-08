@@ -38,7 +38,7 @@ import { inSuccessSample, AUTH_SUCCESS_SAMPLE } from '@/lib/authSampling';
 import { ensureDefaultProfile } from '@/db/defaultProfile';
 import { mintApprovalLink, type ApprovalAction } from '@/lib/approvalLinks';
 import { connectionsDeepLink } from '@/lib/dashboardAgentLinks';
-import { recordApprovalMint } from '@/lib/approvalRequests';
+import { recordApprovalMint, getApprovalRequestResourceName } from '@/lib/approvalRequests';
 import { TOOL_DEFS, toolAnnotations, type FgacToolDef } from './toolDefs';
 import {
   classifyGoogleApiCall, canonicalizeGoogleApiPath, extractSendRecipients, extractDraftSendInfo,
@@ -2875,9 +2875,13 @@ const handler = createMcpHandler(
           requestId, userId: conn.user.id, proxyKeyId: conn.proxyKeyId, action: action.action, targetHash,
           ...named,
         });
+        // A re-request without a title still has one if an earlier mint stored
+        // it — the response should say so rather than ask the agent again
+        // (observed in QA 2026-09-08).
+        const storedTitle = title ?? (action.action === 'send_whitelist' ? null : await getApprovalRequestResourceName(requestId));
         captureServerEvent(conn.user.clerkUserId, 'approval_link_minted', {
           action: action.action, via: 'request_access', request_id: requestId, target_hash: targetHash,
-          mint_count: mintCount, has_resource_name: !!title,
+          mint_count: mintCount, has_resource_name: !!storedTitle, resource_name_supplied: !!title,
         });
         addToolCallProps({ approval_request_id: requestId });
         return jsonResult({
@@ -2885,12 +2889,12 @@ const handler = createMcpHandler(
           summary: action.action === 'send_whitelist'
             ? `Requesting permission to send email to ${recipient}`
             : action.action.startsWith('docs')
-              ? `Requesting ${type === 'docs_read' ? 'read-only' : 'read & write'} access to document ${title ? `"${title}" (${documentId})` : documentId}`
-              : `Requesting ${type === 'sheets_read' ? 'read-only' : 'read & write'} access to spreadsheet ${title ? `"${title}" (${spreadsheetId})` : spreadsheetId}`,
+              ? `Requesting ${type === 'docs_read' ? 'read-only' : 'read & write'} access to document ${storedTitle ? `"${storedTitle}" (${documentId})` : documentId}`
+              : `Requesting ${type === 'sheets_read' ? 'read-only' : 'read & write'} access to spreadsheet ${storedTitle ? `"${storedTitle}" (${spreadsheetId})` : spreadsheetId}`,
           approvalUrl: url,
           note: 'Nothing has been granted. Show the approval link to the user VERBATIM as a clickable URL — only they can approve it. The link does not expire and stays valid, so re-requesting produces the same URL rather than a new one. Do not retry the original operation until they confirm.'
-            + (action.action === 'send_whitelist' ? '' : title
-              ? ' The approval page shows the file by the title you passed.'
+            + (action.action === 'send_whitelist' ? '' : storedTitle
+              ? ` The approval page shows the file as "${storedTitle}".`
               : ' Tell the user the file\'s NAME along with the link: the approval page can only show Google\'s file id, and the user has to find the file by name in Google\'s picker. Re-call this tool with resourceName if you know the title.'),
         });
       }

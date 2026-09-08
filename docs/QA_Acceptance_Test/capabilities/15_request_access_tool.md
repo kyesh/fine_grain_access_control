@@ -63,9 +63,11 @@
   name (it already has one). The approve page heading and the pick-first
   panel show **"QA Budget Sheet"** instead of the raw id, and the hint under
   the pick button says to look for it by that name. Calling `request_access`
-  again for the same file WITHOUT `resourceName` returns the same URL and the
-  page still shows the name (first non-empty title wins — `mint_count`
-  increments, `approval_requests.resource_name` is unchanged). A title over
+  again for the same file WITHOUT `resourceName` returns the same URL, its
+  `summary`/`note` still use the stored title, and the page still shows the
+  name (first non-empty title wins — `mint_count` increments,
+  `approval_requests.resource_name` is unchanged; the mint event carries
+  `has_resource_name: true, resource_name_supplied: false`). A title over
   200 characters is truncated; a whitespace-only title is treated as absent
   and the `note` then tells the agent to relay the file's name
 - **Regression**: until 2026-09-08 no path could name a file Google does not
