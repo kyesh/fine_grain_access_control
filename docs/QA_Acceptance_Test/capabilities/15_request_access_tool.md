@@ -53,3 +53,21 @@
 - **Expected**: Identical behavior — same signing and owner-session
   requirements. A link minted for one user is never approvable by another,
   and altering any parameter invalidates the signature
+
+### A8: request_access can name the file, and the approval page shows it
+- On a spreadsheet with no rule and no Google grant, call `request_access`
+  with `type: "sheets_read"`, the spreadsheet id, and `resourceName: "QA Budget
+  Sheet"`; open the link as the owning user
+- **Expected**: The tool's `summary` names the spreadsheet as
+  `"QA Budget Sheet" (<id>)` and its `note` does NOT ask the agent to relay the
+  name (it already has one). The approve page heading and the pick-first
+  panel show **"QA Budget Sheet"** instead of the raw id, and the hint under
+  the pick button says to look for it by that name. Calling `request_access`
+  again for the same file WITHOUT `resourceName` returns the same URL and the
+  page still shows the name (first non-empty title wins — `mint_count`
+  increments, `approval_requests.resource_name` is unchanged). A title over
+  200 characters is truncated; a whitespace-only title is treated as absent
+  and the `note` then tells the agent to relay the file's name
+- **Regression**: until 2026-09-08 no path could name a file Google does not
+  share with FGAC yet — the page showed the Google id, and Google's Picker
+  lists files by name (capability 17 A12)

@@ -100,7 +100,13 @@ attributable to it.
     `failure_reason`, one of `no_proxy_key`, `no_accessible_accounts`,
     `account_not_permitted`, `google_token_unavailable`. Capability 03
     (multi-email scoping) and 07 (key lifecycle) generate the
-    `account_not_permitted` and `no_proxy_key` cases respectively.
+    `account_not_permitted` and `no_proxy_key` cases respectively. Since
+    2026-09-08 `account_not_permitted` with an EXPLICIT `account` argument
+    (capability 03's MCP case) is a 🚫 refusal instead: `outcome =
+    denied_by_policy`, `denial_code = failure_reason = 'account_not_permitted'`,
+    text listing the usable accounts and saying to omit the parameter; the
+    implicit case (no `account`, owner's own address not on the key) stays
+    `failed`.
   - Since the directory-error demotion (PR #72 salvage, 2026-09-02), a second
     class of `outcome=failed` events exists: user/caller-fixable Google
     results demoted from `error` — the stale Gmail message-id/attachment-id
@@ -384,3 +390,26 @@ attributable to it.
   conversion (71% raw vs 37% per link in the last pre-fix week). Funnel
   queries must divide `uniq(request_id)` by `uniq(request_id)` —
   `docs/monitoring.md` 7.14
+
+### A21: Picker cancels and post-pick verification failures are measurable
+- Run capability 17 A12 (cancel the Picker on the approve page, then Try
+  again and pick), then query the user's events for the last hour:
+  `SELECT event, properties.kind, properties.attempt, properties.elapsed_ms,
+  properties.from_oauth_return, properties.via, properties.result,
+  properties.picked_count FROM events WHERE event IN
+  ('picker_opened','picker_cancelled','picker_picked','sheets_grant_verification')
+  AND timestamp >= now() - INTERVAL 1 HOUR ORDER BY timestamp`
+- **Expected**: `picker_opened {attempt: 1}` → `picker_cancelled {attempt: 1,
+  elapsed_ms > 0, from_oauth_return: false}` → `picker_opened {attempt: 2}` →
+  `picker_picked`. If the post-pick approval is submitted while Google has not
+  yet propagated the grant (the "Google hasn't finished sharing… pick again"
+  notice), `sheets_grant_verification {via: 'magic_link', result: 'missing',
+  picked_count: 1, request_id}` fires for that submit; the eventual success
+  fires the existing `{via: 'magic_link', result: 'ok'}`. `docs_*` twins carry
+  the same props. The `request_access` mint from capability 15 A8 carries
+  `has_resource_name: true`; a denial mint carries none
+- **Regression**: until 2026-09-08 `picker_cancelled` carried only `kind`, so
+  cancel-then-retry was indistinguishable from cancel-and-leave, and the
+  failed post-pick verification emitted nothing — the 8-second retry loop one
+  launch-cohort user ran 12 times (PostHog, 2026-08-31) was only visible as
+  server-side `approval_link_opened` events with no pageview

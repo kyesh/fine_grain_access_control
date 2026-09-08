@@ -30,6 +30,7 @@ import { loadApplicableRules, checkReadRestrictions, decodeB64Url, stripHtmlToTe
 import { compileRulePattern } from '@/lib/rulePatterns';
 import { captureServerEvent } from '@/lib/posthogServer';
 import { runWithToolCallProps, addToolCallProps, getToolCallProps } from '@/lib/toolCallContext';
+import { cleanResourceName } from '@/lib/pickerRecoveryCopy';
 import { GOOGLE_FETCH_TIMEOUT_MS, CLERK_TOKEN_TIMEOUT_MS, withTimeout, isUpstreamTimeout } from '@/lib/upstreamTimeouts';
 import { classifyTransportRejection, installFingerprint, parseInitializeClientInfo, parseRpcEnvelope, resourceIdHash, type McpClientInfo } from '@/lib/mcpClientSignals';
 import { after } from 'next/server';
@@ -685,7 +686,11 @@ async function policyDenialWithLink(
 const AGENT_APPROVAL_PROTOCOL =
   'IMPORTANT — how to handle this: (1) Show the link above to the user VERBATIM as a clickable URL; only they can open it, and it is the only way to get access. ' +
   '(2) Do NOT retry the denied call until the user says they approved — retrying just fails again, and re-requesting returns the SAME link. ' +
-  '(3) The link does not expire — if the user has not opened it yet, ask them directly rather than retrying.';
+  '(3) The link does not expire — if the user has not opened it yet, ask them directly rather than retrying. ' +
+  // (4) added 2026-09-08: a file Google does not share with FGAC yet cannot be
+  // resolved by title, so the approval page shows a raw Google id — while
+  // Google's Picker lists files by NAME. Users opened the Picker and closed it.
+  '(4) For a spreadsheet or document, tell the user the file\'s NAME along with the link: the approval page can only show Google\'s file id for a file FGAC cannot reach yet, and the user has to find the file by name in Google\'s picker. If you know the title, call request_access with resourceName so the page shows it.';
 
 /**
  * Send denials offer BOTH one-click options: approve just this recipient, or
@@ -1594,7 +1599,20 @@ async function resolveAccountAndToken(
   const targetEmail = account || conn.user.email;
   const access = await checkEmailAccess(conn.proxyKeyId, targetEmail);
   if (!access) {
-    return resolveFailure('account_not_permitted', `❌ This proxy key does not have access to '${targetEmail}'. Accessible: ${emails.map(e => e.targetEmail).join(', ')}`);
+    const usable = emails.map(e => e.targetEmail).join(', ');
+    if (account) {
+      // The CALLER chose an account outside the key's scope. The key's account
+      // list is user-configured policy, so this is a deterministic 🚫 refusal
+      // with a stated fix, not a malfunction — one Claude-desktop scheduled job
+      // hit the ❌ form of this every hour for four days (2026-09-05 → 09-08),
+      // each hit counting in the published error rate, and the response never
+      // said "drop the parameter". The implicit case below (no account given,
+      // owner's own address not on the key) stays ❌: nothing the caller sent
+      // caused it.
+      addToolCallProps({ failure_reason: 'account_not_permitted', denial_code: 'account_not_permitted' });
+      return { error: `🚫 This connection cannot use the account '${targetEmail}'. Accounts it can use: ${usable}. Omit the "account" parameter to use the default account, or pass one of the listed addresses.` };
+    }
+    return resolveFailure('account_not_permitted', `❌ This proxy key does not have access to '${targetEmail}'. Accessible: ${usable}`);
   }
 
   // Delegation observability: record which account this call resolved to, so
@@ -2816,8 +2834,9 @@ const handler = createMcpHandler(
         recipient: z.string().optional().describe('Email address to whitelist (required for type "send")'),
         spreadsheetId: z.string().optional().describe('Google Spreadsheet ID (required for sheets types)'),
         documentId: z.string().optional().describe('Google Docs document ID (required for docs types)'),
+        resourceName: z.string().max(200).optional().describe('Title of the spreadsheet or document, when you know it (from the user\'s message or an earlier call). Shown on the approval page so the user can find the file by name in Google\'s picker — without it they only see the file id.'),
       }),
-      async ({ type, recipient, spreadsheetId, documentId }, { authInfo }) => {
+      async ({ type, recipient, spreadsheetId, documentId, resourceName }, { authInfo }) => {
         const conn = await requireApproval(authInfo);
         if ('content' in conn) return conn;
         if (!conn.proxyKeyId) {
@@ -2825,6 +2844,8 @@ const handler = createMcpHandler(
         }
 
         const REQUESTABLE = 'Requestable permissions: sending to a specific recipient, or read/read-write access to a specific spreadsheet or document.';
+        const title = cleanResourceName(resourceName);
+        const named = title ? { resourceName: title } : {};
         let action: ApprovalAction;
         if (type === 'send') {
           if (!recipient || !/^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/.test(recipient)) {
@@ -2836,24 +2857,27 @@ const handler = createMcpHandler(
             return textResult(`🚫 A "documentId" is required to request document access. ${REQUESTABLE}`);
           }
           action = type === 'docs_read'
-            ? { action: 'docs_expose', documentId }
-            : { action: 'docs_write', documentId };
+            ? { action: 'docs_expose', documentId, ...named }
+            : { action: 'docs_write', documentId, ...named };
         } else {
           if (!spreadsheetId) {
             return textResult(`🚫 A "spreadsheetId" is required to request spreadsheet access. ${REQUESTABLE}`);
           }
           action = type === 'sheets_read'
-            ? { action: 'sheets_expose', spreadsheetId }
-            : { action: 'sheets_write', spreadsheetId };
+            ? { action: 'sheets_expose', spreadsheetId, ...named }
+            : { action: 'sheets_write', spreadsheetId, ...named };
         }
 
         const { url, requestId, targetHash } = await mintApprovalLink(DASHBOARD_URL, conn.user.id, conn.proxyKeyId, action);
+        // The title rides in the request ledger, never in the URL (the link
+        // stays deterministic); the approve page reads it back by request_id.
         const mintCount = await recordApprovalMint({
           requestId, userId: conn.user.id, proxyKeyId: conn.proxyKeyId, action: action.action, targetHash,
+          ...named,
         });
         captureServerEvent(conn.user.clerkUserId, 'approval_link_minted', {
           action: action.action, via: 'request_access', request_id: requestId, target_hash: targetHash,
-          mint_count: mintCount,
+          mint_count: mintCount, has_resource_name: !!title,
         });
         addToolCallProps({ approval_request_id: requestId });
         return jsonResult({
@@ -2861,10 +2885,13 @@ const handler = createMcpHandler(
           summary: action.action === 'send_whitelist'
             ? `Requesting permission to send email to ${recipient}`
             : action.action.startsWith('docs')
-              ? `Requesting ${type === 'docs_read' ? 'read-only' : 'read & write'} access to document ${documentId}`
-              : `Requesting ${type === 'sheets_read' ? 'read-only' : 'read & write'} access to spreadsheet ${spreadsheetId}`,
+              ? `Requesting ${type === 'docs_read' ? 'read-only' : 'read & write'} access to document ${title ? `"${title}" (${documentId})` : documentId}`
+              : `Requesting ${type === 'sheets_read' ? 'read-only' : 'read & write'} access to spreadsheet ${title ? `"${title}" (${spreadsheetId})` : spreadsheetId}`,
           approvalUrl: url,
-          note: 'Nothing has been granted. Show the approval link to the user VERBATIM as a clickable URL — only they can approve it. The link does not expire and stays valid, so re-requesting produces the same URL rather than a new one. Do not retry the original operation until they confirm.',
+          note: 'Nothing has been granted. Show the approval link to the user VERBATIM as a clickable URL — only they can approve it. The link does not expire and stays valid, so re-requesting produces the same URL rather than a new one. Do not retry the original operation until they confirm.'
+            + (action.action === 'send_whitelist' ? '' : title
+              ? ' The approval page shows the file by the title you passed.'
+              : ' Tell the user the file\'s NAME along with the link: the approval page can only show Google\'s file id, and the user has to find the file by name in Google\'s picker. Re-call this tool with resourceName if you know the title.'),
         });
       }
     );
