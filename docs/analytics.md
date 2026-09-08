@@ -121,6 +121,30 @@ over that window is wrong in the multi-fire direction — 7d to 2026-09-05 read
 `mint_count`, `opened_at`, and `approved_at` — so the same questions are
 answerable without the analytics pipeline.
 
+**Read the funnel per action, and locate the loss before naming a fix
+(2026-09-08).** Minted → opened → approved per `request_id`, split by
+`action`, separates an *open-step* leak (the agent received the link, the user
+never loaded the page) from a *Picker-step* leak (the page loaded, the pick or
+submit did not happen). In the week to 2026-09-08 `docs_expose` converted 0 of
+13 while `sheets_expose` converted 17 of 36 — but 12 of the 13 docs links were
+never opened (sheets: 24 of 36 opened), and the single opener cancelled the
+Picker seven times. Nothing in the docs approve path was broken: the same week
+`docs_write` links completed the pick-first path 20 of 25 times with
+`docs_grant_verification` firing at `link_open`, `magic_link` and
+`post_approval`. Two joins that matter for this reading:
+
+- **Denial code ≠ link action.** A write attempt on an unexposed doc is denied
+  with `denial_code=docs_not_exposed` on `$mcp_tool_call` but mints a
+  **`docs_write`** link (`fileApprovalLevel` picks the level the operation
+  needs). Count link actions from `approval_link_minted.action`, never from the
+  denial code. The same holds for sheets.
+- **A read link approved at the write level is recorded as the write action**
+  (`approval_link_approved.action` follows the effective grant). Join approvals
+  back to mints on `request_id` before reading any per-action approval count;
+  the `docs_expose` 0/13 above survived that join.
+
+Query: `monitoring.md` 7.16.
+
 The two `sheets_grant_*` events instrument the **picker-first sheets
 approval funnel**: opening a sheets approval link verifies the Google-side
 `drive.file` grant (`via=link_open`); `result=missing` puts the Picker +

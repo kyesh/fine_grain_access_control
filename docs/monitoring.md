@@ -719,3 +719,44 @@ relative to `approved_links`; `replays` is the duplicate-submit rate, split it
 by `properties.path` (`picked` vs `grant_active`) when it climbs. Pair with
 `$rageclick` on `$pathname = '/dashboard/approve'` — the pre-fix signature was
 one rage-clicking user per day, every one of them on a file grant.
+
+**7.16 — Approval funnel per action, per link (minted → opened → approved).**
+Locates a conversion loss before anyone names a fix: an action whose links are
+minted but not *opened* is losing users between the agent's reply and the
+click (the agent paraphrased the link away, or the user never asked for that
+file); an action whose links are opened but not approved is losing them on the
+approve page (Picker cancel, verification loop, wrong account). Measured
+2026-09-08 (7 d): `docs_expose` 13 minted / 1 opened / 0 approved — an
+open-step leak — against `sheets_expose` 36 / 24 / 17. Read
+`analytics.md` → "Read the funnel per action" for the two joins this depends
+on (denial code ≠ link action; approvals are recorded at the effective level).
+
+```sql
+WITH minted AS (
+  SELECT properties.request_id AS rid, any(properties.action) AS action
+  FROM events
+  WHERE event = 'approval_link_minted' AND properties.environment = 'production'
+    AND timestamp > now() - INTERVAL 7 DAY
+    AND person.properties.email NOT IN (/* internal / QA accounts — .qa_test_emails.json + founder addresses, never inline them here */)
+  GROUP BY rid),
+opened AS (SELECT DISTINCT properties.request_id AS rid FROM events
+  WHERE event = 'approval_link_opened' AND timestamp > now() - INTERVAL 30 DAY),
+appr AS (SELECT DISTINCT properties.request_id AS rid FROM events
+  WHERE event = 'approval_link_approved' AND timestamp > now() - INTERVAL 30 DAY)
+SELECT m.action,
+       count()                 AS links,
+       countIf(o.rid != '')    AS opened,
+       countIf(a.rid != '')    AS approved
+FROM minted m
+LEFT JOIN opened o ON o.rid = m.rid
+LEFT JOIN appr   a ON a.rid = m.rid
+GROUP BY m.action ORDER BY m.action
+```
+
+ClickHouse LEFT JOIN fills unmatched String columns with `''` (and DateTimes
+with the 1970 epoch), so test `!= ''`, never `IS NOT NULL`. Healthy: `opened /
+links` above ~60% for file actions and `approved / opened` above ~70%. An
+open rate far below the sibling action (docs vs sheets) with a normal
+approve-given-open rate is not a page problem — look at what minted the links
+(`$mcp_tool_call` rows carrying `approval_request_id`: which tool, in what
+burst, after what) before changing the approve page.
