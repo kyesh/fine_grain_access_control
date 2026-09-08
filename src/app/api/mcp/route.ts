@@ -32,6 +32,7 @@ import { captureServerEvent } from '@/lib/posthogServer';
 import { runWithToolCallProps, addToolCallProps, getToolCallProps } from '@/lib/toolCallContext';
 import { GOOGLE_FETCH_TIMEOUT_MS, CLERK_TOKEN_TIMEOUT_MS, withTimeout, isUpstreamTimeout } from '@/lib/upstreamTimeouts';
 import { classifyTransportRejection, installFingerprint, parseInitializeClientInfo, parseRpcEnvelope, resourceIdHash, type McpClientInfo } from '@/lib/mcpClientSignals';
+import { coalesceInitialize, recordEagerResolve, shouldSkipEagerResolve } from '@/lib/connectionTouchMemo';
 import { after } from 'next/server';
 import { inSuccessSample, AUTH_SUCCESS_SAMPLE } from '@/lib/authSampling';
 import { ensureDefaultProfile } from '@/db/defaultProfile';
@@ -2997,6 +2998,13 @@ function expectedClerkIssuer(): string | null {
 const authOptimizationsEnabled = () => process.env.MCP_AUTH_OPTIMIZATIONS !== 'disabled';
 
 /**
+ * Kill switch for the connection-touch memo (src/lib/connectionTouchMemo.ts):
+ * set MCP_CONNECTION_TOUCH_MEMO=disabled to run the eager resolveConnection
+ * and capture every mcp_client_initialize on every request again.
+ */
+const connectionTouchMemoEnabled = () => process.env.MCP_CONNECTION_TOUCH_MEMO !== 'disabled';
+
+/**
  * Optimization A: one remote JWKS per function instance instead of per
  * request. jose caches fetched keys inside this object — it refetches
  * immediately when it sees an unknown `kid` (rate-limited by
@@ -3186,7 +3194,14 @@ const verifyMcpAuth = async (req: Request, bearerToken?: string) => {
   // regression shows up here (and as vanishing $mcp_tool_call volume) long
   // before anyone reads function logs.
   const outcome = authInfo ? 'ok' : bearerToken ? 'invalid_token' : 'no_token';
-  if (outcome !== 'ok' || inSuccessSample()) {
+  const captureAuthAttempt = outcome !== 'ok' || inSuccessSample();
+  // Eager-resolve cost telemetry, filled in below and captured with the auth
+  // attempt (the memo's hit rate and the DB touch's latency are only
+  // observable here — tool calls carry their own duration).
+  let connectionResolve: 'ran' | 'skipped' | 'error' | undefined;
+  let connectionResolveMs: number | undefined;
+  const captureAuthAttemptNow = () => {
+    if (!captureAuthAttempt) return;
     captureServerEvent(
       (authInfo?.extra?.userId as string | undefined) ?? 'anonymous-mcp',
       'mcp_auth_attempt',
@@ -3200,9 +3215,11 @@ const verifyMcpAuth = async (req: Request, bearerToken?: string) => {
         error_class: clerkErrorClass,
         kid: outcome === 'invalid_token' ? kid : undefined,
         method: req.method,
+        connection_resolve: connectionResolve,
+        connection_resolve_ms: connectionResolveMs,
       },
     );
-  }
+  };
 
   // Install-funnel measurement (pre-Clerk visibility): an unauthenticated MCP
   // request is the first FGAC-owned touchpoint when a client adds the
@@ -3241,23 +3258,49 @@ const verifyMcpAuth = async (req: Request, bearerToken?: string) => {
     // user-agent along so $mcp_tool_call can be split by client product.
     (authInfo as { extra?: Record<string, unknown> }).extra = { ...authInfo.extra, userAgent, profileSlug };
     // Once-per-MCP-session product attribution (the initialize handshake).
+    // Coalesced per user+client per instance: automation that spawns a fresh
+    // Claude Code process every ~30 s (2026-09-08: ~1,800 handshakes a day
+    // from one idle client) captures once per window with the suppressed
+    // count riding along — sum(1 + coalesced_initializes) is the true count.
     if (clientInfo && userId) {
-      captureServerEvent(userId, 'mcp_client_initialize', {
-        client_name: clientInfo.name,
-        client_version: clientInfo.version,
-        client_id: clientId,
-        user_agent: userAgent,
-      });
+      const coalesced =
+        clientId && connectionTouchMemoEnabled() ? coalesceInitialize(userId, clientId) : 0;
+      if (coalesced !== undefined) {
+        captureServerEvent(userId, 'mcp_client_initialize', {
+          client_name: clientInfo.name,
+          client_version: clientInfo.version,
+          client_id: clientId,
+          user_agent: userAgent,
+          coalesced_initializes: coalesced,
+        });
+      }
     }
     if (userId && clientId) {
-      try {
-        await resolveConnection(userId, clientId, clientInfo, profileSlug);
-      } catch (err) {
-        console.error('[MCP] Eager connection creation failed:', describeErrorForLog(err));
+      // The touch is four sequential Neon round trips whose result nothing
+      // here consumes (tool handlers re-resolve in requireApproval). Skip it
+      // while the same client was touched within the memo window — an
+      // initialize still runs until the row's product name is backfilled.
+      const memoOn = connectionTouchMemoEnabled();
+      if (memoOn && shouldSkipEagerResolve(userId, clientId, !!clientInfo)) {
+        connectionResolve = 'skipped';
+      } else {
+        const t0 = performance.now();
+        try {
+          const result = await resolveConnection(userId, clientId, clientInfo, profileSlug);
+          connectionResolve = 'ran';
+          if (memoOn && result.authorized) {
+            recordEagerResolve(userId, clientId, result.clientName !== clientId);
+          }
+        } catch (err) {
+          connectionResolve = 'error';
+          console.error('[MCP] Eager connection creation failed:', describeErrorForLog(err));
+        }
+        connectionResolveMs = Math.round(performance.now() - t0);
       }
     }
   }
 
+  captureAuthAttemptNow();
   return authInfo;
 };
 

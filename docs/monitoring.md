@@ -21,6 +21,9 @@ Captured in `verifyMcpAuth` (`src/app/api/mcp/route.ts`):
 | `optimizations_enabled` | kill-switch state at capture time |
 | `error_class` | Clerk auth() error name, when it threw |
 | `kid` | signing-key id from the (unverified) token header, on `invalid_token` only |
+| `method` | HTTP verb (`POST`; a `GET` is a client opening the optional SSE stream — Claude Code never does, claude.ai rarely) |
+| `connection_resolve` | what the auth layer's eager `resolveConnection` did on this request: `ran` (four Neon round trips), `skipped` (touched within the last 5 minutes by the same user+client — `src/lib/connectionTouchMemo.ts`), `error`. Added 2026-09-08 |
+| `connection_resolve_ms` | wall time of that eager resolve when it ran; the per-request DB cost of a handshake (see 7.15) |
 
 Volume control: failures always capture; successes are sampled **1 in 20 per
 request** (`success_sample_rate` carries the factor). Multiply `outcome=ok`
@@ -719,3 +722,76 @@ relative to `approved_links`; `replays` is the duplicate-submit rate, split it
 by `properties.path` (`picked` vs `grant_active`) when it climbs. Pair with
 `$rageclick` on `$pathname = '/dashboard/approve'` — the pre-fix signature was
 one rage-clicking user per day, every one of them on a file grant.
+
+**7.15 — Handshake loops (`mcp_client_initialize` vs `$mcp_tool_call`).**
+Added 2026-09-08. Two Claude Code users ran automation that spawned a fresh
+`claude` process every ~30 s (one, 18 h a day; the other every ~2 min) — each
+spawn re-runs the MCP handshake (`initialize`, `notifications/initialized`,
+`tools/list`; three authenticated POSTs, no GET) and ends without a tool
+call. Result: claude-code initializes went from ~6 to ~37 per person per day
+while tool-call volume stayed flat, and `mcp_client_initialize` became ~50%
+of all events in the project. The pattern is the Agent SDK / headless-loop
+shape (each `query()` or `claude -p` is a new process; subagents share the
+parent's connection; the two interleaving `client_version`s from one
+`client_id` are a bundled SDK CLI next to an auto-updating global install —
+OAuth registrations live in the Keychain and are shared machine-wide). It is
+**not** a server-side reconnect: Claude Code never opens the SSE GET, so the
+stateless 405 is never seen, and the `server/discover` probe rate stays at
+the cached ~1 per 15 minutes.
+
+What the server does about it (PR for `claude/adoring-snyder-eea430`): the
+auth layer's eager `resolveConnection` (four sequential Neon round trips per
+authenticated request, result unused for authorization) is skipped when the
+same user+client was touched within 5 minutes on this instance, and the
+initialize event is coalesced in the same window with the suppressed count
+carried on the next capture. Kill switch `MCP_CONNECTION_TOUCH_MEMO=disabled`.
+Nothing is rate-limited or rejected — these are paying users whose tool calls
+succeed.
+
+```sql
+-- Clients whose handshakes dwarf their tool calls, 24 h. Sessions are
+-- sum(1 + coalesced_initializes), never count() (coalesced since 2026-09-08).
+SELECT cityHash64(properties.client_id) % 100000 AS client_hash,
+       arrayStringConcat(groupUniqArrayIf(properties.client_name, event = 'mcp_client_initialize'), ',') AS client_names,
+       sumIf(1 + toInt(coalesce(properties.coalesced_initializes, 0)), event = 'mcp_client_initialize') AS inits,
+       countIf(event = '$mcp_tool_call') AS calls,
+       uniq(distinct_id) AS users
+FROM events
+WHERE event IN ('mcp_client_initialize', '$mcp_tool_call')
+  AND properties.environment = 'production'
+  AND timestamp > now() - INTERVAL 24 HOUR
+GROUP BY client_hash
+HAVING inits > 200
+ORDER BY inits DESC
+```
+
+Reading it: a row with `inits > 200` and `calls < inits / 20` is a handshake
+loop — **informational, not an incident**. Report it as "N loop clients, M
+initializes" and keep those clients out of per-request health ratios
+(auth-failure rate, discover-probe share, initializes-per-person), which they
+otherwise dominate. It becomes actionable only if (a) a loop client's tool
+calls start failing (then it is a stuck client, not a loop), or (b) the
+`connection_resolve = 'skipped'` share on `mcp_auth_attempt` for that client
+is low despite the loop (memo not absorbing it — instance churn or the kill
+switch), or (c) total `mcp_client_initialize` rows exceed ~2,000/day again
+after coalescing, which means the window is too short for a new pattern.
+
+```sql
+-- Is the memo absorbing the loop? Share of authenticated requests that
+-- skipped the eager DB touch, and the cost of the ones that ran (24 h).
+SELECT properties.connection_resolve AS resolve,
+       count() AS sampled_requests,
+       quantile(0.5)(toFloat(properties.connection_resolve_ms)) AS p50_ms,
+       quantile(0.95)(toFloat(properties.connection_resolve_ms)) AS p95_ms
+FROM events
+WHERE event = 'mcp_auth_attempt' AND properties.environment = 'production'
+  AND properties.outcome = 'ok' AND timestamp > now() - INTERVAL 24 HOUR
+GROUP BY resolve
+```
+
+Healthy after the deploy: `skipped` is the majority of sampled `ok` rows
+(loop clients alone are ~85% of authenticated requests), `ran` p50 sits at
+Neon-from-iad1 latency (tens of ms for four round trips), and `error` is zero.
+PostHog volume from handshakes is not a plan problem today (~6% of the free
+tier's 1M events/month at the pre-coalescing rate); the threshold that would
+make it one is the ~2,000 rows/day in (c) above.

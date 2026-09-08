@@ -36,7 +36,7 @@ keep internal/QA traffic out of the numbers.
 | `proxy_request` | server (`/api/proxy/[...path]`) | `service` (gmail/sheets/drive), `method`, `status`, `outcome` (`success`/`auth_failed`/`denied`/`timeout`/`error`), `duration_ms`, `proxy_key_id`, `account_email`, `account_delegated`, `google_ms`, `token_ms`; upstream failures add `error_status` (`timeout`/`network`) |
 | `mcp_connection_created` | server (`/api/mcp` auth layer) | `connection_id`, `client_id`, `client_name`/`client_version` (from MCP `initialize` clientInfo, when the creating request was one — **in practice ~never**: the client's concurrent SSE GET usually wins the row-insert race, so this event fires nameless; measured 0/10 with a name 2026-08-27→29. Use `mcp_connection_client_identified` or person-level `mcp_client_initialize` for client attribution), `auto_attached`, `account_age_seconds` |
 | `mcp_connection_client_identified` | server (`/api/mcp` auth layer, backfill-on-touch) | `connection_id`, `client_id`, `client_name`, `client_version`. Fires **once per connection**, on the first initialize that replaces the opaque `client_id` placeholder name — the reliable connection→client-product mapping (join on `connection_id`) |
-| `mcp_client_initialize` | server (`/api/mcp` auth layer, every authenticated `initialize`) | `client_name`, `client_version` (the client's self-reported MCP clientInfo), `client_id`, `user_agent`. Once per MCP session — the substrate for the per-product split (Cowork / Claude Code / Claude.ai) |
+| `mcp_client_initialize` | server (`/api/mcp` auth layer, authenticated `initialize`) | `client_name`, `client_version` (the client's self-reported MCP clientInfo), `client_id`, `user_agent`, `coalesced_initializes`. One MCP session = one initialize, but since 2026-09-08 the capture is **coalesced per user+client per function instance** (5-minute window, `src/lib/connectionTouchMemo.ts`): the first initialize an instance sees is always captured, later ones inside the window are suppressed and counted, and the next captured event carries the suppressed count. **Count sessions as `sum(1 + coalesced_initializes)`, never `count()`.** Why: automation that spawns a fresh Claude Code process every ~30 s made this the largest event in the project (~50% of daily volume, 2 clients) — see `docs/monitoring.md` 7.15. The substrate for the per-product split (Cowork / Claude Code / Claude.ai) |
 | `delegation_created` | server (dashboard action) | `delegate_email`, `reactivated` |
 | `account_linked` | server (dashboard action) | `target_email`, `delegated`, `via` |
 | `approval_link_minted` | server (`/api/mcp` — policy denial, send denial, `request_access`) | `action`, `request_id`, `target_hash`, `mint_count`, `via` (`send_denial`/`request_access`; absent for policy denials). **Fires once per mint ATTEMPT**, so `uniq(request_id)` is demand and `count()` is retry pressure |
@@ -418,8 +418,10 @@ also fires `mcp_connection_client_identified`, since the creating request is
 in practice never the initialize POST and `mcp_connection_created` therefore
 fires nameless). It then rides on
 every `$mcp_tool_call` (via `requireApproval`) alongside `user_agent`, and
-`mcp_client_initialize` records it once per session — this is what makes the
-per-product split (Cowork / Claude Code / Claude.ai) reproducible. Coverage
+`mcp_client_initialize` records it per session (coalesced per client within a
+5-minute window per instance — sum `1 + coalesced_initializes` for session
+counts) — this is what makes the per-product split (Cowork / Claude Code /
+Claude.ai) reproducible. Coverage
 starts at the deploy; rows for clients that never re-initialize stay opaque.
 Capturing DCR `client_name` at OAuth registration remains a possible
 supplement.
