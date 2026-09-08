@@ -5,6 +5,7 @@ import { useGooglePicker, PickedFile } from "../useGooglePicker";
 import { TrackedVideoEmbed } from "@/components/TrackedVideoEmbed";
 import { DRIVE_FILE_KINDS, type DriveFileKind } from "@/lib/driveFileKinds";
 import type { ApprovalSearchParams } from "@/lib/approvalLinks";
+import { ApproveSubmitButton } from "./ApproveSubmitButton";
 
 const SHEETS_DEMO_EMBED = "https://share.descript.com/embed/Fv9pwXugLUa";
 
@@ -181,12 +182,11 @@ export function FileApprovalFlow({
         </fieldset>
       )}
 
-      <button
-        type="submit"
-        className="rounded-sm bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground hover:opacity-90"
-      >
-        {substituting ? "Grant access to what I picked" : "Approve this grant"}
-      </button>
+      {/* Guarded submit (disables + "Approving…" while the action runs). The
+          plain button this replaced let every extra click queue another
+          server action — the 2026-09 duplicate-approval / duplicate-rule
+          source. */}
+      <ApproveSubmitButton label={substituting ? "Grant access to what I picked" : "Approve this grant"} />
       {picked && !substituting && (
         <button
           type="button"

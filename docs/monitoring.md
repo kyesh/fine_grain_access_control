@@ -688,3 +688,34 @@ refusal (`denial_code: 'google_token_unavailable'`, outcome
 stay ❌ `failed` with retry-first text. A rising `retry_failed` count, or a
 `recovered` count far above the old failure rate, means Clerk is degrading
 rather than racing.
+
+**7.14 — Approval-link conversion, per request (never per event).** The
+approve page's file-grant button shipped without a pending guard; until the
+2026-09-05 fix a rage-click on a slow sheets/docs approval re-ran the server
+action per click, and each run re-fired `approval_link_approved` and inserted a
+duplicate rule (one production link: 14 approve events, 11 rules for one sheet
+in 12 s). Raw event counts therefore overstate conversion for 2026-08-25 →
+2026-09-05 (71% raw vs 37% per link in the last pre-fix week). Count links:
+
+```sql
+SELECT properties.action AS action,
+       uniqIf(properties.request_id, event = 'approval_link_minted')   AS minted_links,
+       uniqIf(properties.request_id, event = 'approval_link_approved') AS approved_links,
+       countIf(event = 'approval_link_approved')                        AS approve_events,
+       countIf(event = 'approval_link_replayed')                        AS replays,
+       round(100 * uniqIf(properties.request_id, event = 'approval_link_approved')
+                 / greatest(uniqIf(properties.request_id, event = 'approval_link_minted'), 1), 1) AS pct
+FROM events
+WHERE event IN ('approval_link_minted', 'approval_link_approved', 'approval_link_replayed')
+  AND properties.environment = 'production'
+  AND timestamp > now() - INTERVAL 7 DAY
+GROUP BY action ORDER BY minted_links DESC
+```
+
+Healthy after the fix: `approve_events = approved_links` for every action (any
+excess is a server-side dedupe gap — the client guard alone cannot make that
+equality hold, a slow network can still land two POSTs), and `replays` small
+relative to `approved_links`; `replays` is the duplicate-submit rate, split it
+by `properties.path` (`picked` vs `grant_active`) when it climbs. Pair with
+`$rageclick` on `$pathname = '/dashboard/approve'` — the pre-fix signature was
+one rage-clicking user per day, every one of them on a file grant.

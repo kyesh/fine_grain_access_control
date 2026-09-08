@@ -1136,10 +1136,38 @@ async function applyFileGrantApproval(opts: {
   };
 
   if (picked && picked.length > 0) {
+    // Replay dedupe (2026-09-05). This path used to skip the grant-level
+    // idempotency check entirely (a pick may substitute a different file), so
+    // every extra submit of the same form re-verified each pick with Google,
+    // inserted ANOTHER rule per pick, and re-fired approval_link_approved —
+    // one production link wrote 11 rules for one sheet in 12 s. Picks whose
+    // grant is already live are settled here without a Google call; if that
+    // is all of them, the submit is a replay and writes nothing.
+    const fileAction = kind === "sheet"
+      ? (readWrite ? "sheets_write" : "sheets_expose")
+      : (readWrite ? "docs_write" : "docs_expose");
+    const alreadyActive: string[] = [];
+    const toVerify: { id: string; name?: string }[] = [];
+    for (const s of picked.slice(0, 10)) {
+      if (typeof s?.id !== "string" || !s.id) continue;
+      const active = await grantActiveForApproval(
+        { action: fileAction, userId: dbUser.id, ...(kind === "sheet" ? { spreadsheetId: s.id } : { documentId: s.id }) },
+        key.id,
+      );
+      if (active) alreadyActive.push(s.id); else toVerify.push(s);
+    }
+    if (toVerify.length === 0 && alreadyActive.length > 0) {
+      captureServerEvent(dbUser.clerkUserId, "approval_link_replayed", {
+        action: p.action, request_id: p.requestId, path: "picked", picked_count: alreadyActive.length,
+      });
+      return grantedResult(
+        alreadyActive[0],
+        `${describe()} — this was already approved, so nothing changed. The agent can retry its request now.`,
+      );
+    }
     const verifyPicks = async () => {
       const out: { id: string; name: string | null }[] = [];
-      for (const s of picked.slice(0, 10)) {
-        if (typeof s?.id !== "string" || !s.id) continue;
+      for (const s of toVerify) {
         const check = googleToken
           ? await verifyFileGrant(kind, googleToken, s.id)
           : { state: "missing" as const };
@@ -1164,13 +1192,17 @@ async function applyFileGrantApproval(opts: {
     }
     for (const v of verified) await insertFileRule(v.id, v.name);
 
-    const substituted = !verified.some(v => v.id === fileId);
+    // Substitution is judged over everything the user picked, including picks
+    // settled above as already granted, so a re-pick of the agent's own file
+    // does not read as a substitution just because it needed no new rule.
+    const substituted = !verified.some(v => v.id === fileId) && !alreadyActive.includes(fileId);
     captureServerEvent(dbUser.clerkUserId, verificationEvent, {
       result: "ok", via: "magic_link", [idProp]: verified[0].id, request_id: p.requestId,
     });
     await markApprovalRequestApproved(p.requestId);
     captureServerEvent(dbUser.clerkUserId, "approval_link_approved", {
-      action: p.action, substituted, granted_count: verified.length, request_id: p.requestId,
+      action: p.action, substituted, granted_count: verified.length,
+      already_active_count: alreadyActive.length, request_id: p.requestId,
     });
     revalidateDashboard();
     const names = verified.map(v => v.name || v.id).join(", ");
@@ -1293,6 +1325,12 @@ export async function approveMagicLink(
       : p.action === "docs_expose" && wantsWrite ? "docs_write"
         : p.action;
   if (!pickedSheets?.length && await grantActiveForApproval({ ...p, action: effectiveAction }, key.id)) {
+    // Replays are counted, not hidden: approval_link_approved fires only when a
+    // grant is written, so per-link conversion stays a uniq(request_id) join
+    // and this event is the duplicate-submit rate (docs/monitoring.md 7.14).
+    captureServerEvent(dbUser.clerkUserId, "approval_link_replayed", {
+      action: p.action, request_id: p.requestId, path: "grant_active",
+    });
     return {
       ok: true,
       description: `${describeApproval(p)} — this was already approved, so nothing changed. The agent can retry its request now.`,

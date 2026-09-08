@@ -364,3 +364,23 @@ attributable to it.
     also fires for `reason = 'no_token'` (it did not before this date).
   - `error_reason` stays absent on every token-layer row — it is the
     Google-response property and the token layer never reached Google.
+
+### A20: approval_link_approved counts written grants; replays are a separate event
+- Run capability 14 A15's server half (two submits of one file-grant approval
+  landing together) and its generic twin (two `requestSubmit()` on a
+  send-whitelist approval), then query the affected user's events for the last
+  hour: `SELECT event, properties.action, properties.path, count() FROM events
+  WHERE event IN ('approval_link_approved','approval_link_replayed','rule_saved')
+  AND timestamp >= now() - INTERVAL 1 HOUR GROUP BY 1,2,3`
+- **Expected**: per link exactly ONE `approval_link_approved` and ONE
+  `rule_saved{via=magic_link}`; every extra submit is an
+  `approval_link_replayed` carrying the same `request_id` and `action`, with
+  `path='picked'` for the file grant and `path='grant_active'` for the send
+  grant. `count(approval_link_approved) = uniq(request_id)` over the run.
+  A replayed file approval makes NO `sheets_grant_verification` /
+  `docs_grant_verification` event (no Google call)
+- **Regression**: between 2026-08-25 and 2026-09-05 the picked-file path
+  re-fired `approval_link_approved` per replay, so raw counts overstated
+  conversion (71% raw vs 37% per link in the last pre-fix week). Funnel
+  queries must divide `uniq(request_id)` by `uniq(request_id)` —
+  `docs/monitoring.md` 7.14

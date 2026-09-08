@@ -41,7 +41,8 @@ keep internal/QA traffic out of the numbers.
 | `account_linked` | server (dashboard action) | `target_email`, `delegated`, `via` |
 | `approval_link_minted` | server (`/api/mcp` — policy denial, send denial, `request_access`) | `action`, `request_id`, `target_hash`, `mint_count`, `via` (`send_denial`/`request_access`; absent for policy denials). **Fires once per mint ATTEMPT**, so `uniq(request_id)` is demand and `count()` is retry pressure |
 | `approval_link_opened` | server (approve-page load, `/dashboard/approve`) | `status` (`fresh`/`already_granted`/`wrong_account`/`invalid`), `request_id` (real id for `wrong_account` — recomputed against the resolved owner; `undefined` only for `invalid`), `action`, `agent_driven`, `user_agent` |
-| `approval_link_approved` | server (`actions.ts`, all approval paths) | `action`, `request_id`; per-file grants add `substituted` and `granted_count` |
+| `approval_link_approved` | server (`actions.ts`, all approval paths) | `action`, `request_id`; per-file grants add `substituted` and `granted_count`. **Fires only when a grant is actually written.** A submit that finds every grant already active fires `approval_link_replayed` instead (since PR for `claude/dreamy-tesla-946fdc`, 2026-09-05). Before that fix the picked-file path re-fired this event (and inserted a duplicate rule) on every extra click of an unguarded button — raw counts between 2026-08-25 and the fix are inflated (81 links → 93 events in the last pre-fix week); read the funnel as `uniq(request_id)`, never `count()` |
+| `approval_link_replayed` | server (`actions.ts`, `approveMagicLink` / `applyFileGrantApproval`) | `action`, `request_id`, `path` (`grant_active` = generic idempotency short-circuit; `picked` = every picked file already granted). A no-op re-submit of a link whose grant is already live: a double-click that slipped past the client-side guard, a re-opened permanent link, or a retry after the success page. Not a funnel stage — its rate is the duplicate-submit rate. Runbook: `monitoring.md` 7.14 |
 | `read_restriction_enforced` | server (`/api/mcp`) | `via` (tool name), `restriction` |
 | `rule_saved` | server (`reportRuleSave` in dashboard `actions.ts` — manual rule form, `exposeFilesFromPicker`, magic-link `insertFileRule`; `grantFileAccessPOST` in `fileAccessHandlers.ts`) | `mode` (`create`/`update`), `service`, `action_type`, `via` (`dashboard_manual` = manual rule form, Gmail-only in today's UI / `dashboard_picker` = server-action Picker expose (recovery + profile flows) / `grant_api` = the REST grant endpoint — the dashboard's Picker manager AND any API caller, so it is the only reachable seam for a hand-typed sheet/doc id / `magic_link` = approval-page grant), `file_id` (when the rule targets a sheet/doc — the join key to `$mcp_tool_call.file_id`); `dashboard_manual` adds `scoped`, `assigned_keys`, and pattern shape (`pattern_kind`/`pattern_length` — the pattern itself is NEVER sent: send patterns are real addresses); `dashboard_picker` adds `profile_scoped`; `grant_api` adds `assigned_keys` when key syncing was requested; `magic_link` adds `request_id` (joins the approval funnel) |
 | `rule_save_failed` | server (dashboard `actions.ts`, manual rule form validation) | `mode`, `service`, `action_type`, `via` (`dashboard_manual`), `reason`, pattern shape props as above |
@@ -105,6 +106,16 @@ wrong thing. The property IS ingested; read it as
 dot-access form made a correctly-emitted property look missing on both
 production and development events. `action`, `request_id`, `agent_driven` and
 `user_agent` are unaffected and work with dot access.
+
+**Approvals are counted per link, and only real writes count.** Since 2026-09-05
+`approval_link_approved` fires once per grant actually written; replays of an
+already-live grant fire `approval_link_replayed`. Between 2026-08-25 and that fix
+the picked-file approval path had no client-side pending guard and no
+server-side dedupe, so one rage-clicked link could emit 14–20 approve events
+(and insert as many duplicate rules). Conversion computed from raw event counts
+over that window is wrong in the multi-fire direction — 7d to 2026-09-05 read
+66/93 = 71% raw against 30/81 = 37% per link. Always divide
+`uniq(request_id)` by `uniq(request_id)`; see `monitoring.md` 7.14 for the query.
 
 `approval_requests` (Postgres) mirrors this in SQL — one row per request with
 `mint_count`, `opened_at`, and `approved_at` — so the same questions are
