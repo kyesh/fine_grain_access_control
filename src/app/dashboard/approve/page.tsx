@@ -2,8 +2,8 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { headers } from "next/headers";
 import { auth } from "@clerk/nextjs/server";
-import { describeApproval, peekApprovalParams, APPROVAL_PARAMS, type ApprovalSearchParams } from "@/lib/approvalLinks";
-import { markApprovalRequestOpened } from "@/lib/approvalRequests";
+import { describeApproval, peekApprovalParams, APPROVAL_PARAMS, type ApprovalPayload, type ApprovalSearchParams } from "@/lib/approvalLinks";
+import { markApprovalRequestOpened, getApprovalRequestResourceName } from "@/lib/approvalRequests";
 import { captureServerEvent } from "@/lib/posthogServer";
 import { approveMagicLink, resolveApprovalLink } from "../actions";
 import { ApproveSubmitButton } from "./ApproveSubmitButton";
@@ -201,7 +201,15 @@ export default async function ApprovePage({
     );
   }
 
-  const p = resolved.payload;
+  // Title stored at mint time (request_access `resourceName`) — the only name
+  // source for a file Google does not share with FGAC yet: the URL never
+  // carries one and Drive cannot resolve an unshared id. Without it the
+  // pick-first panel shows a raw Google id while the Picker lists files by
+  // title (the 2026-09 Picker-cancel leak).
+  const storedName = resolved.payload.resourceName
+    ? null
+    : await getApprovalRequestResourceName(resolved.payload.requestId);
+  const p: ApprovalPayload = storedName ? { ...resolved.payload, resourceName: storedName } : resolved.payload;
 
   if (resolved.status === "already_granted") {
     return (

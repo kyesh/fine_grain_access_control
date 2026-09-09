@@ -27,6 +27,10 @@ export async function recordApprovalMint(opts: {
   proxyKeyId: string;
   action: string;
   targetHash?: string;
+  /** Agent-supplied file title (request_access). First non-empty value wins:
+   * a later mint without a name never erases one, and a later mint WITH a
+   * name fills a row that was minted nameless by a policy denial. */
+  resourceName?: string;
 }): Promise<number | null> {
   try {
     const [row] = await db.insert(approvalRequests)
@@ -36,18 +40,39 @@ export async function recordApprovalMint(opts: {
         proxyKeyId: opts.proxyKeyId,
         action: opts.action,
         targetHash: opts.targetHash ?? null,
+        resourceName: opts.resourceName ?? null,
       })
       .onConflictDoUpdate({
         target: approvalRequests.requestId,
         set: {
           mintCount: sql`${approvalRequests.mintCount} + 1`,
           lastMintedAt: new Date(),
+          resourceName: sql`coalesce(${approvalRequests.resourceName}, excluded.resource_name)`,
         },
       })
       .returning({ mintCount: approvalRequests.mintCount });
     return row?.mintCount ?? null;
   } catch (err) {
     console.error('[approvalRequests] mint record failed:', err);
+    return null;
+  }
+}
+
+/**
+ * Title stored at mint time, if any — the approve page's only source of a
+ * human-readable name for a file Google does not share with FGAC yet (the
+ * URL never carries one, and Drive cannot resolve an unshared id). Read-only
+ * and best-effort: a lookup failure renders the id, never an error.
+ */
+export async function getApprovalRequestResourceName(requestId: string): Promise<string | null> {
+  try {
+    const row = await db.select({ resourceName: approvalRequests.resourceName })
+      .from(approvalRequests)
+      .where(eq(approvalRequests.requestId, requestId))
+      .limit(1).then(r => r[0]);
+    return row?.resourceName?.trim() || null;
+  } catch (err) {
+    console.error('[approvalRequests] resource name lookup failed:', err);
     return null;
   }
 }
