@@ -145,3 +145,31 @@
   a likely cause alongside the unchecked-checkbox case. If the token state
   cannot be arranged, record this assertion as blocked with the reason — never
   as a pass
+
+### A12: A revoked Google grant is a 🚫 refusal with a reconnect link, and list_accounts says so first
+- **Fixture (real user flow, 2026-09-09):** as a QA user, revoke FGAC's access
+  from the Google side — Google Account → Security → "Third-party apps with
+  account access" → FGAC → Remove access (a Google surface: `computer` clicks,
+  never JS clicks; Path B if the pane cannot drive it). Do NOT touch Clerk or
+  the database. Wait for the current access token to expire (≤ 1 h; Clerk
+  refreshes on the next fetch and Google answers `invalid_grant` — confirm with
+  the token bridge returning an error), then as the agent call `list_accounts`,
+  `gmail_list`, and `sheets_get_spreadsheet` on that account
+- **Expected**: `list_accounts` reports the account as `google_token:
+  'unavailable'`, `google_token_failure: 'grant_revoked'`, WITH a
+  `reconnect_url` bound to that account (`?reconnect=1&for=<email>`) and a
+  `reconnect_by`, and `next_steps.reconnect` names the account, says every call
+  on it fails until reconnected, says "do not retry", and carries the same link.
+  Each tool call answers "🚫 Not available yet: Google has expired or revoked
+  FGAC's access to '<email>' …" quoting Google's "Token has been expired or
+  revoked", says STOP / retrying will NOT help, and ends with the one-click
+  link — never the ❌ "usually temporary … Retry ONCE" text, and never a second
+  server-side attempt (`google_token_fetch_failed` carries `retried: false`,
+  `clerk_status: 400`, `clerk_code: 'oauth_token_retrieval_error'`, `reason:
+  'grant_revoked'`; the `$mcp_tool_call` row is `denied_by_policy` with
+  `denial_code: 'google_token_unavailable'`). Opening the link signed in as that
+  account lands on Google's CONSENT screen (Google no longer holds the grant, so
+  a chooser-only pass is a regression), and after consent A4 passes again. If
+  the revocation cannot be arranged in the environment, `npx tsx
+  scripts/test-google-token-failure.ts` pins the classification and wording —
+  record the assertion as covered by unit test, with the reason, not as a pass

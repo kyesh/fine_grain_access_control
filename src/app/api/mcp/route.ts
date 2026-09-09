@@ -504,8 +504,12 @@ async function getGoogleToken(
       // calls on the same delegated mailbox ~100 ms apart on its first
       // touch of the day, one fails at Clerk in ~80-120 ms, the other
       // succeeds, and every later call succeeds. Telling that agent to
-      // "reconnect" daily was the bug. Timeouts (budget already spent) and
-      // refresh failures (deterministic) are not retried.
+      // "reconnect" daily was the bug. Timeouts (budget already spent),
+      // refresh failures and revoked grants (deterministic — Google refused
+      // the refresh, 2026-09-09 triage) are not retried. Measured 2026-09-09:
+      // the retry had recovered ZERO calls since it shipped (§7.13), and
+      // every `retry_failed` row was a revoked grant — so for that class it
+      // only added 300 ms plus a second Clerk round-trip.
       const first = classifyClerkTokenError(firstErr);
       if (!first.retryable) throw firstErr;
       retried = true;
@@ -528,10 +532,14 @@ async function getGoogleToken(
     // arguing from timing alone.
     const cls = classifyClerkTokenError(err);
     if (!quiet) {
+      // clerk_code rides on the tool call too (since 2026-09-09), so the
+      // directory-parity error table can split "dead grant" from "upstream
+      // trouble" without a join to the standalone event.
       addToolCallProps({
         token_ms: Date.now() - tokenStarted,
         google_token_error: cls.reason,
         ...(retried ? { google_token_retry: 'retry_failed' } : {}),
+        ...(cls.clerkCode ? { google_token_clerk_code: cls.clerkCode } : {}),
       });
       captureServerEvent(keyOwner.clerkUserId, 'google_token_fetch_failed', {
         reason: cls.reason,
@@ -540,6 +548,7 @@ async function getGoogleToken(
         retried,
         ...(cls.clerkStatus !== undefined ? { clerk_status: cls.clerkStatus } : {}),
         ...(cls.clerkCode ? { clerk_code: cls.clerkCode } : {}),
+        ...(cls.providerError ? { provider_error: cls.providerError } : {}),
       });
     }
     console.error(`[MCP] Google token fetch failed (${cls.reason}${retried ? ', after retry' : ''}) for target mailbox:`, describeErrorForLog(err));
@@ -2107,6 +2116,12 @@ const handler = createMcpHandler(
           };
         });
         const driveMissing = accountDetails.find(d => d.drive_file === 'missing');
+        // A dead grant that a reconnect repairs gets a top-level nudge, not
+        // just a per-entry field: list_accounts is the agent's first call,
+        // and on 2026-09-08/09 the affected agents called it right after
+        // their first failure and got `google_token: 'unavailable'` with no
+        // instruction — then kept retrying (14 identical Sheets failures).
+        const tokenBroken = accountDetails.find(d => d.google_token === 'unavailable' && d.reconnect_url);
 
         // Onboarding nudge: list_accounts is most new users' first (and for
         // many, only) call — 2026-08 launch analytics showed a large cohort
@@ -2118,6 +2133,9 @@ const handler = createMcpHandler(
           default: conn.user.email,
           nickname: conn.nickname,
           next_steps: {
+            ...(tokenBroken ? {
+              reconnect: `'${tokenBroken.email}' has no working Google grant (${tokenBroken.google_token_failure}) — EVERY call on it will fail until it is reconnected, so do not retry. Give the user this one-click link, to be opened by ${tokenBroken.reconnect_by}: ${tokenBroken.reconnect_url}`,
+            } : {}),
             gmail: "Read a mailbox with gmail_list (pass account: '<address>' to target a specific one; defaults to the primary). Reads work out of the box.",
             sheets: driveMissing
               ? `'${driveMissing.email}' is connected WITHOUT the drive.file scope — every Sheets call on it will fail until the account owner reconnects: ${driveMissing.reconnect_url}`

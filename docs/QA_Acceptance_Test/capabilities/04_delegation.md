@@ -52,7 +52,7 @@
   never coerced to `missing`). A healthy QA account reports `google_token:
   'ok'` and both scopes `granted` with no `reconnect_url`; an account with a
   missing scope (or a token failure that cannot clear on its own —
-  `no_token` / `refresh_failed`) carries a `reconnect_url` ending in
+  `no_token` / `refresh_failed` / `grant_revoked`) carries a `reconnect_url` ending in
   `?reconnect=1&for=<that account's email>` (URL-encoded — the link is bound
   to the account it repairs) and a `reconnect_by` that, for a delegated
   mailbox, names the OWNER as the one who must open it signed in as that
