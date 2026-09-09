@@ -720,6 +720,41 @@ by `properties.path` (`picked` vs `grant_active`) when it climbs. Pair with
 `$rageclick` on `$pathname = '/dashboard/approve'` — the pre-fix signature was
 one rage-clicking user per day, every one of them on a file grant.
 
+**7.15 — Picker cancel → recovery, per user.** A file Google does not share
+with FGAC yet cannot be resolved by title, so a denial-minted approval link
+shows Google's opaque file id while Google's Picker lists files by NAME.
+Measured 2026-09-03 → 09-07, 13 of 33 Picker opens (approve page + dashboard)
+ended in a cancel, and the two users who cancelled on the approve page never
+approved. Since 2026-09-08 a cancel renders a recovery panel with an in-place
+Try again, `picker_opened`/`picker_cancelled` carry `attempt`, and
+`request_access` can pass the file's title (`has_resource_name` on the mint).
+Per user, did a cancel lead to a retry, and did the retry pick?
+
+```sql
+SELECT cityHash64(person.properties.email) % 100000 AS u,
+       countIf(event = 'picker_opened')                              AS opens,
+       countIf(event = 'picker_cancelled')                           AS cancels,
+       countIf(event = 'picker_opened' AND properties.attempt > 1)   AS retries,
+       countIf(event = 'picker_picked')                              AS picks,
+       round(avgIf(properties.elapsed_ms, event = 'picker_cancelled') / 1000, 1) AS avg_cancel_s,
+       groupUniqArray(properties.$pathname)                          AS pages
+FROM events
+WHERE event IN ('picker_opened', 'picker_cancelled', 'picker_picked')
+  AND properties.environment = 'production'
+  AND person.properties.email NOT IN (/* internal / QA accounts — .qa_test_emails.json + founder addresses, never inline them here */)
+  AND timestamp > now() - INTERVAL 7 DAY
+GROUP BY u HAVING cancels > 0 ORDER BY cancels DESC
+```
+
+Healthy: most rows with `cancels > 0` also have `retries > 0` and `picks > 0`
+(the panel got them back in and they found the file); `avg_cancel_s` under ~10 s
+with no retry is a user who could not tell which file to pick — check
+`has_resource_name` on their `approval_link_minted` rows (0 = the agent never
+passed a title; the protocol text asks it to). Pair with the post-pick loop:
+`sheets_grant_verification{via = 'magic_link', result = 'missing'}` per
+`request_id` — more than 2 per link is the 8-second retry loop, and the
+remedy is on the Google-propagation side, not the page.
+
 **7.16 — Approval funnel per action, per link (minted → opened → approved).**
 Locates a conversion loss before anyone names a fix: an action whose links are
 minted but not *opened* is losing users between the agent's reply and the

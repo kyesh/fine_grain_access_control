@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { useUser, useReverification } from '@clerk/nextjs';
 import { isReverificationCancelledError } from '@clerk/nextjs/errors';
 import { usePostHog } from 'posthog-js/react';
@@ -23,6 +23,27 @@ export interface PickedSheet {
 export type PickedFile = PickedSheet;
 
 /**
+ * What the consumer learns when the user closes the Picker without a pick.
+ * `attempt` counts Picker opens in this page session (1 = first open);
+ * `elapsedMs` is open → cancel; `fromOAuthReturn` marks the auto-reopen after
+ * the drive.file consent round-trip.
+ */
+export interface PickerCancelInfo {
+  attempt: number;
+  elapsedMs: number;
+  fromOAuthReturn: boolean;
+}
+
+export interface GooglePickerOptions {
+  /**
+   * Called on Google's CANCEL action. Before 2026-09 a cancel was invisible to
+   * the consumer, so the approve page stayed exactly as it was — no message,
+   * no name, no visible way back in — and a third of Picker opens ended there.
+   */
+  onCancelled?: (info: PickerCancelInfo) => void;
+}
+
+/**
  * Google Picker flow for exposing per-file grants (sheets by default; pass a
  * `kind` for docs — the view, dialog title, and copy follow the kind).
  *
@@ -40,12 +61,21 @@ export type PickedFile = PickedSheet;
 export function useGooglePicker(
   onSheetsPicked: (sheets: PickedFile[], context?: string) => void,
   kind: DriveFileKind = 'sheet',
+  options: GooglePickerOptions = {},
 ) {
   const kindDesc = DRIVE_FILE_KINDS[kind];
   const { user } = useUser();
   const posthog = usePostHog();
   const [isLoading, setIsLoading] = useState(false);
   const [gapiLoaded, setGapiLoaded] = useState(false);
+  // Ref, not a dependency: consumers pass inline callbacks, and a fresh
+  // openPickerFlow per render would re-run the auto-open effect.
+  const onCancelledRef = useRef(options.onCancelled);
+  useEffect(() => { onCancelledRef.current = options.onCancelled; });
+  // Per-page-session Picker open counter + open timestamp, so a cancel can be
+  // told apart as "first look" vs "came back and gave up again" in analytics.
+  const attemptRef = useRef(0);
+  const openedAtRef = useRef(0);
   // A failed flow must SAY so — a button that silently does nothing sent a
   // real user away (2026-08-19). Consumers render this next to the trigger.
   const [pickerError, setPickerError] = useState<string | null>(null);
@@ -172,7 +202,15 @@ export function useGooglePicker(
           posthog?.capture('picker_picked', { kind, count: docs.length });
           onSheetsPicked(docs, context);
         } else if (data.action === window.google.picker.Action.CANCEL) {
-          posthog?.capture('picker_cancelled', { kind });
+          const info: PickerCancelInfo = {
+            attempt: attemptRef.current,
+            elapsedMs: Math.max(0, Date.now() - openedAtRef.current),
+            fromOAuthReturn,
+          };
+          posthog?.capture('picker_cancelled', {
+            kind, attempt: info.attempt, elapsed_ms: info.elapsedMs, from_oauth_return: fromOAuthReturn,
+          });
+          onCancelledRef.current?.(info);
         }
         setIsLoading(false);
       };
@@ -215,7 +253,9 @@ export function useGooglePicker(
 
       const picker = builder.build();
 
-      posthog?.capture('picker_opened', { kind, from_oauth_return: fromOAuthReturn });
+      attemptRef.current += 1;
+      openedAtRef.current = Date.now();
+      posthog?.capture('picker_opened', { kind, from_oauth_return: fromOAuthReturn, attempt: attemptRef.current });
       picker.setVisible(true);
     } catch (err) {
       failFlow('open_picker', err,
