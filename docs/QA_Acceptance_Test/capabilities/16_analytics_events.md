@@ -415,7 +415,13 @@ attributable to it.
   `approval_link_opened` row for the run carries `client: 'browser'`
   (`claude_desktop` when the link is opened inside the Claude desktop app;
   `agent` only for non-browser fetchers), with `agent_driven: false` for
-  both human classes
+  both human classes. **The built-in browser pane IS Claude desktop** — its
+  UA carries `Claude/<build> Chrome/…`, so opens driven from the pane land
+  as `client: 'claude_desktop'` by design; assert `browser` only from a real
+  Chrome (Path B). Also expect more `approval_link_opened` rows than clicks:
+  the event fires per server render of the page (RSC refreshes and
+  navigations re-render it), which is why the funnel is read per
+  `request_id`, never per row
 - **Regression**: until 2026-09-08 `picker_cancelled` carried only `kind`, so
   cancel-then-retry was indistinguishable from cancel-and-leave, and the
   failed post-pick verification emitted nothing — the 8-second retry loop one
