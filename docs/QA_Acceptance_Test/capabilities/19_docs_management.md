@@ -34,9 +34,10 @@ intentionally differs, the assertion says so.
 - **Expected**: The Google Picker modal opens on this page with the Documents
   tab (not spreadsheets). No navigation, no dead-end. (If the drive.file grant
   is missing, a redirect to Google consent is acceptable — see A2.) As for
-  sheets (capability 09 A1), the view is a `DocsView` with shared drives
-  enabled and folders navigable: a Workspace account sees its shared drives,
-  only documents are selectable, folders are not.
+  sheets (capability 09 A1): two views — the flat documents list first
+  (files at the root without a search), then a "Shared drives" view that lists
+  a Workspace account's shared drives with navigable, unselectable folders;
+  only documents can be picked.
 
 ### A2: Consent round-trip returns kind-scoped — the docs picker reopens, not the sheets one
 - Deterministic proxy for the return leg: navigate to
