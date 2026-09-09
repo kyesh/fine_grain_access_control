@@ -21,6 +21,9 @@ Captured in `verifyMcpAuth` (`src/app/api/mcp/route.ts`):
 | `optimizations_enabled` | kill-switch state at capture time |
 | `error_class` | Clerk auth() error name, when it threw |
 | `kid` | signing-key id from the (unverified) token header, on `invalid_token` only |
+| `method` | HTTP verb (`POST`; a `GET` is a client opening the optional SSE stream and taking the stateless 405 — rare in production, one per process start for a locally run CLI) |
+| `connection_resolve` | what the auth layer's eager `resolveConnection` did on this request: `ran` (four Neon round trips), `skipped` (touched within the last 5 minutes by the same user+client — `src/lib/connectionTouchMemo.ts`), `error`. Added 2026-09-08 |
+| `connection_resolve_ms` | wall time of that eager resolve when it ran; the per-request DB cost of a handshake (see 7.16) |
 
 Volume control: failures always capture; successes are sampled **1 in 20 per
 request** (`success_sample_rate` carries the factor). Multiply `outcome=ok`
@@ -314,17 +317,33 @@ concurrent calls) before going quiet. Watch `uniq(person_id)`:
   one-shot heal event per user, i.e. a `clerkPrimaryEmail`/`resolveDbUser`
   regression. Investigate.
 
-**7.5 — Install-funnel unique installers.** Raw
+**7.5 — Install attempts (top of the acquisition funnel).** Raw
 `connector_install_started{mcp_401}` counts are per-request identical to
 `mcp_auth_attempt` failures (same code path) — they measure 401/retry volume,
 not people. `install_fingerprint` (salted ip+user-agent hash, deployed
-2026-08-27) is the uniqueness key; there is no unique-count reading for data
-before it.
+2026-08-27) was meant to be the uniqueness key, but **for claude.ai traffic
+it is useless: every claude.ai request arrives from Anthropic's shared egress
+proxy, so one fingerprint is one Anthropic IP serving many users** (measured
+2026-09-08: 22 fingerprints for `Anthropic/ClaudeAI` over three weeks, 16 of
+them recurring across days, against 55 completed connections). Fingerprints
+still de-duplicate direct clients (claude-code, curl, scanners) and are the
+right filter for excluding crawlers, but never divide sign-ups by them for a
+claude.ai conversion rate.
+
+The usable proxy for "clicked Connect in the directory" is the count of
+unauthenticated claude.ai `initialize` requests: one per install attempt, plus
+retries, so it is an **upper bound on attempts** (2026-08-28 → 09-08: 91
+requests for 55 Clerk accounts created through the connector, i.e. roughly 1.6
+requests per completed account). The exact denominator lives only on
+Anthropic's side (the listing dashboard's "accounts that sent any message").
 
 ```sql
 SELECT toDate(timestamp) AS day,
-       uniq(properties.install_fingerprint) AS unique_installers,
-       count() AS raw_401_volume
+       countIf(properties.client_name = 'Anthropic/ClaudeAI') AS claudeai_unauth_initializes,
+       countIf(properties.client_name = 'claude-code')        AS claude_code_unauth_initializes,
+       uniqIf(properties.install_fingerprint, properties.user_agent NOT IN ('Claude-User'))
+                                                              AS direct_client_fingerprints,
+       count()                                                AS raw_401_volume
 FROM events
 WHERE event = 'connector_install_started'
   AND properties.touchpoint = 'mcp_401'
@@ -334,13 +353,14 @@ WHERE event = 'connector_install_started'
 GROUP BY day ORDER BY day
 ```
 
-Install→signup conversion compares `unique_installers` against daily
-`sign_up_completed` (internal/QA accounts excluded). A large
-`raw_401_volume / unique_installers` ratio is expected and benign — it is
-retry pressure from established clients, the artifact that previously read
-as a conversion collapse. Split by client product via
-`properties.client_name` (populated when the unauthenticated request was an
-MCP `initialize`), or `mcp_client_initialize` for authenticated sessions.
+Compare `claudeai_unauth_initializes` against the same day's Clerk accounts
+created through the connector (`npm run funnel:scopes -- --prod`, or
+`sign_up_completed` persons whose `signup_source` is not `website`). A large
+`raw_401_volume` over the initialize count is retry pressure from established
+clients, the artifact that previously read as a conversion collapse. A never-
+authenticated connector does NOT keep pinging: unauthenticated initializes
+stay at 5–11/day while authenticated ones run 200–450/day, so "connected but
+never signed in to Clerk" is not a recurring population on our side.
 
 **7.6 — Gmail-scope lockouts.** Users whose Google grant lacks the Gmail scope
 (Gmail checkbox unchecked on Google's consent screen) 403 on every Gmail call
@@ -741,7 +761,7 @@ SELECT cityHash64(person.properties.email) % 100000 AS u,
 FROM events
 WHERE event IN ('picker_opened', 'picker_cancelled', 'picker_picked')
   AND properties.environment = 'production'
-  AND person.properties.email NOT IN (/* internal / QA accounts — .qa_test_emails.json + founder addresses, never inline them here */)
+  AND person.properties.email NOT IN (/* internal + QA accounts: the exclusion list in the daily review task */)
   AND timestamp > now() - INTERVAL 7 DAY
 GROUP BY u HAVING cancels > 0 ORDER BY cancels DESC
 ```
@@ -754,6 +774,209 @@ passed a title; the protocol text asks it to). Pair with the post-pick loop:
 `sheets_grant_verification{via = 'magic_link', result = 'missing'}` per
 `request_id` — more than 2 per link is the 8-second retry loop, and the
 remedy is on the Google-propagation side, not the page.
+
+**7.16 — Handshake loops (`mcp_client_initialize` vs `$mcp_tool_call`).**
+Added 2026-09-08. Two Claude Code users ran automation that spawned a fresh
+`claude` process every ~30 s (one, 18 h a day; the other every ~2 min) — each
+spawn re-runs the MCP handshake (`initialize`, `notifications/initialized`,
+`tools/list`; three authenticated POSTs, no GET) and ends without a tool
+call. Result: claude-code initializes went from ~6 to ~37 per person per day
+while tool-call volume stayed flat, and `mcp_client_initialize` became ~50%
+of all events in the project. The pattern is the Agent SDK / headless-loop
+shape (each `query()` or `claude -p` is a new process; subagents share the
+parent's connection; the two interleaving `client_version`s from one
+`client_id` are a bundled SDK CLI next to an auto-updating global install —
+OAuth registrations live in the Keychain and are shared machine-wide). It is
+**not** a server-side reconnect. A local Claude Code 2.1.263 start-up
+(measured 2026-09-09 with a static-header config) is one probe (`400`),
+`initialize`, `notifications/initialized`, one SSE `GET` that takes the
+stateless `405` quietly with no retry, then `tools/list` — and the process
+ends. The production loop clients show no authenticated GETs at all and only
+the cached ~1 probe per 15 minutes, so their cycle is the three POSTs.
+
+What the server does about it (PR for `claude/adoring-snyder-eea430`): the
+auth layer's eager `resolveConnection` (four sequential Neon round trips per
+authenticated request, result unused for authorization) is skipped when the
+same user+client was touched within 5 minutes on this instance. Kill switch
+`MCP_CONNECTION_TOUCH_MEMO=disabled`. The initialize event itself is **not**
+sampled or coalesced (decision 2026-09-09): its per-event timestamps and
+versions are what exposed the pattern, the volume is ~6% of the plan, and a
+user building automation on FGAC is a signal worth keeping at full grain.
+Nothing is rate-limited or rejected — these are paying users whose tool calls
+succeed.
+
+```sql
+-- Clients whose handshakes dwarf their tool calls, 24 h.
+SELECT cityHash64(properties.client_id) % 100000 AS client_hash,
+       arrayStringConcat(groupUniqArrayIf(properties.client_name, event = 'mcp_client_initialize'), ',') AS client_names,
+       countIf(event = 'mcp_client_initialize') AS inits,
+       countIf(event = '$mcp_tool_call') AS calls,
+       uniq(distinct_id) AS users
+FROM events
+WHERE event IN ('mcp_client_initialize', '$mcp_tool_call')
+  AND properties.environment = 'production'
+  AND timestamp > now() - INTERVAL 24 HOUR
+GROUP BY client_hash
+HAVING inits > 200
+ORDER BY inits DESC
+```
+
+Reading it: a row with `inits > 200` and `calls < inits / 20` is a handshake
+loop — **informational, not an incident**. Report it as "N loop clients, M
+initializes" and keep those clients out of per-request health ratios
+(auth-failure rate, discover-probe share, initializes-per-person), which they
+otherwise dominate. It becomes actionable only if (a) a loop client's tool
+calls start failing (then it is a stuck client, not a loop), or (b) the
+`connection_resolve = 'skipped'` share on `mcp_auth_attempt` for that client
+is low despite the loop (memo not absorbing it — instance churn or the kill
+switch), or (c) `mcp_client_initialize` alone approaches ~300k rows/month
+(30% of the 1M free tier), which is when coalescing the event becomes worth
+its cost in lost per-event grain.
+
+```sql
+-- Is the memo absorbing the loop? Share of authenticated requests that
+-- skipped the eager DB touch, and the cost of the ones that ran (24 h).
+SELECT properties.connection_resolve AS resolve,
+       count() AS sampled_requests,
+       quantile(0.5)(toFloat(properties.connection_resolve_ms)) AS p50_ms,
+       quantile(0.95)(toFloat(properties.connection_resolve_ms)) AS p95_ms
+FROM events
+WHERE event = 'mcp_auth_attempt' AND properties.environment = 'production'
+  AND properties.outcome = 'ok' AND timestamp > now() - INTERVAL 24 HOUR
+GROUP BY resolve
+```
+
+Healthy after the deploy: `skipped` is the majority of sampled `ok` rows
+(loop clients alone are ~85% of authenticated requests), `ran` p50 sits at
+Neon-from-iad1 latency (tens of ms for four round trips), and `error` is zero.
+PostHog volume from handshakes is not a plan problem today (~6% of the free
+tier's 1M events/month); the threshold that would make it one is (c) above.
+
+**7.17 — Directory disconnect rate: what it is and our proxy for it.** The
+listing dashboard's health badge (Healthy ≤ 5%) is, per
+[Managing your listing](https://claude.com/docs/connectors/building/managing-your-listing):
+*denominator* = every distinct Claude account that sent the server ANY MCP
+message in the last 30 days (`initialize` counts, and so do connection
+attempts that never authenticated); *numerator* = those accounts that **chose
+to disconnect** during the window. We never see the click. Our proxy is a
+person whose connections stop sending `mcp_client_initialize`/`$mcp_tool_call`
+for 7+ days — claude.ai pings every connected connector each session (~2–3
+initializes per person per day), so silence is either a dormant Claude user
+or a removal.
+
+Established 2026-09-08 (listing live since 2026-08-16):
+- Every account that had made even one tool call was still messaging; the
+  silent population was **100% never-called accounts**, 13 of 19 from launch
+  week. Denials (`sheets_not_exposed`, scope missing, Google 401/403) did NOT
+  predict silence — those users have the highest call volumes.
+- The steady climb through early September was window mechanics: until day
+  30 after listing (~2026-09-15) the window covered the whole listed life, so
+  the numerator was cumulative disconnects while new accounts slowed from
+  ~50/day to ~5/day. Expect a peak mid-September and a decline as both the
+  launch accounts and their disconnects age out together.
+- Not causes: `discover_probe` 400s (7.9), `invalid_token` rows (the `probe`
+  kid), duplicate same-minute connection rows at install time.
+
+```sql
+-- Never-called accounts that have gone quiet, by week of first connection.
+-- Person-level (Anthropic counts accounts); internal accounts excluded.
+WITH per AS (
+  SELECT person_id,
+         toDate(minIf(timestamp, event = 'mcp_connection_created')) AS first_conn,
+         maxIf(timestamp, event IN ('mcp_client_initialize', '$mcp_tool_call')) AS last_msg,
+         countIf(event = '$mcp_tool_call') AS calls,
+         countIf(event = '$mcp_tool_call' AND properties.outcome = 'success') AS ok_calls
+  FROM events
+  WHERE event IN ('mcp_connection_created', 'mcp_client_initialize', '$mcp_tool_call')
+    AND properties.environment = 'production'
+    AND timestamp > now() - INTERVAL 6 WEEK
+    AND person.properties.email NOT IN (/* internal + QA accounts: the same list every query in §7 uses, plus the demo account */)
+  GROUP BY person_id
+  HAVING first_conn > toDate('2000-01-01')
+)
+SELECT toStartOfWeek(first_conn, 1) AS connect_week,
+       count()                                                          AS people,
+       countIf(calls > 0)                                               AS ever_called,
+       countIf(calls = 0 AND last_msg <  now() - INTERVAL 7 DAY)        AS never_called_silent_7d,
+       countIf(calls = 0 AND last_msg >= now() - INTERVAL 7 DAY)        AS never_called_still_pinging,
+       countIf(calls > 0 AND last_msg <  now() - INTERVAL 7 DAY)        AS called_then_silent_7d
+FROM per GROUP BY connect_week ORDER BY connect_week
+```
+
+Healthy: `called_then_silent_7d` ≈ 0 (a non-zero value here is a real
+regression — someone who used the tools and left) and
+`never_called_silent_7d` concentrated in old cohorts. The pool to work on is
+`never_called_still_pinging`: Claude loads the connector in their sessions and
+it never gets used (the 2026-09-08 baseline was 39 people, most never having
+opened the dashboard — see 7.18 for the split). Watch this weekly; a rising
+never-called share in NEW cohorts is the only thing that would push the
+published rate back up once the launch window has aged out.
+
+**7.18 — Acquisition funnel, per person.** Stages: (1) Connect click →
+7.5 upper bound; (2) Clerk account created → `sign_up_completed`
+(`user.created` webhook; `signup_source` = `claude_connector` when the
+account was born from a connection, `website` for dashboard sign-ups, unset
+for accounts created mid-OAuth that never connected); (3) Claude finished
+OAuth → `mcp_connection_created`; (3b) Google scope actually granted → Clerk,
+via `npm run funnel:scopes -- --prod` (Gmail is a checkbox at sign-in consent;
+drive.file arrives later through the Picker, so its share reads much lower and
+that is not a defect); (4) first successful `$mcp_tool_call`, split Gmail vs
+Sheets/Docs. Baseline 2026-09-08 (182 connected since launch): Gmail scope
+74% of connected, Gmail tried 41%, Gmail succeeded 32%; Sheets/Docs tried
+53%, succeeded 37%, and 29 people tried Sheets and never succeeded (the
+Sheets equivalent of the unchecked Gmail box — most never opened the
+approval link). The recent cohort is Sheets-first.
+
+```sql
+WITH per AS (
+  SELECT person_id,
+         min(timestamp) AS first_ev,
+         any(person.properties.signup_source) AS src,
+         countIf(event = 'sign_up_completed')      AS signed_up,
+         countIf(event = 'mcp_connection_created') AS conns,
+         countIf(event = '$pageview' AND properties.$current_url LIKE '%/dashboard%') AS dash_views,
+         countIf(event = 'google_scope_missing' AND properties.scope = 'gmail') AS gmail_scope_denied,
+         countIf(event = '$mcp_tool_call' AND properties.$mcp_tool_name LIKE 'gmail_%') AS gmail_tried,
+         countIf(event = '$mcp_tool_call' AND properties.$mcp_tool_name LIKE 'gmail_%' AND properties.outcome = 'success') AS gmail_ok,
+         countIf(event = '$mcp_tool_call' AND (properties.$mcp_tool_name LIKE 'sheets_%' OR properties.$mcp_tool_name LIKE 'docs_%')) AS sd_tried,
+         countIf(event = '$mcp_tool_call' AND properties.denial_code IN ('sheets_not_exposed', 'docs_not_exposed')) AS sd_not_exposed,
+         countIf(event = 'approval_link_opened')   AS link_opened,
+         countIf(event = 'approval_link_approved') AS link_approved,
+         countIf(event = 'picker_picked')          AS picked,
+         countIf(event = '$mcp_tool_call' AND (properties.$mcp_tool_name LIKE 'sheets_%' OR properties.$mcp_tool_name LIKE 'docs_%') AND properties.outcome = 'success') AS sd_ok,
+         countIf(event = '$mcp_tool_call' AND properties.outcome = 'success') AS any_ok
+  FROM events
+  WHERE properties.environment = 'production'
+    AND timestamp > now() - INTERVAL 6 WEEK
+    AND person.properties.email NOT IN (/* internal + QA accounts: the same list every query in §7 uses, plus the demo account */)
+  GROUP BY person_id
+)
+SELECT toStartOfWeek(first_ev, 1) AS cohort_week,
+       countIf(signed_up > 0 AND coalesce(src, '') != 'website') AS clerk_accounts_via_connector,
+       countIf(conns > 0)                     AS connected,
+       countIf(conns > 0 AND dash_views > 0)  AS connected_opened_dashboard,
+       countIf(conns > 0 AND any_ok > 0)      AS any_tool_success,
+       countIf(conns > 0 AND gmail_tried > 0) AS gmail_tried,
+       countIf(conns > 0 AND gmail_ok > 0)    AS gmail_success,
+       countIf(conns > 0 AND gmail_scope_denied > 0) AS gmail_scope_denied,
+       countIf(conns > 0 AND sd_tried > 0)    AS sheets_docs_tried,
+       countIf(conns > 0 AND sd_not_exposed > 0) AS sheets_docs_hit_gate,
+       countIf(conns > 0 AND link_opened > 0) AS opened_approval_link,
+       countIf(conns > 0 AND (link_approved > 0 OR picked > 0)) AS approved_or_picked,
+       countIf(conns > 0 AND sd_ok > 0)       AS sheets_docs_success,
+       countIf(conns > 0 AND sd_tried > 0 AND sd_ok = 0) AS sheets_docs_tried_never_succeeded
+FROM per
+WHERE conns > 0 OR signed_up > 0
+GROUP BY cohort_week ORDER BY cohort_week
+```
+
+Read it with 7.17: the gap between `connected` and `any_tool_success` is the
+disconnect pool; the gap between `sheets_docs_hit_gate` and
+`opened_approval_link` is link delivery (the nudge lives in the denial text,
+`policyDenialWithLink` in `src/app/api/mcp/route.ts`); `gmail_scope_denied`
+only counts people who tried Gmail — the scope share itself comes from the
+Clerk script. `connected_opened_dashboard` is a browser-SDK count and
+undercounts ad-blocked visitors.
 
 **7.19 — Approval funnel per action, per link (minted → opened → approved).**
 Locates a conversion loss before anyone names a fix: an action whose links are

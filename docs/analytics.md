@@ -36,7 +36,7 @@ keep internal/QA traffic out of the numbers.
 | `proxy_request` | server (`/api/proxy/[...path]`) | `service` (gmail/sheets/drive), `method`, `status`, `outcome` (`success`/`auth_failed`/`denied`/`timeout`/`error`), `duration_ms`, `proxy_key_id`, `account_email`, `account_delegated`, `google_ms`, `token_ms`; upstream failures add `error_status` (`timeout`/`network`) |
 | `mcp_connection_created` | server (`/api/mcp` auth layer) | `connection_id`, `client_id`, `client_name`/`client_version` (from MCP `initialize` clientInfo, when the creating request was one — **in practice ~never**: the client's concurrent SSE GET usually wins the row-insert race, so this event fires nameless; measured 0/10 with a name 2026-08-27→29. Use `mcp_connection_client_identified` or person-level `mcp_client_initialize` for client attribution), `auto_attached`, `account_age_seconds` |
 | `mcp_connection_client_identified` | server (`/api/mcp` auth layer, backfill-on-touch) | `connection_id`, `client_id`, `client_name`, `client_version`. Fires **once per connection**, on the first initialize that replaces the opaque `client_id` placeholder name — the reliable connection→client-product mapping (join on `connection_id`) |
-| `mcp_client_initialize` | server (`/api/mcp` auth layer, every authenticated `initialize`) | `client_name`, `client_version` (the client's self-reported MCP clientInfo), `client_id`, `user_agent`. Once per MCP session — the substrate for the per-product split (Cowork / Claude Code / Claude.ai) |
+| `mcp_client_initialize` | server (`/api/mcp` auth layer, every authenticated `initialize`) | `client_name`, `client_version` (the client's self-reported MCP clientInfo), `client_id`, `user_agent`. Once per MCP session, one row per event — **deliberately never sampled or coalesced** (decision 2026-09-09): automation that starts a fresh Claude Code process every ~30 s made this the largest event in the project (~50% of daily volume from 2 clients), but the per-event timestamps and versions are exactly what exposed that pattern, and volume is ~6% of the plan. Loop clients are named by the `docs/monitoring.md` 7.16 query and excluded from per-request ratios there, not suppressed here. The substrate for the per-product split (Cowork / Claude Code / Claude.ai) |
 | `delegation_created` | server (dashboard action) | `delegate_email`, `reactivated` |
 | `account_linked` | server (dashboard action) | `target_email`, `delegated`, `via` |
 | `approval_link_minted` | server (`/api/mcp` — policy denial, send denial, `request_access`) | `action`, `request_id`, `target_hash`, `mint_count`, `via` (`send_denial`/`request_access`; absent for policy denials), and on `request_access` mints since 2026-09-08 `has_resource_name` (the request has a title — passed on this call or stored by an earlier one in `approval_requests.resource_name`, shown on the approve page: the only name source for a file Google does not share with FGAC yet) and `resource_name_supplied` (this call passed one). **Fires once per mint ATTEMPT**, so `uniq(request_id)` is demand and `count()` is retry pressure |
@@ -458,25 +458,33 @@ starts at the deploy; rows for clients that never re-initialize stay opaque.
 Capturing DCR `client_name` at OAuth registration remains a possible
 supplement.
 
-**`connector_install_started`: count `uniq(install_fingerprint)`, never raw
-events.** It fires anonymously (distinct_id `anonymous-mcp`) from the only
-FGAC-owned touchpoints that exist before a Clerk account: the OAuth discovery
-endpoints (`touchpoint=oauth_discovery`, recurs on reconnects) and
-unauthenticated MCP requests (`touchpoint=mcp_401`). The mcp_401 emission is
-**per-request identical to `mcp_auth_attempt` failures by construction**
-(same `!authInfo` path in `verifyMcpAuth`; `reason` ≡ `outcome`), so raw
-event counts are 401/retry volume — an established client with an expired
-token can emit dozens of "installs" a day, which is exactly the artifact
-that made install→signup conversion look like it collapsed in late August
-2026. `install_fingerprint` (salted sha256 of ip+user-agent; salt =
-`ANALYTICS_FINGERPRINT_SALT`, falling back to `CLERK_SECRET_KEY`) is the
-uniqueness key: unique installers per day ≈
-`uniq(properties.install_fingerprint)` filtered to `reason='no_token'` and
-`method='POST'`, and Clerk-step abandonment compares that against
-`mcp_connection_created`. Coverage starts at the fingerprint deploy
-(2026-08-27); earlier data supports no unique-count reading at all. Filter
-obvious crawlers by `user_agent`. Rotating the salt resets fingerprint
-continuity — compare uniques only within one salt era.
+**`connector_install_started`: never read raw counts as people, and never
+read fingerprints as claude.ai people either.** It fires anonymously
+(distinct_id `anonymous-mcp`) from the only FGAC-owned touchpoints that exist
+before a Clerk account: the OAuth discovery endpoints
+(`touchpoint=oauth_discovery`, recurs on reconnects) and unauthenticated MCP
+requests (`touchpoint=mcp_401`). The mcp_401 emission is **per-request
+identical to `mcp_auth_attempt` failures by construction** (same `!authInfo`
+path in `verifyMcpAuth`; `reason` ≡ `outcome`), so raw event counts are
+401/retry volume — an established client with an expired token can emit
+dozens of "installs" a day, which is exactly the artifact that made
+install→signup conversion look like it collapsed in late August 2026.
+`install_fingerprint` (salted sha256 of ip+user-agent; salt =
+`ANALYTICS_FINGERPRINT_SALT`, falling back to `CLERK_SECRET_KEY`) de-duplicates
+**direct** clients only: claude.ai traffic reaches us through Anthropic's
+shared egress proxy, so for `user_agent = 'Claude-User'` one fingerprint is
+one Anthropic IP serving many users (2026-09-08: 22 fingerprints for three
+weeks of `Anthropic/ClaudeAI` installs against 55 completed accounts). The
+directory top-of-funnel proxy is therefore the count of unauthenticated
+claude.ai `initialize` requests (`client_name = 'Anthropic/ClaudeAI'`,
+`reason='no_token'`, `method='POST'`) — one per attempt plus retries, an
+upper bound — compared against Clerk accounts created through the connector
+(`npm run funnel:scopes -- --prod`). Coverage starts at the client-name
+capture (2026-08-24); earlier data supports no attempt count at all. Filter
+crawlers by `user_agent`. Named queries: `monitoring.md` 7.5 (attempts),
+7.17 (directory disconnect-rate model) and 7.18 (per-person funnel). Rotating
+the salt resets fingerprint continuity — compare uniques only within one salt
+era.
 
 Payload capture is deliberately **off**: we never send `$mcp_parameters` or
 `$mcp_response` (they would carry customer mail/sheet content into PostHog).
