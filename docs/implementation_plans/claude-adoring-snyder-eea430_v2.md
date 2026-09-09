@@ -82,6 +82,6 @@ window.
 - [x] Local cycles: baseline vs memo as above.
 - [ ] `npm run mcp:lint` full suite (run before commit).
 - [ ] Preview: cycles against the preview URL, then `docs/monitoring.md`
-      §7.15 queries with `environment = 'preview'`.
-- [ ] Production, day after deploy: §7.15 — `skipped` majority,
+      §7.16 queries with `environment = 'preview'`.
+- [ ] Production, day after deploy: §7.16 — `skipped` majority,
       `mcp_client_initialize` rows/day well under 2,000.

@@ -12,7 +12,7 @@
  * tools/list, zero tool calls): ~1,800 handshakes and ~5,000 needless DB
  * touches a day from one idle client. (The initialize telemetry itself is
  * deliberately left uncoalesced — its per-event grain is what exposed the
- * pattern; see docs/monitoring.md 7.15.)
+ * pattern; see docs/monitoring.md 7.16.)
  *
  * Contract:
  *   - Routing hint ONLY. A memo hit skips a DB touch whose result

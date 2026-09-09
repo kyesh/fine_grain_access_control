@@ -98,7 +98,7 @@ keeps counts reconstructible while removing the volume.
 
 | direction | verdict | evidence |
 | --- | --- | --- |
-| (a) document + named query + threshold | **accept** | daily review re-derived this three times; runbook 7.15 |
+| (a) document + named query + threshold | **accept** | daily review re-derived this three times; runbook 7.16 |
 | (b) skip the DB touch within N minutes | **accept** | result unused for authorization; 4 round trips × ~9k requests/day |
 | (c) coalesce `mcp_client_initialize` | **accept, with reconstructible counts** | largest event; `coalesced_initializes` keeps `sum(1 + n)` exact per instance window; first-per-instance capture and the DB-driven name backfill keep `mcp_connection_client_identified` semantics |
 | (d) fix GET/405 or session handling | **reject** | no GETs from Claude Code in production at all |
@@ -119,7 +119,7 @@ keeps counts reconstructible while removing the volume.
   `MCP_CONNECTION_TOUCH_MEMO=disabled`.
 - `scripts/test-connection-touch-memo.ts` in `npm run mcp:lint`.
 - Docs: `docs/analytics.md` (event semantics), `docs/monitoring.md` §1
-  (new properties) and §7.15 (named queries, threshold, health reading).
+  (new properties) and §7.16 (named queries, threshold, health reading).
 
 Behavioural consequences, stated: dashboard "Last used" may lag by up to 5
 minutes for a continuously active client; a connection the user deletes from
@@ -134,7 +134,7 @@ next handshake.
    expect the trace to show `resolve` running on cycle 0 and `skipped` after,
    one `mcp_client_initialize` capture per window.
 3. Preview (`/deploy-pr-preview`): same cycles against the preview URL, then
-   the two §7.15 queries with `environment = 'preview'`.
-4. Production, day after deploy: §7.15 — `skipped` share of sampled `ok`
+   the two §7.16 queries with `environment = 'preview'`.
+4. Production, day after deploy: §7.16 — `skipped` share of sampled `ok`
    rows high, `mcp_client_initialize` rows/day well under 2,000 with
    `sum(1 + coalesced_initializes)` still matching the loop clients' cadence.

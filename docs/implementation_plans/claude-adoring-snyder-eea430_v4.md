@@ -65,4 +65,4 @@ initialize rows per warm instance, with the count still reconstructible.
 - [x] `npm run mcp:lint`, `npx tsc --noEmit`
 - [x] local and preview cycles (v2, v3)
 - [x] real Claude Code 2.1.263 headless and interactive reproduction (above)
-- [ ] production, day after deploy: `docs/monitoring.md` §7.15
+- [ ] production, day after deploy: `docs/monitoring.md` §7.16

@@ -144,7 +144,7 @@ export const TOOL_DEFS = {
   request_access: {
     name: 'request_access',
     title: 'Request a permission upgrade',
-    description: 'Ask the user to grant this agent a specific permission: sending email to a recipient, or read/write access to a Google Spreadsheet or Google Docs document. Returns a single-use approval link for the user — calling this tool grants nothing by itself; the user must open the link and approve.',
+    description: 'Ask the user to grant this agent a specific permission: sending email to a recipient, or read/write access to a Google Spreadsheet or Google Docs document. Returns a permanent approval link for the user — calling this tool grants nothing by itself; the user must open the link and approve. For a spreadsheet or document, pass resourceName (the file\'s title) whenever you know it: the approval page shows it, and without it the user only sees Google\'s file id while Google\'s picker lists files by name.',
     readOnly: true,
   },
   get_my_permissions: {

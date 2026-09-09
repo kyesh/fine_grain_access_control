@@ -29,7 +29,7 @@ token verified unchanged. Sequence, all times UTC:
 
 So over ~48 handshakes the project received 3 initialize rows instead of 48,
 and `sum(1 + coalesced_initializes)` = 27 with one instance's window still
-open — the per-instance accounting the docs describe. The runbook §7.15
+open — the per-instance accounting the docs describe. The runbook §7.16
 queries ran as written against both environments (production rows have no
 `coalesced_initializes` yet and sum as 1 each).
 
@@ -43,8 +43,8 @@ baseline comes from the first post-deploy day.
 - [x] `npm run mcp:lint`, `npx tsc --noEmit`
 - [x] local cycles with and without the memo (v2)
 - [x] preview deployment Ready for c3bd2ed; landing page renders
-- [x] preview cycles + §7.15 queries with `environment = 'preview'` (above)
-- [ ] production, day after deploy: §7.15 — `skipped` majority,
+- [x] preview cycles + §7.16 queries with `environment = 'preview'` (above)
+- [ ] production, day after deploy: §7.16 — `skipped` majority,
       `mcp_client_initialize` rows/day well under 2,000, a `ran` p50 for the
       DB touch from iad1
 
@@ -56,5 +56,5 @@ baseline comes from the first post-deploy day.
   production request shapes, not from a local CLI run.
 - The daily analytics review task (local scheduled task
   `fgac-user-behavior-review`) was given a note to count sessions as
-  `sum(1 + coalesced_initializes)` and to run §7.15; it lives outside the
+  `sum(1 + coalesced_initializes)` and to run §7.16; it lives outside the
   repo.

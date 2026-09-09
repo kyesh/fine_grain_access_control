@@ -1184,6 +1184,13 @@ async function applyFileGrantApproval(opts: {
     }
     if (verified.length === 0) {
       // Read-only failure — the link was NOT consumed; the user can retry.
+      // Captured since 2026-09-08: this loop was invisible (only successes
+      // fired the verification event), yet one launch-cohort user hit it 12
+      // times in two minutes at the ~8 s cadence of the two grace waits above
+      // before giving up on the page and granting from the dashboard instead.
+      captureServerEvent(dbUser.clerkUserId, verificationEvent, {
+        result: "missing", via: "magic_link", picked_count: toVerify.length, request_id: p.requestId,
+      });
       return {
         ok: false,
         retryable: true,
