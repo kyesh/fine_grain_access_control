@@ -434,25 +434,33 @@ starts at the deploy; rows for clients that never re-initialize stay opaque.
 Capturing DCR `client_name` at OAuth registration remains a possible
 supplement.
 
-**`connector_install_started`: count `uniq(install_fingerprint)`, never raw
-events.** It fires anonymously (distinct_id `anonymous-mcp`) from the only
-FGAC-owned touchpoints that exist before a Clerk account: the OAuth discovery
-endpoints (`touchpoint=oauth_discovery`, recurs on reconnects) and
-unauthenticated MCP requests (`touchpoint=mcp_401`). The mcp_401 emission is
-**per-request identical to `mcp_auth_attempt` failures by construction**
-(same `!authInfo` path in `verifyMcpAuth`; `reason` ≡ `outcome`), so raw
-event counts are 401/retry volume — an established client with an expired
-token can emit dozens of "installs" a day, which is exactly the artifact
-that made install→signup conversion look like it collapsed in late August
-2026. `install_fingerprint` (salted sha256 of ip+user-agent; salt =
-`ANALYTICS_FINGERPRINT_SALT`, falling back to `CLERK_SECRET_KEY`) is the
-uniqueness key: unique installers per day ≈
-`uniq(properties.install_fingerprint)` filtered to `reason='no_token'` and
-`method='POST'`, and Clerk-step abandonment compares that against
-`mcp_connection_created`. Coverage starts at the fingerprint deploy
-(2026-08-27); earlier data supports no unique-count reading at all. Filter
-obvious crawlers by `user_agent`. Rotating the salt resets fingerprint
-continuity — compare uniques only within one salt era.
+**`connector_install_started`: never read raw counts as people, and never
+read fingerprints as claude.ai people either.** It fires anonymously
+(distinct_id `anonymous-mcp`) from the only FGAC-owned touchpoints that exist
+before a Clerk account: the OAuth discovery endpoints
+(`touchpoint=oauth_discovery`, recurs on reconnects) and unauthenticated MCP
+requests (`touchpoint=mcp_401`). The mcp_401 emission is **per-request
+identical to `mcp_auth_attempt` failures by construction** (same `!authInfo`
+path in `verifyMcpAuth`; `reason` ≡ `outcome`), so raw event counts are
+401/retry volume — an established client with an expired token can emit
+dozens of "installs" a day, which is exactly the artifact that made
+install→signup conversion look like it collapsed in late August 2026.
+`install_fingerprint` (salted sha256 of ip+user-agent; salt =
+`ANALYTICS_FINGERPRINT_SALT`, falling back to `CLERK_SECRET_KEY`) de-duplicates
+**direct** clients only: claude.ai traffic reaches us through Anthropic's
+shared egress proxy, so for `user_agent = 'Claude-User'` one fingerprint is
+one Anthropic IP serving many users (2026-09-08: 22 fingerprints for three
+weeks of `Anthropic/ClaudeAI` installs against 55 completed accounts). The
+directory top-of-funnel proxy is therefore the count of unauthenticated
+claude.ai `initialize` requests (`client_name = 'Anthropic/ClaudeAI'`,
+`reason='no_token'`, `method='POST'`) — one per attempt plus retries, an
+upper bound — compared against Clerk accounts created through the connector
+(`npm run funnel:scopes -- --prod`). Coverage starts at the client-name
+capture (2026-08-24); earlier data supports no attempt count at all. Filter
+crawlers by `user_agent`. Named queries: `monitoring.md` 7.5 (attempts),
+7.17 (directory disconnect-rate model) and 7.18 (per-person funnel). Rotating
+the salt resets fingerprint continuity — compare uniques only within one salt
+era.
 
 Payload capture is deliberately **off**: we never send `$mcp_parameters` or
 `$mcp_response` (they would carry customer mail/sheet content into PostHog).
