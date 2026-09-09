@@ -21,6 +21,9 @@ Captured in `verifyMcpAuth` (`src/app/api/mcp/route.ts`):
 | `optimizations_enabled` | kill-switch state at capture time |
 | `error_class` | Clerk auth() error name, when it threw |
 | `kid` | signing-key id from the (unverified) token header, on `invalid_token` only |
+| `method` | HTTP verb (`POST`; a `GET` is a client opening the optional SSE stream and taking the stateless 405 — rare in production, one per process start for a locally run CLI) |
+| `connection_resolve` | what the auth layer's eager `resolveConnection` did on this request: `ran` (four Neon round trips), `skipped` (touched within the last 5 minutes by the same user+client — `src/lib/connectionTouchMemo.ts`), `error`. Added 2026-09-08 |
+| `connection_resolve_ms` | wall time of that eager resolve when it ran; the per-request DB cost of a handshake (see 7.16) |
 
 Volume control: failures always capture; successes are sampled **1 in 20 per
 request** (`success_sample_rate` carries the factor). Multiply `outcome=ok`
@@ -741,7 +744,7 @@ SELECT cityHash64(person.properties.email) % 100000 AS u,
 FROM events
 WHERE event IN ('picker_opened', 'picker_cancelled', 'picker_picked')
   AND properties.environment = 'production'
-  AND person.properties.email NOT IN ('kenyesh2@gmail.com', 'kyesh@umich.edu', 'kenyesh@gmail.com', 'test.fgac.ai@gmail.com', 'ken@fgac.ai')
+  AND person.properties.email NOT IN (/* internal + QA accounts: the exclusion list in the daily review task */)
   AND timestamp > now() - INTERVAL 7 DAY
 GROUP BY u HAVING cancels > 0 ORDER BY cancels DESC
 ```
@@ -754,3 +757,80 @@ passed a title; the protocol text asks it to). Pair with the post-pick loop:
 `sheets_grant_verification{via = 'magic_link', result = 'missing'}` per
 `request_id` — more than 2 per link is the 8-second retry loop, and the
 remedy is on the Google-propagation side, not the page.
+
+**7.16 — Handshake loops (`mcp_client_initialize` vs `$mcp_tool_call`).**
+Added 2026-09-08. Two Claude Code users ran automation that spawned a fresh
+`claude` process every ~30 s (one, 18 h a day; the other every ~2 min) — each
+spawn re-runs the MCP handshake (`initialize`, `notifications/initialized`,
+`tools/list`; three authenticated POSTs, no GET) and ends without a tool
+call. Result: claude-code initializes went from ~6 to ~37 per person per day
+while tool-call volume stayed flat, and `mcp_client_initialize` became ~50%
+of all events in the project. The pattern is the Agent SDK / headless-loop
+shape (each `query()` or `claude -p` is a new process; subagents share the
+parent's connection; the two interleaving `client_version`s from one
+`client_id` are a bundled SDK CLI next to an auto-updating global install —
+OAuth registrations live in the Keychain and are shared machine-wide). It is
+**not** a server-side reconnect. A local Claude Code 2.1.263 start-up
+(measured 2026-09-09 with a static-header config) is one probe (`400`),
+`initialize`, `notifications/initialized`, one SSE `GET` that takes the
+stateless `405` quietly with no retry, then `tools/list` — and the process
+ends. The production loop clients show no authenticated GETs at all and only
+the cached ~1 probe per 15 minutes, so their cycle is the three POSTs.
+
+What the server does about it (PR for `claude/adoring-snyder-eea430`): the
+auth layer's eager `resolveConnection` (four sequential Neon round trips per
+authenticated request, result unused for authorization) is skipped when the
+same user+client was touched within 5 minutes on this instance. Kill switch
+`MCP_CONNECTION_TOUCH_MEMO=disabled`. The initialize event itself is **not**
+sampled or coalesced (decision 2026-09-09): its per-event timestamps and
+versions are what exposed the pattern, the volume is ~6% of the plan, and a
+user building automation on FGAC is a signal worth keeping at full grain.
+Nothing is rate-limited or rejected — these are paying users whose tool calls
+succeed.
+
+```sql
+-- Clients whose handshakes dwarf their tool calls, 24 h.
+SELECT cityHash64(properties.client_id) % 100000 AS client_hash,
+       arrayStringConcat(groupUniqArrayIf(properties.client_name, event = 'mcp_client_initialize'), ',') AS client_names,
+       countIf(event = 'mcp_client_initialize') AS inits,
+       countIf(event = '$mcp_tool_call') AS calls,
+       uniq(distinct_id) AS users
+FROM events
+WHERE event IN ('mcp_client_initialize', '$mcp_tool_call')
+  AND properties.environment = 'production'
+  AND timestamp > now() - INTERVAL 24 HOUR
+GROUP BY client_hash
+HAVING inits > 200
+ORDER BY inits DESC
+```
+
+Reading it: a row with `inits > 200` and `calls < inits / 20` is a handshake
+loop — **informational, not an incident**. Report it as "N loop clients, M
+initializes" and keep those clients out of per-request health ratios
+(auth-failure rate, discover-probe share, initializes-per-person), which they
+otherwise dominate. It becomes actionable only if (a) a loop client's tool
+calls start failing (then it is a stuck client, not a loop), or (b) the
+`connection_resolve = 'skipped'` share on `mcp_auth_attempt` for that client
+is low despite the loop (memo not absorbing it — instance churn or the kill
+switch), or (c) `mcp_client_initialize` alone approaches ~300k rows/month
+(30% of the 1M free tier), which is when coalescing the event becomes worth
+its cost in lost per-event grain.
+
+```sql
+-- Is the memo absorbing the loop? Share of authenticated requests that
+-- skipped the eager DB touch, and the cost of the ones that ran (24 h).
+SELECT properties.connection_resolve AS resolve,
+       count() AS sampled_requests,
+       quantile(0.5)(toFloat(properties.connection_resolve_ms)) AS p50_ms,
+       quantile(0.95)(toFloat(properties.connection_resolve_ms)) AS p95_ms
+FROM events
+WHERE event = 'mcp_auth_attempt' AND properties.environment = 'production'
+  AND properties.outcome = 'ok' AND timestamp > now() - INTERVAL 24 HOUR
+GROUP BY resolve
+```
+
+Healthy after the deploy: `skipped` is the majority of sampled `ok` rows
+(loop clients alone are ~85% of authenticated requests), `ran` p50 sits at
+Neon-from-iad1 latency (tens of ms for four round trips), and `error` is zero.
+PostHog volume from handshakes is not a plan problem today (~6% of the free
+tier's 1M events/month); the threshold that would make it one is (c) above.

@@ -404,6 +404,24 @@ State-modifying, require user approval (but NOT production deployments):
 
 These bans are additionally enforced as `deny` rules in `.claude/settings.json`.
 
+## Review-Ready Summary
+
+When work is complete and ready for the user to review (a PR is open and validated,
+a report is finished, a fix is verified), close with a summary of **300 words or
+less** with exactly three labelled parts, in this order:
+
+1. **What the work does** — the change or finding, in plain language, with the PR
+   and preview links.
+2. **Why it matters** — the problem it solves and the evidence that showed it.
+3. **What the impact is** — measured before/after where there is data, the
+   behavioural consequences a reviewer should know, and what remains open.
+
+Rules: lead with the outcome, no headers beyond the three labels, no code in
+prose, numbers only where they change what the reviewer does. Anything longer
+belongs in the implementation plan under `docs/implementation_plans/`, which the
+summary links to instead of repeating. Interim progress updates are exempt; this
+applies to the hand-back message.
+
 ## Context Efficiency & Session Hygiene
 
 Originally derived from Antigravity's session-stability rules; the IDE-specific parts
