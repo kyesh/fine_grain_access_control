@@ -65,6 +65,11 @@ environment's DB branch. Verified end to end on a Vercel preview 2026-08-30.
   `docs.google.com/picker` iframe) opens on this page. No popover pointing at the
   Accounts page, no navigation, no dead-end message. (If the drive.file grant is
   missing, a redirect to Google consent is acceptable — see A2 for the return leg.)
+  The view is a `DocsView` with shared drives enabled and folders navigable
+  (since 2026-09-09 — the base `View` can never list shared-drive files, which
+  is what a Workspace user whose sheet lives in a shared drive would have hit):
+  a Workspace account (USER_B) sees a shared-drives entry when it has any, only
+  spreadsheets are selectable, and folders cannot be selected.
 
 ### A2: First-time consent round-trip returns to the same page and auto-opens the picker
 - Deterministic proxy for the return leg (works without revoking any grant):
