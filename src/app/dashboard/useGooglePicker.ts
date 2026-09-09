@@ -177,7 +177,19 @@ export function useGooglePicker(
         setIsLoading(false);
       };
 
-      const view = new window.google.picker.View(window.google.picker.ViewId[kindDesc.pickerViewId]);
+      // DocsView, not the base View: only DocsView can show shared drives
+      // (Picker reference, setEnableDrives: "Shows shared drives and the files
+      // they contain" — hidden otherwise, and the base View has no such
+      // switch). A Workspace user whose file lives in a shared drive
+      // otherwise opens a Picker that cannot list it: on 2026-09-07 one such
+      // account opened the docs Picker seven times (approve page, profile,
+      // Accounts page) and cancelled each within 4–12 s without ever typing a
+      // search. Folders are included so shared-drive contents are reachable;
+      // they stay unselectable (setSelectFolderEnabled default), and the view
+      // still lists only this kind's files.
+      const view = new window.google.picker.DocsView(window.google.picker.ViewId[kindDesc.pickerViewId])
+        .setEnableDrives(true)
+        .setIncludeFolders(true);
       const builder = new window.google.picker.PickerBuilder()
         .addView(view)
         .setOAuthToken(tokenData.accessToken)
