@@ -177,21 +177,28 @@ export function useGooglePicker(
         setIsLoading(false);
       };
 
-      // DocsView, not the base View: only DocsView can show shared drives
-      // (Picker reference, setEnableDrives: "Shows shared drives and the files
-      // they contain" — hidden otherwise, and the base View has no such
-      // switch). A Workspace user whose file lives in a shared drive
-      // otherwise opens a Picker that cannot list it: on 2026-09-07 one such
-      // account opened the docs Picker seven times (approve page, profile,
-      // Accounts page) and cancelled each within 4–12 s without ever typing a
-      // search. Folders are included so shared-drive contents are reachable;
-      // they stay unselectable (setSelectFolderEnabled default), and the view
-      // still lists only this kind's files.
-      const view = new window.google.picker.DocsView(window.google.picker.ViewId[kindDesc.pickerViewId])
+      // Two views, not one. The first is the flat "every <kind> I can open"
+      // list the Picker always showed (My Drive + shared-with-me, searchable;
+      // a DocsView with no options renders like the base View). The second
+      // is the only way the Picker lists shared-drive files: the base View
+      // has no switch for them, and only DocsView.setEnableDrives(true) shows
+      // them (Picker reference). It must be a SEPARATE view — a single view
+      // with drives enabled roots the dialog at "Shared drives" and hides My
+      // Drive entirely (measured 2026-09-09: a personal account opened to
+      // "No documents." and could only reach its own files by search). Why it
+      // matters: on 2026-09-07 a Workspace-domain user opened the docs Picker
+      // seven times (approve page, profile, Accounts) and cancelled each
+      // within 4–12 s without typing a search — a file in a shared drive could
+      // not have been listed for them. Folders in the drives view are
+      // navigable only (setSelectFolderEnabled stays off).
+      const viewId = window.google.picker.ViewId[kindDesc.pickerViewId];
+      const filesView = new window.google.picker.DocsView(viewId);
+      const sharedDrivesView = new window.google.picker.DocsView(viewId)
         .setEnableDrives(true)
         .setIncludeFolders(true);
       const builder = new window.google.picker.PickerBuilder()
-        .addView(view)
+        .addView(filesView)
+        .addView(sharedDrivesView)
         .setOAuthToken(tokenData.accessToken)
         .setCallback(pickerCallback)
         .setTitle(kindDesc.pickerTitle)
