@@ -1,7 +1,8 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { headers } from "next/headers";
-import { auth } from "@clerk/nextjs/server";
+import { auth, currentUser } from "@clerk/nextjs/server";
+import { classifyApproveClient, type ApproveClient } from "@/lib/approveClientClass";
 import { describeApproval, peekApprovalParams, APPROVAL_PARAMS, type ApprovalPayload, type ApprovalSearchParams } from "@/lib/approvalLinks";
 import { markApprovalRequestOpened, getApprovalRequestResourceName } from "@/lib/approvalRequests";
 import { captureServerEvent } from "@/lib/posthogServer";
@@ -36,15 +37,16 @@ import { ApprovedSettling } from "./ApprovedSettling";
  * client-side pageviews, ~23% of approve-page loads were an AI agent rather
  * than a person — which meant "opened" systematically overstated human
  * reach. Stamping the request's own UA here makes that split visible without
- * a second client-side event. */
-const AGENT_UA = /claude|anthropic|electron|node-fetch|python-requests|axios|curl|wget|bot\b|crawler|spider|headless/i;
-
-async function clientClassification(): Promise<{ agent_driven: boolean; user_agent: string }> {
+ * a second client-side event. The classifier lives in
+ * `src/lib/approveClientClass.ts`: since 2026-09-09 it tells Claude desktop's
+ * in-app browser (a person; `client: 'claude_desktop'`) apart from agents —
+ * the bare "claude" test had counted those people as agent-driven. */
+async function clientClassification(): Promise<{ agent_driven: boolean; client: ApproveClient; user_agent: string }> {
   try {
     const ua = (await headers()).get("user-agent") ?? "";
-    return { agent_driven: AGENT_UA.test(ua), user_agent: ua.slice(0, 160) };
+    return { ...classifyApproveClient(ua), user_agent: ua.slice(0, 160) };
   } catch {
-    return { agent_driven: false, user_agent: "" };
+    return { agent_driven: false, client: "browser", user_agent: "" };
   }
 }
 
@@ -276,6 +278,21 @@ export default async function ApprovePage({
   const isSheets = (p.action === "sheets_expose" || p.action === "sheets_write") && p.spreadsheetId;
   const isDocs = (p.action === "docs_expose" || p.action === "docs_write") && p.documentId;
 
+  // The Google account whose Drive the Picker will list — the pick-first
+  // panel names it. Two of this week's abandoned approvals (2026-09-09 review)
+  // were people whose sheet lived in a DIFFERENT Google account than the one
+  // connected to FGAC: the Picker could never show it, they cancelled within
+  // seconds, and nothing on the page said which account it was searching.
+  let connectedGoogleEmail: string | null = null;
+  if (isSheets || isDocs) {
+    try {
+      const cu = await currentUser();
+      connectedGoogleEmail = cu?.externalAccounts.find(
+        acc => acc.provider === "oauth_google" || (acc.provider as string) === "google",
+      )?.emailAddress ?? null;
+    } catch { /* copy degrades to "the connected Google account" */ }
+  }
+
   return (
     <Card>
       <h1 className="mb-1 text-xl font-bold text-foreground">Approve agent permission?</h1>
@@ -296,6 +313,7 @@ export default async function ApprovePage({
           kind={isSheets ? "sheet" : "doc"}
           fileId={(isSheets ? p.spreadsheetId : p.documentId)!}
           resourceName={p.resourceName || null}
+          connectedGoogleEmail={connectedGoogleEmail}
           level={p.action.endsWith("_write") ? "write" : "expose"}
           approveAction={approve}
         />

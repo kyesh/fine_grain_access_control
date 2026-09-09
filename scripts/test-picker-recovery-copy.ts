@@ -9,7 +9,7 @@
  * Picker lists files by NAME (the 2026-09 leak: users saw an opaque id, opened
  * the Picker, and closed it).
  */
-import { pickerRecoveryCopy, pickByNameHint, describeRequestedFile, cleanResourceName } from '../src/lib/pickerRecoveryCopy';
+import { pickerRecoveryCopy, pickByNameHint, describeRequestedFile, cleanResourceName, pickerAccountHint } from '../src/lib/pickerRecoveryCopy';
 
 let failures = 0;
 function check(name: string, cond: boolean) {
@@ -39,6 +39,18 @@ check('kind noun follows the input', /choosing a document/.test(titled.heading))
 console.log('pickByNameHint:');
 check('id-only hint mentions name vs id', /by name, not by id/.test(pickByNameHint({ short: 'sheet', title: null })));
 check('titled hint names the title', /"Q3 Budget"/.test(pickByNameHint({ short: 'sheet', title: 'Q3 Budget' })));
+
+console.log('pickerAccountHint:');
+const withEmail = pickerAccountHint({ short: 'sheet', googleEmail: 'owner@example.com' });
+check('names the connected Google account', withEmail.includes('owner@example.com'));
+check('says whose Drive the picker shows', /picker shows the Google Drive of owner@example\.com/.test(withEmail));
+check('tells the other-account case to share the file with the connected account', /share it with owner@example\.com/.test(withEmail));
+check('says where a shared file appears', /"Shared with me"/.test(withEmail));
+check('kind noun follows the input', /If the sheet belongs/.test(withEmail));
+const noEmail = pickerAccountHint({ short: 'document', googleEmail: null });
+check('unknown account degrades to a generic phrase, never an empty name', /Google account connected to FGAC/.test(noEmail) && !/of \./.test(noEmail));
+check('unknown account still gives the share step', /share it with that account/.test(noEmail));
+check('unknown account uses the document noun', /If the document belongs/.test(noEmail));
 
 console.log('describeRequestedFile:');
 check('id-only wording', describeRequestedFile({ short: 'sheet', title: null, fileId: ID }) === `the sheet with Google id ${ID}`);

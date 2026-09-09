@@ -407,7 +407,15 @@ attributable to it.
   picked_count: 1, request_id}` fires for that submit; the eventual success
   fires the existing `{via: 'magic_link', result: 'ok'}`. `docs_*` twins carry
   the same props. The `request_access` mint from capability 15 A8 carries
-  `has_resource_name: true`; a denial mint carries none
+  `has_resource_name: true`; a denial mint carries none. Since 2026-09-09 each
+  pick-button click also lands a SERVER row `picker_token_requested {result:
+  'ok', has_drive_file_scope: true, scope_source, app_id_resolved: true,
+  page: '/dashboard/approve'}` (capability 17 A14) — so for the run above,
+  `count(picker_token_requested) = count(picker_opened) = 2`. The
+  `approval_link_opened` row for the run carries `client: 'browser'`
+  (`claude_desktop` when the link is opened inside the Claude desktop app;
+  `agent` only for non-browser fetchers), with `agent_driven: false` for
+  both human classes
 - **Regression**: until 2026-09-08 `picker_cancelled` carried only `kind`, so
   cancel-then-retry was indistinguishable from cancel-and-leave, and the
   failed post-pick verification emitted nothing — the 8-second retry loop one

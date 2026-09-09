@@ -60,6 +60,27 @@ export function pickerRecoveryCopy(input: PickerRecoveryInput): PickerRecoveryCo
 }
 
 /**
+ * Which Google account the Picker is looking at — and what to do when the
+ * file lives in another one.
+ *
+ * Why: the Picker lists the Drive of the ONE Google account connected to
+ * FGAC. In the week to 2026-09-09 two people who opened a sheets approval
+ * link cancelled the Picker within seconds (one three times in 18 s / 7 s /
+ * 4 s, then signed out and back in with Google, added a delegated account,
+ * opened the Picker again and cancelled again; the other's agent kept naming
+ * an account the key does not cover, and after a 40 s cancel they removed
+ * accounts and signed out). Nothing on the page said whose Drive the Picker
+ * was searching, so a sheet in a second account looked like a broken picker.
+ * Sharing the file with the connected account makes it pickable under
+ * "Shared with me" — the one step that actually works today.
+ */
+export function pickerAccountHint({ short, googleEmail }: { short: string; googleEmail: string | null }): string {
+  const account = googleEmail ? googleEmail : 'the Google account connected to FGAC';
+  const shareWith = googleEmail ? googleEmail : 'that account';
+  return `The picker shows the Google Drive of ${account}. If the ${short} belongs to a different Google account, share it with ${shareWith} in Google first — it then appears under "Shared with me" and can be picked.`;
+}
+
+/**
  * Normalise an agent-supplied file title before it is stored or rendered:
  * trimmed, whitespace-collapsed, capped. Returns undefined for anything empty
  * so callers can spread it into optional fields.

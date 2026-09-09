@@ -205,3 +205,43 @@ sheet tells the truth.
   which file it meant, and closed it. Production 2026-09-03 → 09-07: 13 of 33
   Picker opens ended in a cancel; both users who cancelled on the approve
   page never approved
+
+### A13: The pick-first panel names the Google account the Picker searches
+- Open a denial-minted sheets link (A1) as USER_A in the pick-first state
+  (A2). Read the line under the pick button
+  (`data-testid="sheets-flow-account-hint"`). Then cancel the Picker (A12)
+  and read the recovery panel.
+- **Expected**: Both say "The picker shows the Google Drive of
+  <USER_A's connected Google address>", that a sheet belonging to a
+  different Google account must be shared with that address first, and that
+  it then appears under "Shared with me". The address shown is the Google
+  account Clerk holds for USER_A (Accounts page "Connected Google account"),
+  not a placeholder. Docs links mirror this with the `docs-` prefix and
+  "document". A signed-in user with no Google external account (not
+  reproducible with the QA accounts) gets the generic "the Google account
+  connected to FGAC" wording — pinned by
+  `scripts/test-picker-recovery-copy.ts`.
+- **Regression**: 2026-09-03 and 09-05 (production) two people whose sheet
+  lived in a second Google account cancelled the Picker within seconds
+  (18 s / 7 s / 4 s; 40 s), then went hunting — sign out, sign back in with
+  Google, add a delegated account, remove accounts — and never approved.
+  Nothing on the page said whose Drive the Picker was listing.
+
+### A14: A pick-button click is visible server-side even when posthog-js is blocked
+- Run A2 with a content blocker (or with `us.i.posthog.com` blocked in the
+  browser's devtools network conditions) so no client-side event leaves the
+  page. Click "Step 1 — Pick the sheet in Google Picker". Then query:
+  `SELECT event, properties.result, properties.has_drive_file_scope,
+  properties.scope_source, properties.app_id_resolved, properties.page FROM
+  events WHERE event = 'picker_token_requested' AND timestamp >= now() -
+  INTERVAL 1 HOUR ORDER BY timestamp`
+- **Expected**: one `picker_token_requested {result: 'ok',
+  has_drive_file_scope: true, scope_source: 'google-tokeninfo',
+  app_id_resolved: true, page: '/dashboard/approve'}` per click, with NO
+  `picker_opened` for the blocked run (and one `picker_opened` per click for
+  an unblocked run). A user whose Google grant lacks drive.file produces
+  `has_drive_file_scope: false` on the same row (the reconnect leg).
+- **Regression**: 8 of the 65 people who opened an approval link in the 30
+  days to 2026-09-09 emitted no client-side event at all; two of that
+  week's three "opened, never picked" accounts were among them, and the
+  review could not say whether they had clicked.
