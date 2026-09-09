@@ -21,7 +21,7 @@ Captured in `verifyMcpAuth` (`src/app/api/mcp/route.ts`):
 | `optimizations_enabled` | kill-switch state at capture time |
 | `error_class` | Clerk auth() error name, when it threw |
 | `kid` | signing-key id from the (unverified) token header, on `invalid_token` only |
-| `method` | HTTP verb (`POST`; a `GET` is a client opening the optional SSE stream — Claude Code never does, claude.ai rarely) |
+| `method` | HTTP verb (`POST`; a `GET` is a client opening the optional SSE stream and taking the stateless 405 — rare in production, one per process start for a locally run CLI) |
 | `connection_resolve` | what the auth layer's eager `resolveConnection` did on this request: `ran` (four Neon round trips), `skipped` (touched within the last 5 minutes by the same user+client — `src/lib/connectionTouchMemo.ts`), `error`. Added 2026-09-08 |
 | `connection_resolve_ms` | wall time of that eager resolve when it ran; the per-request DB cost of a handshake (see 7.15) |
 
@@ -735,9 +735,12 @@ shape (each `query()` or `claude -p` is a new process; subagents share the
 parent's connection; the two interleaving `client_version`s from one
 `client_id` are a bundled SDK CLI next to an auto-updating global install —
 OAuth registrations live in the Keychain and are shared machine-wide). It is
-**not** a server-side reconnect: Claude Code never opens the SSE GET, so the
-stateless 405 is never seen, and the `server/discover` probe rate stays at
-the cached ~1 per 15 minutes.
+**not** a server-side reconnect. A local Claude Code 2.1.263 start-up
+(measured 2026-09-09 with a static-header config) is one probe (`400`),
+`initialize`, `notifications/initialized`, one SSE `GET` that takes the
+stateless `405` quietly with no retry, then `tools/list` — and the process
+ends. The production loop clients show no authenticated GETs at all and only
+the cached ~1 probe per 15 minutes, so their cycle is the three POSTs.
 
 What the server does about it (PR for `claude/adoring-snyder-eea430`): the
 auth layer's eager `resolveConnection` (four sequential Neon round trips per
