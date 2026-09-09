@@ -18,6 +18,7 @@
     "env:check": "tsx scripts/env-check.ts",
     "db:tombstone-orphans": "tsx scripts/tombstone-orphaned-users.ts",
     "google:scope-sweep": "tsx scripts/google-scope-sweep.ts",
+    "funnel:scopes": "tsx scripts/funnel-scopes.ts",
     "links": "tsx scripts/short-links.ts"
   },
   "dependencies": {
