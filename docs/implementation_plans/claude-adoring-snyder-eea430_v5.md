@@ -45,7 +45,8 @@ What stays from v1–v4: the memo (kill switch `MCP_CONNECTION_TOUCH_MEMO`),
 ## Validation
 
 - [x] `scripts/test-connection-touch-memo.ts`, `npm run mcp:lint`, `npx tsc --noEmit`
-- [ ] preview redeploy of this revision: a handshake burst produces one
-      `mcp_client_initialize` row per initialize again, `connection_resolve`
-      still `skipped` inside the window
+- [x] preview redeploy of this revision (8eae791): a 20-handshake burst at
+      00:41–00:42Z produced exactly 20 `mcp_client_initialize` rows (plus the
+      runner's probe), and every sampled `mcp_auth_attempt` inside the window
+      was `connection_resolve = 'skipped'`
 - [ ] production, day after deploy: §7.15
