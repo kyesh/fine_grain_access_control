@@ -172,4 +172,11 @@
   a chooser-only pass is a regression), and after consent A4 passes again. If
   the revocation cannot be arranged in the environment, `npx tsx
   scripts/test-google-token-failure.ts` pins the classification and wording —
-  record the assertion as covered by unit test, with the reason, not as a pass
+  record the assertion as covered by unit test, with the reason, not as a pass.
+  Preview note (measured 2026-09-09, PR #127): the minted `reconnect_url` always
+  carries the canonical production host (`DASHBOARD_URL` falls back to
+  `VERCEL_PROJECT_PRODUCTION_URL`), which runs a different Clerk instance from
+  the preview — open the same path and query on the preview origin instead.
+  The revocation took ~40 min to surface (Clerk serves its cached access token
+  until expiry); the Google permissions page and the consent leg needed Path B
+  in an unattended session
