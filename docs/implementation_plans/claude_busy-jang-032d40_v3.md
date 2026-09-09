@@ -1,4 +1,4 @@
-# Docs approval links: where the 0-of-13 loss actually is (v2)
+# Docs approval links: where the 0-of-13 loss actually is (v3)
 
 Branch: `claude/busy-jang-032d40` · Date: 2026-09-08 · Base: main @ e60a8f7 (PR #122 deployed 14:34Z)
 
@@ -166,9 +166,45 @@ read succeeds. USER_B was not re-observed in this run (the Mac's screen
 locked mid-run and Google's account chooser accepted no input); covered on
 the preview below.
 
-## Preview
+## Preview (PR #126, commit 45f3a19, `…-69netwcgq-…vercel.app`, 2026-09-09 01:25–01:42 UTC)
 
-Pending — results in v3.
+Dev Clerk instance on an isolated Neon preview branch; `qa-setup-driver`, Path
+B for every Picker step; approval links minted on preview carry the production
+origin (known quirk) and were rewritten to the preview host, never opened
+against production.
+
+- **USER_A (personal).** Docs Picker `nav` =
+  `(("documents"),("documents",,{"dr":true,"includeFolders":true}))`; tabs
+  "Documents" (selected, 13 fixture docs at the root without a search) +
+  "Shared drives" ("No documents."). Sheets Picker: "Spreadsheets" (19 sheets
+  incl. Demo Spreadsheet) + "Shared drives" ("No spreadsheets."). Docs
+  approval end to end: DCR/PKCE bearer against the preview →
+  `docs_read_document` → 🚫 + `docs_expose` link → `docs-flow-pick-first`
+  (`verify-docs-access` link_open → `missing`) → new doc is the first root
+  tile → pick → `docs-flow-confirm` "(verified with Google)" → Approve
+  read-only → 303 → `approved-verified` (post_approval → `ok` with the title)
+  → `docs_read_document` returns the document; `get_my_permissions` lists the
+  new `doc_read` rule. No `approve-notice`, no error, no FGAC console errors.
+- **USER_B (Workspace).** Docs Picker: "Documents" tab (selected, empty — the
+  account owns no Docs; Google renders no empty-state text) + "Shared drives"
+  listing both of the account's shared drives; entering one shows 10 folders
+  and a Google Doc with a back control. Sheets Picker: the account's own
+  sheets under "Spreadsheets", the same two drives under "Shared drives" (4
+  sheets inside). No sign-in wall; the chooser accepted trusted clicks.
+
+Also on this branch: merging main brought in PR #123; `monitoring.md` 7.15's
+inline QA-account list was replaced with the placeholder the pre-commit
+secret scan requires (the scan blocks a commit otherwise).
+
+## Follow-ups (not in this branch)
+
+- Validate file-id shape before minting an approval link: `<id>/edit` and a
+  junk 44-char id both receive a confident link today (queued as a separate
+  task; no production id had that shape this week).
+- Harness: in the current Picker build keyboard Tab never reaches a file
+  tile — a pointer click (Path B) selects it; a doc created via
+  `document/create` only persists after a pointer-click edit; a stale
+  worktree `node_modules` 500s every route until `npm install`.
 
 ## Queries (HogQL, sanitized — replace `<internal>` with the exclusion list)
 
