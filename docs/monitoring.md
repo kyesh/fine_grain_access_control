@@ -745,18 +745,19 @@ the cached ~1 probe per 15 minutes, so their cycle is the three POSTs.
 What the server does about it (PR for `claude/adoring-snyder-eea430`): the
 auth layer's eager `resolveConnection` (four sequential Neon round trips per
 authenticated request, result unused for authorization) is skipped when the
-same user+client was touched within 5 minutes on this instance, and the
-initialize event is coalesced in the same window with the suppressed count
-carried on the next capture. Kill switch `MCP_CONNECTION_TOUCH_MEMO=disabled`.
+same user+client was touched within 5 minutes on this instance. Kill switch
+`MCP_CONNECTION_TOUCH_MEMO=disabled`. The initialize event itself is **not**
+sampled or coalesced (decision 2026-09-09): its per-event timestamps and
+versions are what exposed the pattern, the volume is ~6% of the plan, and a
+user building automation on FGAC is a signal worth keeping at full grain.
 Nothing is rate-limited or rejected — these are paying users whose tool calls
 succeed.
 
 ```sql
--- Clients whose handshakes dwarf their tool calls, 24 h. Sessions are
--- sum(1 + coalesced_initializes), never count() (coalesced since 2026-09-08).
+-- Clients whose handshakes dwarf their tool calls, 24 h.
 SELECT cityHash64(properties.client_id) % 100000 AS client_hash,
        arrayStringConcat(groupUniqArrayIf(properties.client_name, event = 'mcp_client_initialize'), ',') AS client_names,
-       sumIf(1 + toInt(coalesce(properties.coalesced_initializes, 0)), event = 'mcp_client_initialize') AS inits,
+       countIf(event = 'mcp_client_initialize') AS inits,
        countIf(event = '$mcp_tool_call') AS calls,
        uniq(distinct_id) AS users
 FROM events
@@ -776,8 +777,9 @@ otherwise dominate. It becomes actionable only if (a) a loop client's tool
 calls start failing (then it is a stuck client, not a loop), or (b) the
 `connection_resolve = 'skipped'` share on `mcp_auth_attempt` for that client
 is low despite the loop (memo not absorbing it — instance churn or the kill
-switch), or (c) total `mcp_client_initialize` rows exceed ~2,000/day again
-after coalescing, which means the window is too short for a new pattern.
+switch), or (c) `mcp_client_initialize` alone approaches ~300k rows/month
+(30% of the 1M free tier), which is when coalescing the event becomes worth
+its cost in lost per-event grain.
 
 ```sql
 -- Is the memo absorbing the loop? Share of authenticated requests that
@@ -796,5 +798,4 @@ Healthy after the deploy: `skipped` is the majority of sampled `ok` rows
 (loop clients alone are ~85% of authenticated requests), `ran` p50 sits at
 Neon-from-iad1 latency (tens of ms for four round trips), and `error` is zero.
 PostHog volume from handshakes is not a plan problem today (~6% of the free
-tier's 1M events/month at the pre-coalescing rate); the threshold that would
-make it one is the ~2,000 rows/day in (c) above.
+tier's 1M events/month); the threshold that would make it one is (c) above.

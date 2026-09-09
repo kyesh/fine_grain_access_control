@@ -32,7 +32,7 @@ import { captureServerEvent } from '@/lib/posthogServer';
 import { runWithToolCallProps, addToolCallProps, getToolCallProps } from '@/lib/toolCallContext';
 import { GOOGLE_FETCH_TIMEOUT_MS, CLERK_TOKEN_TIMEOUT_MS, withTimeout, isUpstreamTimeout } from '@/lib/upstreamTimeouts';
 import { classifyTransportRejection, installFingerprint, parseInitializeClientInfo, parseRpcEnvelope, resourceIdHash, type McpClientInfo } from '@/lib/mcpClientSignals';
-import { coalesceInitialize, recordEagerResolve, shouldSkipEagerResolve } from '@/lib/connectionTouchMemo';
+import { recordEagerResolve, shouldSkipEagerResolve } from '@/lib/connectionTouchMemo';
 import { after } from 'next/server';
 import { inSuccessSample, AUTH_SUCCESS_SAMPLE } from '@/lib/authSampling';
 import { ensureDefaultProfile } from '@/db/defaultProfile';
@@ -3000,7 +3000,7 @@ const authOptimizationsEnabled = () => process.env.MCP_AUTH_OPTIMIZATIONS !== 'd
 /**
  * Kill switch for the connection-touch memo (src/lib/connectionTouchMemo.ts):
  * set MCP_CONNECTION_TOUCH_MEMO=disabled to run the eager resolveConnection
- * and capture every mcp_client_initialize on every request again.
+ * on every request again.
  */
 const connectionTouchMemoEnabled = () => process.env.MCP_CONNECTION_TOUCH_MEMO !== 'disabled';
 
@@ -3258,22 +3258,17 @@ const verifyMcpAuth = async (req: Request, bearerToken?: string) => {
     // user-agent along so $mcp_tool_call can be split by client product.
     (authInfo as { extra?: Record<string, unknown> }).extra = { ...authInfo.extra, userAgent, profileSlug };
     // Once-per-MCP-session product attribution (the initialize handshake).
-    // Coalesced per user+client per instance: automation that spawns a fresh
-    // Claude Code process every ~30 s (2026-09-08: ~1,800 handshakes a day
-    // from one idle client) captures once per window with the suppressed
-    // count riding along — sum(1 + coalesced_initializes) is the true count.
+    // Deliberately NOT coalesced: automation that spawns a fresh Claude Code
+    // process every ~30 s (2026-09-08) makes this the largest event in the
+    // project, but the per-event timestamps and versions are what exposed
+    // that pattern (docs/monitoring.md 7.15); volume is ~6% of the plan.
     if (clientInfo && userId) {
-      const coalesced =
-        clientId && connectionTouchMemoEnabled() ? coalesceInitialize(userId, clientId) : 0;
-      if (coalesced !== undefined) {
-        captureServerEvent(userId, 'mcp_client_initialize', {
-          client_name: clientInfo.name,
-          client_version: clientInfo.version,
-          client_id: clientId,
-          user_agent: userAgent,
-          coalesced_initializes: coalesced,
-        });
-      }
+      captureServerEvent(userId, 'mcp_client_initialize', {
+        client_name: clientInfo.name,
+        client_version: clientInfo.version,
+        client_id: clientId,
+        user_agent: userAgent,
+      });
     }
     if (userId && clientId) {
       // The touch is four sequential Neon round trips whose result nothing

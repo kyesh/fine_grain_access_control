@@ -6,14 +6,13 @@
  * Background (2026-09-08): automation that spawns a fresh Claude Code process
  * every ~30 s re-runs the MCP handshake each time; the auth layer answered
  * every one of those requests with four Neon round trips and a PostHog event
- * whose only consumer is a daily attribution query. The memo skips the DB
- * touch inside a short window and coalesces the telemetry, without ever
- * suppressing the first initialize that backfills the connection's name.
+ * whose result nothing consumed. The memo skips the DB touch inside a short
+ * window, without ever skipping the first initialize that backfills the
+ * connection's name.
  */
 import {
   shouldSkipEagerResolve,
   recordEagerResolve,
-  coalesceInitialize,
   resetTouchMemoForTests,
   touchMemoSize,
   TOUCH_MEMO_TTL_MS,
@@ -45,23 +44,6 @@ console.log('shouldSkipEagerResolve');
   check('TTL expiry re-runs the resolve', shouldSkipEagerResolve(U, C, false, T0 + 2000 + TOUCH_MEMO_TTL_MS) === false);
   check('a different client is a miss', shouldSkipEagerResolve(U, 'client_other', false, T0 + 3000) === false);
   check('a different user with the same client id is a miss', shouldSkipEagerResolve('user_other', C, false, T0 + 3000) === false);
-}
-
-console.log('coalesceInitialize');
-{
-  resetTouchMemoForTests();
-  check('first initialize on an instance is captured with 0 coalesced', coalesceInitialize(U, C, T0) === 0);
-  check('second within the window is suppressed', coalesceInitialize(U, C, T0 + 30_000) === undefined);
-  check('third within the window is suppressed', coalesceInitialize(U, C, T0 + 60_000) === undefined);
-  const n = coalesceInitialize(U, C, T0 + TOUCH_MEMO_TTL_MS);
-  check('first after the window is captured and reports the 2 suppressed', n === 2);
-  check('counter resets after a capture', coalesceInitialize(U, C, T0 + TOUCH_MEMO_TTL_MS + 30_000) === undefined);
-  check('the true count is reconstructible: sum(1 + coalesced) over captures', 1 + 0 + 1 + (n ?? 0) === 4);
-
-  // Interplay: the coalescing entry must not make the DB touch look fresh.
-  check('a coalesce-only entry does not skip the eager resolve', shouldSkipEagerResolve(U, C, false, T0 + 1) === false);
-  recordEagerResolve(U, C, true, T0 + 2);
-  check('the resolve record keeps the capture window', coalesceInitialize(U, C, T0 + TOUCH_MEMO_TTL_MS + 40_000) === undefined);
 }
 
 console.log('bounded LRU');

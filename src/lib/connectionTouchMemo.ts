@@ -1,6 +1,5 @@
 /**
- * Per-instance memo for the MCP auth layer's eager `resolveConnection` touch
- * and for coalescing `mcp_client_initialize` telemetry.
+ * Per-instance memo for the MCP auth layer's eager `resolveConnection` touch.
  *
  * Why (2026-09-08 analytics review): every authenticated MCP request runs
  * resolveConnection in the auth wrapper — a users read, an agent_connections
@@ -11,11 +10,12 @@
  * two Claude Code users ran automation that spawned a fresh CLI process every
  * ~30 s for 18 h a day (each spawn = initialize + notifications/initialized +
  * tools/list, zero tool calls): ~1,800 handshakes and ~5,000 needless DB
- * touches a day from one idle client, and `mcp_client_initialize` became the
- * single largest event in PostHog (~50% of daily volume).
+ * touches a day from one idle client. (The initialize telemetry itself is
+ * deliberately left uncoalesced — its per-event grain is what exposed the
+ * pattern; see docs/monitoring.md 7.15.)
  *
  * Contract:
- *   - Routing/telemetry hint ONLY. A memo hit skips a DB touch whose result
+ *   - Routing hint ONLY. A memo hit skips a DB touch whose result
  *     was never used for authorization; a wrong entry can delay a dashboard
  *     "last used" timestamp or a client-name backfill by at most TTL_MS, never
  *     grant or deny access.
@@ -35,10 +35,6 @@ interface TouchEntry {
   touchedAt: number;
   /** Connection row carries a real product name (backfill done). */
   named: boolean;
-  /** Last time an mcp_client_initialize event was captured for this key. */
-  capturedAt: number;
-  /** Initializes seen since `capturedAt` that were NOT captured. */
-  coalesced: number;
 }
 
 const memo = new Map<string, TouchEntry>();
@@ -100,39 +96,8 @@ export function recordEagerResolve(
     e.named = named;
     lruSet(k, e);
   } else {
-    lruSet(k, { touchedAt: now, named, capturedAt: 0, coalesced: 0 });
+    lruSet(k, { touchedAt: now, named });
   }
-}
-
-/**
- * Coalesce `mcp_client_initialize` capture: returns the number of initializes
- * suppressed since the last capture when THIS one should be captured, or
- * `undefined` when it should be suppressed. The first initialize seen by an
- * instance is always captured, so `sum(1 + coalesced_initializes)` over the
- * captured events reconstructs the true count (minus at most one window per
- * instance shutdown).
- */
-export function coalesceInitialize(
-  userId: string,
-  clientId: string,
-  now: number = Date.now(),
-): number | undefined {
-  const k = key(userId, clientId);
-  const e = lruGet(k);
-  if (!e) {
-    lruSet(k, { touchedAt: 0, named: false, capturedAt: now, coalesced: 0 });
-    return 0;
-  }
-  if (now - e.capturedAt >= TOUCH_MEMO_TTL_MS) {
-    const n = e.coalesced;
-    e.capturedAt = now;
-    e.coalesced = 0;
-    lruSet(k, e);
-    return n;
-  }
-  e.coalesced += 1;
-  lruSet(k, e);
-  return undefined;
 }
 
 /** Test hook. */
