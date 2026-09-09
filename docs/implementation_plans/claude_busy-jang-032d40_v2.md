@@ -120,7 +120,7 @@ and adds no more denial text.
    descriptor. Docs/Sheets API verification needs no `supportsAllDrives`
    flag; raw Drive passthrough is the agent's own query string.
 2. **Docs.** `docs/analytics.md`: how to read the per-action funnel (open-step
-   vs Picker-step loss, denial code ≠ link action). `docs/monitoring.md` 7.16:
+   vs Picker-step loss, denial code ≠ link action). `docs/monitoring.md` 7.19:
    the minted → opened → approved per-action query. QA capability 19 A6: links
    are permanent and deterministic, not single-use with a 30-minute TTL
    (capability 14 A12/A13 wording).

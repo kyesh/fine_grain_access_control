@@ -755,7 +755,7 @@ passed a title; the protocol text asks it to). Pair with the post-pick loop:
 `request_id` — more than 2 per link is the 8-second retry loop, and the
 remedy is on the Google-propagation side, not the page.
 
-**7.16 — Approval funnel per action, per link (minted → opened → approved).**
+**7.19 — Approval funnel per action, per link (minted → opened → approved).**
 Locates a conversion loss before anyone names a fix: an action whose links are
 minted but not *opened* is losing users between the agent's reply and the
 click (the agent paraphrased the link away, or the user never asked for that

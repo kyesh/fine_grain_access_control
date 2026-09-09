@@ -143,7 +143,7 @@ Picker seven times. Nothing in the docs approve path was broken: the same week
   back to mints on `request_id` before reading any per-action approval count;
   the `docs_expose` 0/13 above survived that join.
 
-Query: `monitoring.md` 7.16.
+Query: `monitoring.md` 7.19.
 
 The two `sheets_grant_*` events instrument the **picker-first sheets
 approval funnel**: opening a sheets approval link verifies the Google-side
