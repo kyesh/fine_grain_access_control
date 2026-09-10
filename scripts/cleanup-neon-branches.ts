@@ -3,11 +3,13 @@ import { config } from 'dotenv'
 import { execSync } from 'child_process'
 import {
   classifyNeonBranch,
+  sanitize,
   AGE_THRESHOLD_HOURS,
   IDLE_THRESHOLD_HOURS,
   type NeonBranchLike,
   type NeonEndpointLike,
   type Verdict,
+  type MergedRefs,
 } from './lib/neon-branch-classifier'
 
 // Load environment variables from .env.local
@@ -19,11 +21,13 @@ config({ path: '.env.local' })
  * limit; the daily neon-branch-prune task runs it; it can be run by hand any
  * time).
  *
- * The rule is time, not git provenance: delete a branch older than 24h whose
- * compute has been idle more than 6h. The primary branch, anything marked
- * `protected` in Neon, and any branch whose compute is running right now are
- * never touched. See scripts/lib/neon-branch-classifier.ts for the reasoning
- * and scripts/test-neon-branch-cleanup.ts for the unit tests.
+ * Delete a branch whose compute has been idle more than 6h, once EITHER it is
+ * older than 24h OR the PR for its git branch is merged. The primary branch,
+ * anything marked `protected` in Neon, and any branch whose compute is running
+ * right now are never touched. Git state can only bring deletion forward, never
+ * hold it off — when the PR lookup fails the 24h clock still applies. See
+ * scripts/lib/neon-branch-classifier.ts for the reasoning and
+ * scripts/test-neon-branch-cleanup.ts for the unit tests.
  *
  * A deleted branch is recoverable in the sense that matters: `npm run db:branch`
  * recreates one from main. It is NOT recoverable in the sense of accumulated
@@ -48,43 +52,59 @@ function runNeonCmd(cmd: string) {
 }
 
 /**
- * Head-ref -> "#<n> merged|open" for annotating the kept-branch table.
- * DISPLAY ONLY — nothing here reaches classifyNeonBranch, which is deliberately
- * blind to git and PR state. Best-effort: without `gh` the column is simply
- * blank, and the prune is unaffected.
+ * Latest PR per head ref: `claude/foo` -> { label: '#128', merged: true }.
+ *
+ * This feeds a DELETE decision (a merged PR drops the 24h requirement), so its
+ * failure mode is deliberate: on any error the map is empty, the merged path
+ * goes dormant, and every branch falls back to the 24h clock. Git can only make
+ * the pruner more prompt, never keep a branch alive — that direction is the bug
+ * this whole rewrite removed.
+ *
+ * Only the NEWEST PR for a ref counts. A reused branch name whose latest PR is
+ * open is live work, whatever older merged PRs share the name.
  */
-function prAnnotations(): Map<string, string> {
-  const out = new Map<string, string>();
+function prStates(): Map<string, { label: string; merged: boolean }> {
+  const out = new Map<string, { label: string; merged: boolean }>();
   try {
     const prs = JSON.parse(
-      execSync('gh pr list --state all --limit 100 --json number,headRefName,state', {
+      execSync('gh pr list --state all --limit 200 --json number,headRefName,state', {
         encoding: 'utf-8',
         stdio: ['ignore', 'pipe', 'ignore'],
       })
     ) as { number: number; headRefName: string; state: string }[];
+    // gh lists newest first, so the first entry for a ref is its current PR.
     for (const pr of prs) {
-      // Newest first, so the first entry for a ref is the current PR for it.
-      if (!out.has(pr.headRefName)) out.set(pr.headRefName, `#${pr.number} ${pr.state.toLowerCase()}`);
+      if (out.has(pr.headRefName)) continue;
+      out.set(pr.headRefName, { label: `#${pr.number}`, merged: pr.state === 'MERGED' });
     }
-  } catch { /* no gh — the column stays blank */ }
+  } catch {
+    console.log('ℹ️  gh unavailable — merged-PR pruning is off this run; the 24h clock still applies.');
+  }
+  return out;
+}
+
+/** Just the merged refs, as the classifier wants them. */
+function mergedRefs(prs: ReturnType<typeof prStates>): MergedRefs {
+  const out: MergedRefs = new Map();
+  for (const [ref, { label, merged }] of prs) if (merged) out.set(ref, label);
   return out;
 }
 
 /** `preview/<git-branch>` and `<sanitized-git-branch>` both trace back to a ref. */
-function annotate(branchName: string, prs: Map<string, string>): string {
+function annotate(branchName: string, prs: ReturnType<typeof prStates>): string {
   if (prs.size === 0) return '';
   const previewRef = branchName.startsWith('preview/') ? branchName.slice('preview/'.length) : null;
-  if (previewRef && prs.has(previewRef)) return prs.get(previewRef)!;
-  const sanitized = (n: string) => n.replace(/[^a-zA-Z0-9-]/g, '-').toLowerCase();
-  for (const [ref, label] of prs) if (sanitized(ref) === branchName) return label;
-  return '';
+  const hit = previewRef !== null
+    ? prs.get(previewRef)
+    : [...prs].find(([ref]) => sanitize(ref) === branchName)?.[1];
+  return hit ? `${hit.label} ${hit.merged ? 'merged' : 'open'}` : '';
 }
 
 const pad = (v: string, w: number) => v.length >= w ? v : v + ' '.repeat(w - v.length);
 const hours = (h: number | null) => (h === null ? '—' : h < 48 ? `${h.toFixed(1)}h` : `${Math.round(h / 24)}d`);
 
 /** The kept-branch table — the part of the daily report Ken actually reads. */
-function printKeptTable(kept: { branch: NeonBranchLike; verdict: Verdict }[], prs: Map<string, string>) {
+function printKeptTable(kept: { branch: NeonBranchLike; verdict: Verdict }[], prs: ReturnType<typeof prStates>) {
   if (kept.length === 0) return;
   console.log(`\n📋 Kept ${kept.length} branch(es) — nothing here is billable until the project exceeds 10:\n`);
 
@@ -118,7 +138,7 @@ function printKeptTable(kept: { branch: NeonBranchLike; verdict: Verdict }[], pr
 
 async function main() {
   console.log(`🧹 Scanning for stale Neon database branches...${DRY_RUN ? ' (dry run)' : ''}`);
-  console.log(`   Policy: delete when older than ${AGE_THRESHOLD_HOURS}h AND idle more than ${IDLE_THRESHOLD_HOURS}h.`);
+  console.log(`   Policy: delete when idle more than ${IDLE_THRESHOLD_HOURS}h AND either older than ${AGE_THRESHOLD_HOURS}h or its PR is merged.`);
 
   let projectId = process.env.NEON_PROJECT_ID;
   if (!projectId) {
@@ -156,12 +176,20 @@ async function main() {
     process.exit(1);
   }
 
+  // Read once, used twice: as a delete input (merged PRs) and as display-only
+  // annotation in the kept table.
+  const prs = prStates();
+  const merged = mergedRefs(prs);
+  if (merged.size > 0) {
+    console.log(`🔎 ${merged.size} merged PR head ref(s) — their branches skip the ${AGE_THRESHOLD_HOURS}h wait.`);
+  }
+
   const now = new Date();
   const kept: { branch: NeonBranchLike; verdict: Verdict }[] = [];
   let deletedCount = 0;
 
   for (const branch of branches) {
-    const verdict = classifyNeonBranch(branch, endpointsByBranch.get(branch.id ?? '') ?? [], now);
+    const verdict = classifyNeonBranch(branch, endpointsByBranch.get(branch.id ?? '') ?? [], now, merged);
 
     if (verdict.action === 'skip') continue;
 
@@ -184,7 +212,7 @@ async function main() {
     console.log(`✅ ${DRY_RUN ? 'Would clean up' : 'Successfully cleaned up'} ${deletedCount} stale branch(es); ${kept.length} kept.`);
   }
 
-  printKeptTable(kept, prAnnotations());
+  printKeptTable(kept, prs);
   const billable = Math.max(0, branches.length - deletedCount - 10);
   console.log(`\n💰 ${branches.length - deletedCount} branch(es) remain (including main) — ${billable} billable ≈ $${(billable * 1.5).toFixed(2)}/month.`);
 }

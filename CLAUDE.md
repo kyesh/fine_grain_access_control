@@ -334,13 +334,20 @@ deploy of that git branch. Facts that are easy to get wrong:
 - **Preview branches and local `db:branch` branches share the same Neon branch cap.**
   Both kinds count toward the plan limit; when preview deploys fail instantly with
   empty Builds, check the combined branch count first (read-only) before any cleanup.
-- **Both kinds are pruned on a timer, not on merge.** `bash scripts/cleanup-neon-branches.sh`
-  (`npm run db:prune-branches`, and a daily scheduled task) deletes any branch older
-  than 24h whose compute has been idle more than 6h — regardless of whether its git
-  branch is merged, checked out in a worktree, or backing an open PR. So:
-  - **A preview whose PR is still open is not exempt.** If its preview URL has been
-    quiet for 6h the database goes; redeploy the PR to get a fresh branch. To keep one
-    across the timer, mark it `protected` in the Neon console — that is the only opt-out.
+- **Both kinds are pruned on a timer.** `bash scripts/cleanup-neon-branches.sh`
+  (`npm run db:prune-branches`, and a daily scheduled task) deletes any branch whose
+  compute has been idle more than 6h, once EITHER it is older than 24h OR the PR for
+  its git branch is merged. A worktree checkout protects nothing. **Git state can only
+  bring deletion forward, never hold it off** — that direction is the invariant; a git
+  fact used as a *keep* is what let leftover worktrees pin branches forever. If the PR
+  lookup fails (no `gh`), merged-PR pruning goes quiet and the 24h clock still applies. So:
+  - **A merged PR's branches go within 6h of last use**, both the `preview/` one and
+    the local `db:branch` one. Merging is the end of that database's life — finish any
+    QA against a branch before you merge, not after.
+  - **A preview whose PR is still open is not exempt either.** If its preview URL has
+    been quiet for 6h AND it is over 24h old, the database goes; redeploy the PR to get
+    a fresh branch. To keep one across the timers, mark it `protected` in the Neon
+    console — that is the only opt-out.
   - **A worktree you come back to after a day needs `npm run db:branch` again.** Its
     `.env.local` still names the deleted branch, and the dev server will fail to
     connect until you re-run it. The replacement is a fresh copy of main: accumulated

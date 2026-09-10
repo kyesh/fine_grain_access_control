@@ -3,9 +3,15 @@
  * (scripts/lib/neon-branch-classifier.ts, used by scripts/cleanup-neon-branches.ts).
  * Run: npx tsx scripts/test-neon-branch-cleanup.ts  (part of `npm run mcp:lint`)
  *
- * The policy under test (2026-09-10): delete when older than 24h AND idle for
- * more than 6h. Guards: primary branch, Neon-`protected` branches, and any
- * branch whose compute is running right now.
+ * The policy under test (2026-09-10): delete when idle more than 6h AND either
+ * older than 24h or the PR for its git branch is merged. Guards: primary
+ * branch, Neon-`protected` branches, and any branch whose compute is running
+ * right now.
+ *
+ * The load-bearing invariant, asserted below: git state may only ACCELERATE
+ * deletion. An empty merged-ref map (no `gh`, no network) must fall back to the
+ * 24h clock and never keep a branch alive — a git fact used as a KEEP is the
+ * exact bug this policy replaced.
  *
  * Regression guards carried over from the git-provenance era:
  *   - `includes('main')` treated `claude-distracted-germain-*` (ger·main) as
@@ -18,8 +24,10 @@ import {
   classifyNeonBranch,
   AGE_THRESHOLD_HOURS,
   IDLE_THRESHOLD_HOURS,
+  sanitize,
   type NeonBranchLike,
   type NeonEndpointLike,
+  type MergedRefs,
 } from './lib/neon-branch-classifier';
 
 let failures = 0;
@@ -38,7 +46,9 @@ const idleEndpoint = (idleHours: number): NeonEndpointLike =>
 const activeEndpoint = (): NeonEndpointLike =>
   ({ current_state: 'active', last_active: hoursAgo(0) });
 
-const verdict = (b: NeonBranchLike, eps: NeonEndpointLike[] = []) => classifyNeonBranch(b, eps, NOW);
+const verdict = (b: NeonBranchLike, eps: NeonEndpointLike[] = [], merged: MergedRefs = new Map()) =>
+  classifyNeonBranch(b, eps, NOW, merged);
+const MERGED: MergedRefs = new Map([['claude/shipped-work', '#128'], ['fgac/readme-tidy', '#133']]);
 
 console.log('thresholds:');
 check('age threshold is 24h', AGE_THRESHOLD_HOURS === 24);
@@ -110,11 +120,52 @@ check('unparseable created_at → keep, never guessed',
 check('missing created_at → keep, never guessed',
   verdict({ id: 'br-x', name: 'claude-no-date' }, [idleEndpoint(900)]).action === 'keep');
 
-console.log('git provenance is deliberately NOT consulted:');
+console.log('git provenance never KEEPS a branch:');
 check('a branch whose git branch is still open is deleted once cold',
   verdict(branch('preview/claude/open-pr-but-cold', 120), [idleEndpoint(48)]).action === 'delete');
 check('a hand-made branch with no git branch is deleted once cold',
   verdict(branch('claude-stoic-pare-6de772', 405), [idleEndpoint(320)]).action === 'delete');
+check('an unmerged ref past both timers is still deleted',
+  verdict(branch('preview/claude/never-merged', 120), [idleEndpoint(48)], MERGED).action === 'delete');
+
+console.log('sanitize maps db:branch names back to git refs:');
+check('slashes become dashes, lowercased', sanitize('claude/Foo_bar.baz') === 'claude-foo-bar-baz');
+check('already-sanitized names are unchanged', sanitize('claude-shipped-work') === 'claude-shipped-work');
+
+console.log('a merged PR drops the 24h requirement:');
+{
+  const v = verdict(branch('preview/claude/shipped-work', 3), [idleEndpoint(7)], MERGED);
+  check('preview form, 3h old but merged and 7h idle → delete', v.action === 'delete');
+  check('  …reason names the PR', v.reason.includes('#128') && /merged/.test(v.reason));
+  check('  …and it is eligible now', v.metrics.eligibleInHours === 0);
+}
+check('local-dev (sanitized) form of a merged ref → delete',
+  verdict(branch('claude-shipped-work', 3), [idleEndpoint(7)], MERGED).action === 'delete');
+check('a merged ref with a slash-heavy name maps through sanitize',
+  verdict(branch('fgac-readme-tidy', 2), [idleEndpoint(7)], MERGED).action === 'delete');
+check('same branch WITHOUT the merged map → kept by the 24h floor',
+  verdict(branch('claude-shipped-work', 3), [idleEndpoint(7)]).action === 'keep');
+
+console.log('the 6h idle floor still guards the merged path:');
+{
+  const v = verdict(branch('preview/claude/shipped-work', 3), [idleEndpoint(1)], MERGED);
+  check('merged but active 1h ago → keep', v.action === 'keep');
+  check('  …with the idle reason', /under 6h/.test(v.reason));
+  check('  …and only the idle timer left to wait (5h)',
+    Math.abs((v.metrics.eligibleInHours ?? 0) - 5) < 1e-9);
+}
+check('merged but compute running right now → keep',
+  verdict(branch('claude-shipped-work', 300), [activeEndpoint()], MERGED).action === 'keep');
+check('merged but marked protected → keep',
+  verdict(branch('claude-shipped-work', 300, { protected: true }), [idleEndpoint(50)], MERGED).action === 'keep');
+check('merged does NOT override the primary-branch guard',
+  verdict(branch('main', 300, { primary: true }), [idleEndpoint(50)], MERGED).action === 'skip');
+
+console.log('degraded PR lookup falls back to the clock, never to keeping:');
+check('empty merged map: young branch kept exactly as before',
+  verdict(branch('claude-shipped-work', 3), [idleEndpoint(7)], new Map()).action === 'keep');
+check('empty merged map: old cold branch still deleted',
+  verdict(branch('claude-shipped-work', 300), [idleEndpoint(50)], new Map()).action === 'delete');
 
 console.log('metrics reported alongside the verdict (feeds the kept-branch table):');
 {
