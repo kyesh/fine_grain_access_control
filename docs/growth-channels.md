@@ -24,6 +24,48 @@ Listing copy source of truth: `docs/connector_submission/listing_copy.md`
 
 Update the *submitted* and *status* columns as each step lands.
 
+## Attribution: which directory did an install come from?
+
+There is **no direct listing-source signal** — an MCP OAuth handshake carries no
+referrer, and the official/GitHub registries do not proxy traffic. What FGAC
+does capture, per `docs/analytics.md`:
+
+- `mcp_client_initialize` — `client_name` / `client_version` (the client's
+  self-reported MCP clientInfo), `client_id`, `user_agent`. One row per session.
+- `connector_install_started` — `user_agent` + `install_fingerprint` on the
+  OAuth discovery routes, before any account exists.
+- `$mcp_tool_call` — `client_name`, `client_id`, `user_agent` on every call.
+
+So attribution is **by client family**, which maps to a directory closely
+enough for the channels above: `Anthropic/ClaudeAI` / `claude-ai` = Claude
+connector directory; VS Code / Copilot client names = GitHub MCP Registry
+(the official registry is not a VS Code surface by itself); Cline = Cline
+marketplace; Smithery **proxies** every request through its gateway, so its
+installs show a Smithery user agent. PulseMCP, Glama and awesome-lists cannot
+be told apart from organic (any client). Baseline in the 30 days to
+2026-09-10, before any registry listing: `claude-code` (129 users),
+`Anthropic/ClaudeAI` (179), `Anthropic/Toolbox` (64 — directory inspection),
+`sheet-add-in` (9); **no VS Code, Cursor, Cline or Smithery client at all**, so
+any of those appearing after 2026-09-10 is registry-driven.
+
+Query (new client families per week since the registry listing):
+
+```sql
+select toStartOfWeek(timestamp) as week, properties.client_name as client,
+       uniq(distinct_id) as users, count() as inits
+from events
+where event = 'mcp_client_initialize' and timestamp >= '2026-09-10'
+group by week, client order by week, users desc
+```
+
+Date-bound the cohorts with a PostHog annotation at each listing's go-live
+(the Claude directory has one at 2026-08-16T17:00Z; the registry publish at
+2026-09-10T02:32Z still needs one — the CI key lacks `annotation:write`, add it
+in the PostHog UI). If a listing ever needs hard attribution, the profile-slug
+mechanism already proves path-suffixed MCP URLs work with real clients, so a
+reserved per-directory suffix is feasible; not worth it until a channel shows
+volume.
+
 ## What is in the repo (automated)
 
 | piece | path | serves |
