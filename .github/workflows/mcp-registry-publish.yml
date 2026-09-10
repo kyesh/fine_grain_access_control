@@ -1,0 +1,58 @@
+# Publish (or republish) FGAC's hosted MCP server to the official MCP Registry
+# (registry.modelcontextprotocol.io — which the GitHub MCP Registry mirrors).
+#
+# Manual trigger only. The registry is in preview and may reset its data; this
+# workflow makes republishing a one-click event. Runbook: docs/growth-channels.md
+#
+# Auth: HTTP domain proof. https://fgac.ai/.well-known/mcp-registry-auth serves
+# the Ed25519 public key; the secret MCP_PUBLISHER_PRIVATE_KEY holds the matching
+# private key as raw hex (64 chars), derived from .secrets/mcp-registry-key.pem:
+#   openssl pkey -in .secrets/mcp-registry-key.pem -noout -text | grep -A3 "priv:" | tail -n +2 | tr -d ' :\n'
+name: MCP Registry Publish
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install mcp-publisher
+        run: |
+          curl -fsSL "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher
+          ./mcp-publisher --help | head -3
+
+      - name: Verify the domain proof is live on fgac.ai
+        # Fails fast with a readable reason instead of an opaque login error when
+        # the well-known route has not been deployed to production yet.
+        run: |
+          EXPECTED="$(grep -o "v=MCPv1; k=ed25519; p=[A-Za-z0-9+/=]*" src/app/.well-known/mcp-registry-auth/route.ts | head -1)"
+          LIVE="$(curl -fsS https://fgac.ai/.well-known/mcp-registry-auth | tr -d '\n')"
+          echo "expected: $EXPECTED"
+          echo "live:     $LIVE"
+          [ "$LIVE" = "$EXPECTED" ] || { echo "::error::fgac.ai is not serving the record in this commit — run /deploy-prod first"; exit 1; }
+
+      - name: Validate server.json
+        run: ./mcp-publisher validate server.json
+
+      - name: Authenticate to MCP Registry (HTTP domain auth for fgac.ai)
+        env:
+          MCP_PUBLISHER_PRIVATE_KEY: ${{ secrets.MCP_PUBLISHER_PRIVATE_KEY }}
+        run: |
+          [ -n "$MCP_PUBLISHER_PRIVATE_KEY" ] || { echo "::error::MCP_PUBLISHER_PRIVATE_KEY secret is not set"; exit 1; }
+          ./mcp-publisher login http --domain fgac.ai --private-key "$MCP_PUBLISHER_PRIVATE_KEY"
+
+      - name: Publish server.json
+        run: ./mcp-publisher publish server.json
+
+      - name: Confirm the listing is searchable
+        run: |
+          sleep 5
+          curl -fsS "https://registry.modelcontextprotocol.io/v0.1/servers?search=ai.fgac" | tee /tmp/search.json
+          grep -q '"ai.fgac/google-workspace"' /tmp/search.json || { echo "::error::published but not yet returned by search — re-run this step in a minute"; exit 1; }

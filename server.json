@@ -1,0 +1,25 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "ai.fgac/google-workspace",
+  "title": "FGAC.ai: Multiple Gmail Accounts, Google Sheets & Docs",
+  "description": "Multiple Gmail accounts, editable Google Sheets & Docs for AI agents. Deny-by-default access rules.",
+  "version": "0.1.0",
+  "websiteUrl": "https://fgac.ai",
+  "repository": {
+    "url": "https://github.com/kyesh/fine_grain_access_control",
+    "source": "github"
+  },
+  "icons": [
+    {
+      "src": "https://fgac.ai/logo-400.png",
+      "mimeType": "image/png",
+      "sizes": ["400x400"]
+    }
+  ],
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://fgac.ai/api/mcp"
+    }
+  ]
+}
