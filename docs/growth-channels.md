@@ -13,8 +13,8 @@ Listing copy source of truth: `docs/connector_submission/listing_copy.md`
 | surface | submitted | status | listing link |
 |---|---|---|---|
 | Claude connector directory | 2026-08-16 | **live** | https://claude.ai/directory (search "FGAC") |
-| Official MCP Registry (registry.modelcontextprotocol.io) | — | pending — manifest `server.json` + domain proof route in repo; publish via the **MCP Registry Publish** GitHub Action | https://registry.modelcontextprotocol.io/v0.1/servers?search=ai.fgac |
-| GitHub MCP Registry (github.com/mcp) | — | pending — auto-propagates from the official registry, no separate submission (VS Code / Copilot `/mcp search` consumes it) | https://github.com/mcp |
+| Official MCP Registry (registry.modelcontextprotocol.io) | 2026-09-10 | **live** — `ai.fgac/google-workspace` v0.1.0, status `active`, published 2026-09-10T02:32Z by the **MCP Registry Publish** action (run 34429857385) | https://registry.modelcontextprotocol.io/v0.1/servers?search=ai.fgac |
+| GitHub MCP Registry (github.com/mcp) | 2026-09-10 (via official) | pending propagation — auto-ingests from the official registry, no separate submission (VS Code / Copilot `/mcp search` consumes it); check within a day and paste the link | https://github.com/mcp |
 | Smithery | — | pending — submit URL at https://smithery.ai/new; `/.well-known/mcp/server-card.json` fallback is served in case the auto-scan stalls on DCR | https://smithery.ai/server/fgac (expected slug) |
 | ChatGPT Plugin directory | — | pending (30–120 day review, no fee; see memory note "OpenAI Plugin Directory") | https://chatgpt.com/plugins |
 | Cline MCP Marketplace | — | optional, not submitted — GitHub issue template below | https://github.com/cline/mcp-marketplace |
@@ -41,6 +41,8 @@ Actions secret. Losing both means re-keying: regenerate the pair, replace the
 record string in the route, redeploy, re-add the secret.
 
 ## Human checklist (in order)
+
+> Steps 1–4 completed 2026-09-10 (key in 1Password, `MCP_PUBLISHER_PRIVATE_KEY` set, PR #120 deployed, published via the action). Steps 5–6 remain.
 
 ### 1. Back up the private key to 1Password
 
