@@ -13,7 +13,7 @@ import {
   metadataCorsOptionsRequestHandler,
 } from '@clerk/mcp-tools/next';
 import { captureServerEvent } from '@/lib/posthogServer';
-import { installFingerprint } from '@/lib/mcpClientSignals';
+import { classifyMcpClient, installFingerprint } from '@/lib/mcpClientSignals';
 
 const handler = authServerMetadataHandlerClerk();
 const corsHandler = metadataCorsOptionsRequestHandler();
@@ -28,6 +28,7 @@ const trackedGet = (req: Request) => {
     endpoint: 'authorization-server',
     user_agent: req.headers.get('user-agent') ?? undefined,
     install_fingerprint: installFingerprint(req),
+    ...classifyMcpClient({ userAgent: req.headers.get('user-agent') ?? undefined }),
   });
   return handler();
 };
