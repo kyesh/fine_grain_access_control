@@ -2538,11 +2538,8 @@ const handler = createMcpHandler(
         if (scopeDenial) return scopeDenial;
 
         const sid = resolveDriveFileId('sheet', spreadsheetId);
-
         if ('denial' in sid) return sid.denial;
-
         spreadsheetId = sid.id;
-
         const perm = await checkSheetsPermission(conn.user.id, resolved.proxyKeyId, spreadsheetId, false);
         if (!perm.allowed) return policyDenialWithLink(conn, resolved.proxyKeyId, perm.reason, sheetsDenialAction(perm, spreadsheetId, false));
 
@@ -2577,11 +2574,8 @@ const handler = createMcpHandler(
         if (scopeDenial) return scopeDenial;
 
         const sid = resolveDriveFileId('sheet', spreadsheetId);
-
         if ('denial' in sid) return sid.denial;
-
         spreadsheetId = sid.id;
-
         const perm = await checkSheetsPermission(conn.user.id, resolved.proxyKeyId, spreadsheetId, false);
         if (!perm.allowed) return policyDenialWithLink(conn, resolved.proxyKeyId, perm.reason, sheetsDenialAction(perm, spreadsheetId, false));
 
@@ -2614,11 +2608,8 @@ const handler = createMcpHandler(
         if (scopeDenial) return scopeDenial;
 
         const sid = resolveDriveFileId('sheet', spreadsheetId);
-
         if ('denial' in sid) return sid.denial;
-
         spreadsheetId = sid.id;
-
         const perm = await checkSheetsPermission(conn.user.id, resolved.proxyKeyId, spreadsheetId, true);
         if (!perm.allowed) return policyDenialWithLink(conn, resolved.proxyKeyId, perm.reason, sheetsDenialAction(perm, spreadsheetId, true));
 
@@ -2652,11 +2643,8 @@ const handler = createMcpHandler(
         if (scopeDenial) return scopeDenial;
 
         const sid = resolveDriveFileId('sheet', spreadsheetId);
-
         if ('denial' in sid) return sid.denial;
-
         spreadsheetId = sid.id;
-
         const perm = await checkSheetsPermission(conn.user.id, resolved.proxyKeyId, spreadsheetId, true);
         if (!perm.allowed) return policyDenialWithLink(conn, resolved.proxyKeyId, perm.reason, sheetsDenialAction(perm, spreadsheetId, true));
 
@@ -2689,11 +2677,8 @@ const handler = createMcpHandler(
         if (scopeDenial) return scopeDenial;
 
         const sid = resolveDriveFileId('sheet', spreadsheetId);
-
         if ('denial' in sid) return sid.denial;
-
         spreadsheetId = sid.id;
-
         const perm = await checkSheetsPermission(conn.user.id, resolved.proxyKeyId, spreadsheetId, true);
         if (!perm.allowed) return policyDenialWithLink(conn, resolved.proxyKeyId, perm.reason, sheetsDenialAction(perm, spreadsheetId, true));
 
@@ -2724,11 +2709,8 @@ const handler = createMcpHandler(
         if (scopeDenial) return scopeDenial;
 
         const did = resolveDriveFileId('doc', documentId);
-
         if ('denial' in did) return did.denial;
-
         documentId = did.id;
-
         const perm = await checkDocsPermission(conn.user.id, resolved.proxyKeyId, documentId, false);
         if (!perm.allowed) return policyDenialWithLink(conn, resolved.proxyKeyId, perm.reason, docsDenialAction(perm, documentId, false));
 
@@ -2763,11 +2745,8 @@ const handler = createMcpHandler(
         if (scopeDenial) return scopeDenial;
 
         const did = resolveDriveFileId('doc', documentId);
-
         if ('denial' in did) return did.denial;
-
         documentId = did.id;
-
         const perm = await checkDocsPermission(conn.user.id, resolved.proxyKeyId, documentId, true);
         if (!perm.allowed) return policyDenialWithLink(conn, resolved.proxyKeyId, perm.reason, docsDenialAction(perm, documentId, true));
 
@@ -2809,11 +2788,8 @@ const handler = createMcpHandler(
         if (scopeDenial) return scopeDenial;
 
         const fid = resolveDriveFileId('file', fileId);
-
         if ('denial' in fid) return fid.denial;
-
         fileId = fid.id;
-
         const check = await checkCommentsPermission(conn, resolved.proxyKeyId, fileId, false);
         if ('denial' in check) return check.denial;
 
@@ -2847,11 +2823,8 @@ const handler = createMcpHandler(
         if (scopeDenial) return scopeDenial;
 
         const fid = resolveDriveFileId('file', fileId);
-
         if ('denial' in fid) return fid.denial;
-
         fileId = fid.id;
-
         const check = await checkCommentsPermission(conn, resolved.proxyKeyId, fileId, true);
         if ('denial' in check) return check.denial;
 
