@@ -31,7 +31,7 @@ export const TOOL_DEFS = {
   list_accounts: {
     name: 'list_accounts',
     title: 'List accessible email accounts',
-    description: "Lists the email accounts this connection can access through FGAC. account_details reports each account's Google scope state: gmail and drive_file are 'granted', 'missing', or 'unknown' ('unknown' means the state could not be determined right now — treat the account as usable and let a real call settle it; never treat 'unknown' as missing). A 'missing' scope means every call needing it will fail until the account is reconnected — the entry's reconnect_url is a one-click fix link to give the user; it is bound to that specific account, so the user must open it while signed in to FGAC as that account.",
+    description: "Lists the email accounts this connection can access through FGAC. account_details reports each account's Google scope state: gmail and drive_file are 'granted', 'missing', or 'unknown' ('unknown' means the state could not be determined right now — treat the account as usable and let a real call settle it; never treat 'unknown' as missing). A 'missing' scope means every call needing it will fail until the account is reconnected — the entry's reconnect_url is a one-click fix link to give the user; it is bound to that specific account, so the user must open it while signed in to FGAC as that account. google_token: 'unavailable' with a reconnect_url means the Google grant itself is dead (revoked, expired, or missing) — every call on that account fails until the user opens the link; do not retry, and read next_steps.reconnect first.",
     readOnly: true,
   },
   gmail_list: {
@@ -144,7 +144,7 @@ export const TOOL_DEFS = {
   request_access: {
     name: 'request_access',
     title: 'Request a permission upgrade',
-    description: 'Ask the user to grant this agent a specific permission: sending email to a recipient, or read/write access to a Google Spreadsheet or Google Docs document. Returns a single-use approval link for the user — calling this tool grants nothing by itself; the user must open the link and approve.',
+    description: 'Ask the user to grant this agent a specific permission: sending email to a recipient, or read/write access to a Google Spreadsheet or Google Docs document. Returns a permanent approval link for the user — calling this tool grants nothing by itself; the user must open the link and approve. For a spreadsheet or document, pass resourceName (the file\'s title) whenever you know it: the approval page shows it, and without it the user only sees Google\'s file id while Google\'s picker lists files by name.',
     readOnly: true,
   },
   get_my_permissions: {

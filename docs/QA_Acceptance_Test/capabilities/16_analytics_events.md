@@ -100,7 +100,13 @@ attributable to it.
     `failure_reason`, one of `no_proxy_key`, `no_accessible_accounts`,
     `account_not_permitted`, `google_token_unavailable`. Capability 03
     (multi-email scoping) and 07 (key lifecycle) generate the
-    `account_not_permitted` and `no_proxy_key` cases respectively.
+    `account_not_permitted` and `no_proxy_key` cases respectively. Since
+    2026-09-08 `account_not_permitted` with an EXPLICIT `account` argument
+    (capability 03's MCP case) is a 🚫 refusal instead: `outcome =
+    denied_by_policy`, `denial_code = failure_reason = 'account_not_permitted'`,
+    text listing the usable accounts and saying to omit the parameter; the
+    implicit case (no `account`, owner's own address not on the key) stays
+    `failed`.
   - Since the directory-error demotion (PR #72 salvage, 2026-09-02), a second
     class of `outcome=failed` events exists: user/caller-fixable Google
     results demoted from `error` — the stale Gmail message-id/attachment-id
@@ -330,3 +336,102 @@ attributable to it.
   signature for abandoned consent or a session dropped during the OAuth
   round-trip (monitoring.md §7.8); a run where the return leg fires neither
   terminal event is a regression.
+
+### A19: Google token failures classify by cause and name who must reconnect
+- Inspect `$mcp_tool_call` events from this run with
+  `failure_reason = 'google_token_unavailable'` or `'delegation_inactive'`,
+  and any `google_token_retry` rows. (Inducing a Clerk-side token failure on
+  demand is not possible with the QA accounts — see the A10 evidence note —
+  so this assertion is satisfied by the absence of regressions on the rows
+  that do occur, plus `npx tsx scripts/test-google-token-failure.ts`, which
+  pins the per-class wording.)
+- **Expected** (since 2026-09-04):
+  - `google_token_unavailable` rows carry `google_token_error` (`no_token` /
+    `refresh_failed` / `grant_revoked` / `owner_not_found` / `clerk_error` /
+    `timeout`) and the
+    outcome follows the cause: `no_token` / `refresh_failed` / `grant_revoked` /
+    `owner_not_found` classify `denied_by_policy` with
+    `denial_code: 'google_token_unavailable'` (🚫 text that says STOP and
+    names who must act — for a delegated mailbox, the OWNER signed in as that
+    account; `owner_not_found` carries NO reconnect link and says the owner
+    must sign in to FGAC again). On a Vercel preview every delegated mailbox
+    is expected to land in `owner_not_found`: the preview database is a copy
+    of production, so the delegator's row carries a production Clerk id the
+    dev Clerk instance 404s on — an environment artifact, not a regression; `clerk_error` / `timeout` classify `failed` (❌ text that
+    says retry ONCE before offering the reconnect link). A `no_token` or
+    `refresh_failed` row classifying `failed`, or a `clerk_error` row
+    classifying `denied_by_policy`, is a regression.
+  - `delegation_inactive` rows (access row present, delegation no longer
+    active) classify `failed` with re-delegate guidance and NO reconnect link.
+  - A call whose first Clerk fetch failed and whose single server-side retry
+    succeeded carries `google_token_retry: 'recovered'` on a `success` row and
+    fires NO `google_token_fetch_failed`; `retry_failed` accompanies a final
+    failure, whose standalone event carries `retried: true` and, when Clerk
+    threw an API error, `clerk_status` / `clerk_code`. `google_token_fetch_failed`
+    also fires for `reason = 'no_token'` (it did not before this date).
+  - (since 2026-09-09) A Clerk 400 `oauth_token_retrieval_error` classifies
+    `grant_revoked` on every path (`via` = `mcp` / `proxy` / `grant_check`):
+    `retried: false` (never retried), outcome `denied_by_policy`, and the
+    tool-call row carries `google_token_clerk_code:
+    'oauth_token_retrieval_error'`. A `grant_revoked` row classifying `failed`,
+    an `oauth_token_retrieval_error` row with `reason = 'clerk_error'`, or a
+    `retried: true` on that code, is a regression.
+  - `error_reason` stays absent on every token-layer row — it is the
+    Google-response property and the token layer never reached Google.
+
+### A20: approval_link_approved counts written grants; replays are a separate event
+- Run capability 14 A15's server half (two submits of one file-grant approval
+  landing together) and its generic twin (two `requestSubmit()` on a
+  send-whitelist approval), then query the affected user's events for the last
+  hour: `SELECT event, properties.action, properties.path, count() FROM events
+  WHERE event IN ('approval_link_approved','approval_link_replayed','rule_saved')
+  AND timestamp >= now() - INTERVAL 1 HOUR GROUP BY 1,2,3`
+- **Expected**: per link exactly ONE `approval_link_approved` and ONE
+  `rule_saved{via=magic_link}`; every extra submit is an
+  `approval_link_replayed` carrying the same `request_id` and `action`, with
+  `path='picked'` for the file grant and `path='grant_active'` for the send
+  grant. `count(approval_link_approved) = uniq(request_id)` over the run.
+  A replayed file approval makes NO `sheets_grant_verification` /
+  `docs_grant_verification` event (no Google call)
+- **Regression**: between 2026-08-25 and 2026-09-05 the picked-file path
+  re-fired `approval_link_approved` per replay, so raw counts overstated
+  conversion (71% raw vs 37% per link in the last pre-fix week). Funnel
+  queries must divide `uniq(request_id)` by `uniq(request_id)` —
+  `docs/monitoring.md` 7.14
+
+### A21: Picker cancels and post-pick verification failures are measurable
+- Run capability 17 A12 (cancel the Picker on the approve page, then Try
+  again and pick), then query the user's events for the last hour:
+  `SELECT event, properties.kind, properties.attempt, properties.elapsed_ms,
+  properties.from_oauth_return, properties.via, properties.result,
+  properties.picked_count FROM events WHERE event IN
+  ('picker_opened','picker_cancelled','picker_picked','sheets_grant_verification')
+  AND timestamp >= now() - INTERVAL 1 HOUR ORDER BY timestamp`
+- **Expected**: `picker_opened {attempt: 1}` → `picker_cancelled {attempt: 1,
+  elapsed_ms > 0, from_oauth_return: false}` → `picker_opened {attempt: 2}` →
+  `picker_picked`. If the post-pick approval is submitted while Google has not
+  yet propagated the grant (the "Google hasn't finished sharing… pick again"
+  notice), `sheets_grant_verification {via: 'magic_link', result: 'missing',
+  picked_count: 1, request_id}` fires for that submit; the eventual success
+  fires the existing `{via: 'magic_link', result: 'ok'}`. `docs_*` twins carry
+  the same props. The `request_access` mint from capability 15 A8 carries
+  `has_resource_name: true`; a denial mint carries none. Since 2026-09-09 each
+  pick-button click also lands a SERVER row `picker_token_requested {result:
+  'ok', has_drive_file_scope: true, scope_source, app_id_resolved: true,
+  page: '/dashboard/approve'}` (capability 17 A14) — so for the run above,
+  `count(picker_token_requested) = count(picker_opened) = 2`. The
+  `approval_link_opened` row for the run carries `client: 'browser'`
+  (`claude_desktop` when the link is opened inside the Claude desktop app;
+  `agent` only for non-browser fetchers), with `agent_driven: false` for
+  both human classes. **The built-in browser pane IS Claude desktop** — its
+  UA carries `Claude/<build> Chrome/…`, so opens driven from the pane land
+  as `client: 'claude_desktop'` by design; assert `browser` only from a real
+  Chrome (Path B). Also expect more `approval_link_opened` rows than clicks:
+  the event fires per server render of the page (RSC refreshes and
+  navigations re-render it), which is why the funnel is read per
+  `request_id`, never per row
+- **Regression**: until 2026-09-08 `picker_cancelled` carried only `kind`, so
+  cancel-then-retry was indistinguishable from cancel-and-leave, and the
+  failed post-pick verification emitted nothing — the 8-second retry loop one
+  launch-cohort user ran 12 times (PostHog, 2026-08-31) was only visible as
+  server-side `approval_link_opened` events with no pageview

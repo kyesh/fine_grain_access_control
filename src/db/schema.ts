@@ -70,6 +70,13 @@ export const approvalRequests = pgTable('approval_requests', {
   lastMintedAt: timestamp('last_minted_at').defaultNow().notNull(),
   openedAt: timestamp('opened_at'),
   approvedAt: timestamp('approved_at'),
+  // Human-readable title of the file behind a sheets/docs request, when the
+  // agent supplied one via request_access. The approve page can only show
+  // Google's file id for a file Google does not share with FGAC yet, and the
+  // Picker lists files by NAME — so without this the user has to map an
+  // opaque id onto a sheet title themselves (the 2026-09 Picker-cancel leak).
+  // First non-empty value wins; never carried in the URL.
+  resourceName: text('resource_name'),
 });
 
 // ─── Email Delegations ───────────────────────────────────────────────────────

@@ -32,31 +32,35 @@ keep internal/QA traffic out of the numbers.
 | `sign_up_completed` | server (Clerk webhook, `user.created`) | `$set.email` |
 | `sign_in_completed` | client (`SignInTelemetry.tsx`, dashboard pages) | `gmail_scope`, `drive_file_scope`, `needs_drive_file` (user has Sheets/Docs rules), `drive_file_narrowed` (= needs it and arrived without it). Once per Clerk `lastSignInAt` (localStorage-keyed; fires only within 10 min of the sign-in). Added 2026-09-04: PostHog had no sign-in signal, and a plain Google sign-in rewrites Clerk's grant with the sign-in scope set — no `drive.file` — so `drive_file_narrowed` is the per-sign-in count of users whose Sheets/Docs access a sign-in just broke. Detection query: monitoring.md §7.12 |
 | `video_played` | client (`TrackedVideoEmbed.tsx`, all Descript demo embeds) | `video_id`, `video_title`, `page` |
-| `$mcp_tool_call` | server (`/api/mcp`, every tool) | `$mcp_tool_name`, `$mcp_duration_ms`, `$mcp_is_error`, `client_id`, `client_name`, `user_agent`, `outcome`, `account_email`, `account_delegated`; raw tools add `raw_api_kind`, `raw_api_family`, `raw_api_endpoint`, `raw_api_mutating`; denials add `denial_code`, and denials carrying an approval link add `approval_request_id` (joins to the approval funnel); failures add `error_status`, `error_reason`, `error_domain`, `failure_reason`, `gmail_404_site`; per-file sheets/docs calls add `file_id` + `file_service` (stamped in `checkFilePermission`, so every typed sheets/docs tool, comments tool, and raw per-file API call carries them — denied outcomes included — making per-file time-to-first-success queryable and joining to `rule_saved.file_id`); `gmail_get_attachment` adds `attachment_selector` and, on 404 recovery paths, `attachment_selfheal`; windowed reads (`gmail_get_attachment`, `gmail_read`, `docs_read_document`, `sheets_get_spreadsheet`, `sheets_read_range`, `google_api_get`) add `window_offset`, `window_chars`, `window_total_chars`; calls that reach Google add `google_ms` (cumulative wall-clock inside `googleFetch`) and `token_ms` (Clerk token fetch) |
+| `$mcp_tool_call` | server (`/api/mcp`, every tool) | `$mcp_tool_name`, `$mcp_duration_ms`, `$mcp_is_error`, `client_id`, `client_name`, `user_agent`, `outcome`, `account_email`, `account_delegated`; raw tools add `raw_api_kind`, `raw_api_family`, `raw_api_endpoint`, `raw_api_mutating`; denials add `denial_code`, and denials carrying an approval link add `approval_request_id` (joins to the approval funnel); failures add `error_status`, `error_reason`, `error_domain`, `failure_reason`, `gmail_404_site`; per-file sheets/docs calls add `file_id` + `file_service` (stamped in `checkFilePermission`, so every typed sheets/docs tool, comments tool, and raw per-file API call carries them — denied outcomes included — making per-file time-to-first-success queryable and joining to `rule_saved.file_id`); `gmail_get_attachment` adds `attachment_selector` and, on 404 recovery paths, `attachment_selfheal`; windowed reads (`gmail_get_attachment`, `gmail_read`, `docs_read_document`, `sheets_get_spreadsheet`, `sheets_read_range`, `google_api_get`) add `window_offset`, `window_chars`, `window_total_chars`; calls that reach Google add `google_ms` (cumulative wall-clock inside `googleFetch`) and `token_ms` (Clerk token fetch); calls whose Clerk token fetch failed on the first attempt add `google_token_retry` (`recovered` = the single server-side retry got the token and the call went on normally; `retry_failed` = it did not, and the event also carries `google_token_error`) |
 | `proxy_request` | server (`/api/proxy/[...path]`) | `service` (gmail/sheets/drive), `method`, `status`, `outcome` (`success`/`auth_failed`/`denied`/`timeout`/`error`), `duration_ms`, `proxy_key_id`, `account_email`, `account_delegated`, `google_ms`, `token_ms`; upstream failures add `error_status` (`timeout`/`network`) |
 | `mcp_connection_created` | server (`/api/mcp` auth layer) | `connection_id`, `client_id`, `client_name`/`client_version` (from MCP `initialize` clientInfo, when the creating request was one — **in practice ~never**: the client's concurrent SSE GET usually wins the row-insert race, so this event fires nameless; measured 0/10 with a name 2026-08-27→29. Use `mcp_connection_client_identified` or person-level `mcp_client_initialize` for client attribution), `auto_attached`, `account_age_seconds` |
 | `mcp_connection_client_identified` | server (`/api/mcp` auth layer, backfill-on-touch) | `connection_id`, `client_id`, `client_name`, `client_version`. Fires **once per connection**, on the first initialize that replaces the opaque `client_id` placeholder name — the reliable connection→client-product mapping (join on `connection_id`) |
-| `mcp_client_initialize` | server (`/api/mcp` auth layer, every authenticated `initialize`) | `client_name`, `client_version` (the client's self-reported MCP clientInfo), `client_id`, `user_agent`. Once per MCP session — the substrate for the per-product split (Cowork / Claude Code / Claude.ai) |
+| `mcp_client_initialize` | server (`/api/mcp` auth layer, every authenticated `initialize`) | `client_name`, `client_version` (the client's self-reported MCP clientInfo), `client_id`, `user_agent`. Once per MCP session, one row per event — **deliberately never sampled or coalesced** (decision 2026-09-09): automation that starts a fresh Claude Code process every ~30 s made this the largest event in the project (~50% of daily volume from 2 clients), but the per-event timestamps and versions are exactly what exposed that pattern, and volume is ~6% of the plan. Loop clients are named by the `docs/monitoring.md` 7.16 query and excluded from per-request ratios there, not suppressed here. The substrate for the per-product split (Cowork / Claude Code / Claude.ai) |
 | `delegation_created` | server (dashboard action) | `delegate_email`, `reactivated` |
 | `account_linked` | server (dashboard action) | `target_email`, `delegated`, `via` |
-| `approval_link_minted` | server (`/api/mcp` — policy denial, send denial, `request_access`) | `action`, `request_id`, `target_hash`, `mint_count`, `via` (`send_denial`/`request_access`; absent for policy denials). **Fires once per mint ATTEMPT**, so `uniq(request_id)` is demand and `count()` is retry pressure |
-| `approval_link_opened` | server (approve-page load, `/dashboard/approve`) | `status` (`fresh`/`already_granted`/`wrong_account`/`invalid`), `request_id` (real id for `wrong_account` — recomputed against the resolved owner; `undefined` only for `invalid`), `action`, `agent_driven`, `user_agent` |
-| `approval_link_approved` | server (`actions.ts`, all approval paths) | `action`, `request_id`; per-file grants add `substituted` and `granted_count` |
+| `approval_link_minted` | server (`/api/mcp` — policy denial, send denial, `request_access`) | `action`, `request_id`, `target_hash`, `mint_count`, `via` (`send_denial`/`request_access`; absent for policy denials), and on `request_access` mints since 2026-09-08 `has_resource_name` (the request has a title — passed on this call or stored by an earlier one in `approval_requests.resource_name`, shown on the approve page: the only name source for a file Google does not share with FGAC yet) and `resource_name_supplied` (this call passed one). **Fires once per mint ATTEMPT**, so `uniq(request_id)` is demand and `count()` is retry pressure |
+| `approval_link_opened` | server (approve-page load, `/dashboard/approve`) | `status` (`fresh`/`already_granted`/`wrong_account`/`invalid`), `request_id` (real id for `wrong_account` — recomputed against the resolved owner; `undefined` only for `invalid`), `action`, `agent_driven`, `user_agent`; since 2026-09-09 `client` (`browser` / `claude_desktop` / `agent`, from `src/lib/approveClientClass.ts`). **`claude_desktop` is a person** — the Claude desktop app's in-app browser sends a Chrome UA with a `Claude/<build>` token, and before this the bare "claude" agent test counted those opens as `agent_driven: true` (19 opens / 7 people in the 30 days to 2026-09-09, every one followed by that person's own pageviews and pick-button clicks). Read human reach as `client != 'agent'`; `agent_driven` on older rows overstates agents by exactly this class. Fires on every server render of the page (a route refresh or navigation re-renders it — local QA 2026-09-09 saw extra rows while the tab sat idle), so rows overcount opens: always read `uniq(request_id)` |
+| `approval_link_approved` | server (`actions.ts`, all approval paths) | `action`, `request_id`; per-file grants add `substituted` and `granted_count`. **Fires only when a grant is actually written.** A submit that finds every grant already active fires `approval_link_replayed` instead (since PR for `claude/dreamy-tesla-946fdc`, 2026-09-05). Before that fix the picked-file path re-fired this event (and inserted a duplicate rule) on every extra click of an unguarded button — raw counts between 2026-08-25 and the fix are inflated (81 links → 93 events in the last pre-fix week); read the funnel as `uniq(request_id)`, never `count()` |
+| `approval_link_replayed` | server (`actions.ts`, `approveMagicLink` / `applyFileGrantApproval`) | `action`, `request_id`, `path` (`grant_active` = generic idempotency short-circuit; `picked` = every picked file already granted). A no-op re-submit of a link whose grant is already live: a double-click that slipped past the client-side guard, a re-opened permanent link, or a retry after the success page. Not a funnel stage — its rate is the duplicate-submit rate. Runbook: `monitoring.md` 7.14 |
 | `read_restriction_enforced` | server (`/api/mcp`) | `via` (tool name), `restriction` |
 | `rule_saved` | server (`reportRuleSave` in dashboard `actions.ts` — manual rule form, `exposeFilesFromPicker`, magic-link `insertFileRule`; `grantFileAccessPOST` in `fileAccessHandlers.ts`) | `mode` (`create`/`update`), `service`, `action_type`, `via` (`dashboard_manual` = manual rule form, Gmail-only in today's UI / `dashboard_picker` = server-action Picker expose (recovery + profile flows) / `grant_api` = the REST grant endpoint — the dashboard's Picker manager AND any API caller, so it is the only reachable seam for a hand-typed sheet/doc id / `magic_link` = approval-page grant), `file_id` (when the rule targets a sheet/doc — the join key to `$mcp_tool_call.file_id`); `dashboard_manual` adds `scoped`, `assigned_keys`, and pattern shape (`pattern_kind`/`pattern_length` — the pattern itself is NEVER sent: send patterns are real addresses); `dashboard_picker` adds `profile_scoped`; `grant_api` adds `assigned_keys` when key syncing was requested; `magic_link` adds `request_id` (joins the approval funnel) |
 | `rule_save_failed` | server (dashboard `actions.ts`, manual rule form validation) | `mode`, `service`, `action_type`, `via` (`dashboard_manual`), `reason`, pattern shape props as above |
 | `picker_scope_redirect` | client (`useGooglePicker`) | `kind` (`sheet`/`doc`). Fires immediately BEFORE the `drive.file` OAuth consent redirect — the funnel's riskiest hop: a `picker_scope_redirect` with no subsequent `picker_opened` is a user who never came back from consent. Page context via `$pathname` |
-| `picker_opened` | client (`useGooglePicker`) | `kind`, `from_oauth_return` (true when the picker auto-reopened after the consent round-trip) |
+| `picker_opened` | client (`useGooglePicker`) | `kind`, `from_oauth_return` (true when the picker auto-reopened after the consent round-trip), `attempt` (since 2026-09-08: Nth Picker open in this page session — `attempt > 1` after a `picker_cancelled` is the recovery panel's Try again working) |
 | `picker_picked` | client (`useGooglePicker`) | `kind`, `count` (files picked) |
-| `picker_cancelled` | client (`useGooglePicker`) | `kind` |
+| `picker_cancelled` | client (`useGooglePicker`) | `kind`; since 2026-09-08 `attempt`, `elapsed_ms` (open → cancel), `from_oauth_return`. On the approve page a cancel now renders a recovery panel (what the agent asked for, by title when `request_access` supplied one, else by Google id + "the picker lists files by name") with an in-place Try again; before that a cancel changed nothing on screen. Measured 09-03 → 09-07: 13 of 33 Picker opens ended in a cancel, every one from a plain open (`from_oauth_return: false`) |
 | `picker_flow_error` | client (`useGooglePicker`, pre-existing) | `stage`, `message` |
+| `picker_token_requested` | server (`/api/auth/google-picker-token`, the first request a pick-button click makes) | `result` (`ok` / `no_token` = Clerk holds no Google grant for this user / `error`), `has_drive_file_scope` (false sends the browser into the reconnect leg — a dead or narrowed grant reads as this, see `google_scope_missing`), `scope_source` (`google-tokeninfo` / `clerk-cache`), `app_id_resolved`, `page` (Referer pathname: `/dashboard/approve`, a profile page, `/dashboard/accounts`). Added 2026-09-09 as the **server-side twin of the browser's `picker_*` funnel**: posthog-js is blocked for a share of users — 8 of the 65 people who opened an approval link in the 30 days to 2026-09-09 sent no client-side event at all (two of that week's three "opened, never picked" accounts among them) — so a person with a `link_open` verification and no `picker_opened` could be a non-click OR an ad-blocked browser, and only this row tells them apart. One row per click; `count()` vs the same person's `picker_opened` is the telemetry-blind share. Runbook: `monitoring.md` 7.15 |
 | `google_reconnect_started` / `_returned` / `_verified` / `_incomplete` / `_wrong_account` | client (`ReconnectGoogleButton`, Accounts page) | The reconnect funnel (closed 2026-09-03 — `returned`/`verified` are new; before them, silence after `started` was ambiguous between abandoned consent, a session dropped during the OAuth round-trip, and plain success). `started` {`source`} fires before the consent redirect; `returned` when the page processes `?reconnected=1` (fires even after a mid-flow re-sign-in — the redirect_url chain preserves the param); `verified` when the tokeninfo poll confirms both scopes; `incomplete` {`missing_scopes`} when it does not; `wrong_account` {`intended_for`} when a bound reconnect link is opened by the wrong user. Detection query: monitoring.md §7.8 |
-| `sheets_grant_verification` | server (approve-page load via `/api/rules/verify-sheets-access`, approval in `actions.ts`, rule creation in `createRule`/`grantFileAccessPOST`, recovery re-checks) | `result` (`ok`/`missing`/`unknown`), `via` (`link_open`/`magic_link`/`post_approval`/`dashboard_manual`/`grant_api`/`recovery`), `spreadsheet_id`. `grant_api` (and `dashboard_manual`, for direct server-action calls — the manual modal is Gmail-only today) = grant verified at rule birth (the stranded-at-birth case — telemetry only, a Google hiccup never fails rule creation); `recovery` = EVERY recovery-UI re-check, captured regardless of result (attempts that stay `missing` are the funnel's stuck users — before this, only successes were visible via `sheets_grant_recovered`, which still fires on `ok`) |
+| `sheets_grant_verification` | server (approve-page load via `/api/rules/verify-sheets-access`, approval in `actions.ts`, rule creation in `createRule`/`grantFileAccessPOST`, recovery re-checks) | `result` (`ok`/`missing`/`unknown`), `via` (`link_open`/`magic_link`/`post_approval`/`dashboard_manual`/`grant_api`/`recovery`), `spreadsheet_id`; `magic_link` + `result: missing` (since 2026-09-08, with `picked_count` and `request_id`) = the approve page's post-pick verification found none of the picked files reachable and sent the user back to pick again — the retry loop one launch-cohort user ran 12 times in two minutes before granting from the dashboard instead; before this only the successful `magic_link` verification was captured. `grant_api` (and `dashboard_manual`, for direct server-action calls — the manual modal is Gmail-only today) = grant verified at rule birth (the stranded-at-birth case — telemetry only, a Google hiccup never fails rule creation); `recovery` = EVERY recovery-UI re-check, captured regardless of result (attempts that stay `missing` are the funnel's stuck users — before this, only successes were visible via `sheets_grant_recovered`, which still fires on `ok`) |
 | `sheets_grant_recovered` | server (`/api/rules/verify-sheets-access`) | `spreadsheet_id` |
 | `docs_grant_verification` / `docs_grant_recovered` | server (`/api/rules/verify-docs-access`, approval in `actions.ts`) | docs twins of the sheets grant-funnel events, with `document_id` |
-| `google_token_fetch_failed` | server (MCP `getGoogleToken`, proxy `fetchClerkGoogleToken`, `getOwnerGoogleToken`) | `reason` (`refresh_failed` = Clerk 422 cannot-refresh, `clerk_error`, `timeout` = MCP-path Clerk call exceeded 15 s), `via` (`mcp`/`proxy`/`grant_check`), `account_delegated`. The `$mcp_tool_call` event also carries `google_token_error` on affected calls. Added 2026-08-20 after the dev-instance refresh-token loss was found; this is the signal for whether production users hit it too |
+| `google_token_fetch_failed` | server (MCP `getGoogleToken`, proxy `fetchClerkGoogleToken`, `getOwnerGoogleToken`) | `reason` (`refresh_failed` = Clerk 422 cannot-refresh, `clerk_error`, `timeout` = MCP-path Clerk call exceeded 15 s, `no_token` = Clerk answered with no stored Google grant — MCP path only, fires since 2026-09-04; before that this class stamped only the tool-call prop; `owner_not_found` = Clerk 404 `resource_not_found` for the mailbox owner's stored user id — the owner's FGAC account was deleted, or the row came from another Clerk instance; MCP path, since 2026-09-04; `grant_revoked` = Clerk 400 `oauth_token_retrieval_error`, Clerk asked Google to refresh and Google refused — every production instance inspected carried Google's `invalid_grant "Token has been expired or revoked."` (user revoked FGAC in Google, changed their Google password, or the grant aged out); deterministic, a reconnect repairs it; all three paths, since 2026-09-09 — before that this code fell through to `clerk_error`), `via` (`mcp`/`proxy`/`grant_check`), `account_delegated`; since 2026-09-04 the MCP path adds `retried` (a server-side retry already ran and failed — see `google_token_retry`) and, when Clerk threw an API error, `clerk_status` / `clerk_code` (Clerk's HTTP status and first error code — enum-like, so the next triage can see what Clerk said; the proxy and grant-check paths stamp them since 2026-09-09), plus `provider_error` when Clerk relays the upstream error (the current SDK drops it, so expect it absent). The `$mcp_tool_call` event also carries `google_token_error` and, since 2026-09-09, `google_token_clerk_code` on affected calls, so the per-tool error table can split dead grants from upstream trouble without a join. Added 2026-08-20 after the dev-instance refresh-token loss was found; this is the signal for whether production users hit it too. **The event fires only on FINAL failure**: a fetch that fails and recovers on the retry fires nothing here and stamps `google_token_retry: 'recovered'` on the tool call instead (docs/monitoring.md §7.13) |
 | `google_token_identity_fallback` | server (MCP `getGoogleToken`) | `via` (`mcp`). Fires when a key owner's own mailbox is reached through the identity-drift self-heal added in `4b551018` — the target address is not a delegation but IS one of the owner's verified Clerk addresses. Unsampled, and independent of `$mcp_tool_call`, so `uniq(person)` is exactly the drifted population still being rescued; the same call also carries `google_token_identity_fallback: true` on `$mcp_tool_call`. Expected to trend to zero as users self-heal — see docs/monitoring.md 7.4 |
 | `google_scope_missing` | server (MCP `gmailScopeDenial` / `driveFileScopeDenial`, proxy Gmail handler) | `via` (`mcp`/`proxy`), `scope` (`gmail` / `drive_file`; absent on pre-2026-08-29 events, all of which are gmail), `account_delegated`. Fires when a call is pre-flight denied because Clerk's granted scopes for the account lack what the surface rides on: Gmail calls need `gmail.modify` / `mail.google.com`; non-Gmail calls (typed sheets_*/docs_*/comments_* tools and raw Sheets/Docs/Slides/Drive paths) need `drive.file` — the "checkbox left unchecked at consent" (or pre-drive.file connection) states, which would 403 on every such call until reconnect. Unsampled and independent of `$mcp_tool_call`, so `uniq(person)` is the size of the locked-out population; the same call carries `google_scope_missing: true` on `$mcp_tool_call` and pre-flight-denies with `denial_code` = `failure_reason` = `'gmail_scope_missing'` / `'drive_file_scope_missing'` (outcome `denied_by_policy` since 2026-09-03; `failed` from 2026-08-28 to then) instead of surfacing Google's 403 (outcome `error`). Added 2026-08-28 after repeated per-user gmail_list 403s; drive_file variant 2026-08-29. Since 2026-09-04 a metadata-based denial is confirmed against Google's tokeninfo before it fires — Clerk's scope record is a cache of the last completed OAuth request, and a plain Google sign-in rewrites it without `drive.file` — and when tokeninfo disagrees the call proceeds with `clerk_scope_cache_stale: true` on `$mcp_tool_call`. Since 2026-09-05 tokeninfo decides in BOTH directions (cached ~once per account per token lifetime): a record that claims a scope the token lacks — a no-consent sign-in over a narrow refresh token — is denied as usual and stamps `clerk_scope_record_overstates: true`; monitoring.md §7.12a |
+| `mcp_transport_rejected` | server (`/api/mcp` `withTransportObservability`, every transport-level 4xx) | `reason` (`discover_probe` = MCP 2026-07-28 `server/discover` probe answered with the legacy 400, benign and expected; `unsupported_protocol_version` = the same rejection on any other method, a truly refused client; `sdk`; `parse_error` = our own 400 for a non-JSON body), `status`, `message`, `rpc_method` (first method, scalar), `rpc_methods` (array), `tool`, `protocol_version_header`, `client_id`, `user_agent`. Runbook: `monitoring.md` 7.9 |
+| `mcp_input_validation_failed` | server (`/api/mcp`, tee of a 2xx `tools/call` response) | `tool`, `kind` (`invalid_arguments`/`unknown_tool`), `message`. The SDK's own `isError` -32602 results, which never reach `withToolAnalytics`. Runbook: `monitoring.md` 7.10 |
 | `mcp_auth_attempt` | server (`/api/mcp` `verifyMcpAuth`) | `outcome` (`ok`/`invalid_token`/`no_token`), `client_id`, `strategy_used` (`clerk`/`direct`/`none`), `memo_hit`, `optimizations_enabled`, `success_sample_rate`, `error_class`, `kid` (on `invalid_token` only), `method`. Auth-health substrate for the JWKS/strategy optimizations. **Failures are unsampled; successes are a 1-in-20 per-request sample** — multiply `ok` by 20 for volume, valid only from the 2026-08-25 fix onward (two earlier versions sampled per-token and were biased; see docs/monitoring.md 1). `kid = 'probe'` marks our own synthetic probes, not users |
 | `agent_doc_created` | server (`/api/mcp`, raw `POST v1/documents`) | `document_id`, `auto_granted` (docs twin of `agent_sheet_created`) |
 | `connector_install_started` | server (`.well-known` OAuth discovery routes, `/api/mcp` auth layer) | `touchpoint` (`oauth_discovery`/`mcp_401`), `endpoint`, `reason` (`no_token`/`invalid_token`), `method`, `user_agent`, `install_fingerprint` (salted sha256 of ip+user-agent — the uniqueness key; see funnel note below), `client_name`/`client_version` (mcp_401 only, when the unauthenticated request was an MCP `initialize`) |
@@ -104,9 +108,43 @@ dot-access form made a correctly-emitted property look missing on both
 production and development events. `action`, `request_id`, `agent_driven` and
 `user_agent` are unaffected and work with dot access.
 
+**Approvals are counted per link, and only real writes count.** Since 2026-09-05
+`approval_link_approved` fires once per grant actually written; replays of an
+already-live grant fire `approval_link_replayed`. Between 2026-08-25 and that fix
+the picked-file approval path had no client-side pending guard and no
+server-side dedupe, so one rage-clicked link could emit 14–20 approve events
+(and insert as many duplicate rules). Conversion computed from raw event counts
+over that window is wrong in the multi-fire direction — 7d to 2026-09-05 read
+66/93 = 71% raw against 30/81 = 37% per link. Always divide
+`uniq(request_id)` by `uniq(request_id)`; see `monitoring.md` 7.14 for the query.
+
 `approval_requests` (Postgres) mirrors this in SQL — one row per request with
 `mint_count`, `opened_at`, and `approved_at` — so the same questions are
 answerable without the analytics pipeline.
+
+**Read the funnel per action, and locate the loss before naming a fix
+(2026-09-08).** Minted → opened → approved per `request_id`, split by
+`action`, separates an *open-step* leak (the agent received the link, the user
+never loaded the page) from a *Picker-step* leak (the page loaded, the pick or
+submit did not happen). In the week to 2026-09-08 `docs_expose` converted 0 of
+13 while `sheets_expose` converted 17 of 36 — but 12 of the 13 docs links were
+never opened (sheets: 24 of 36 opened), and the single opener cancelled the
+Picker seven times. Nothing in the docs approve path was broken: the same week
+`docs_write` links completed the pick-first path 20 of 25 times with
+`docs_grant_verification` firing at `link_open`, `magic_link` and
+`post_approval`. Two joins that matter for this reading:
+
+- **Denial code ≠ link action.** A write attempt on an unexposed doc is denied
+  with `denial_code=docs_not_exposed` on `$mcp_tool_call` but mints a
+  **`docs_write`** link (`fileApprovalLevel` picks the level the operation
+  needs). Count link actions from `approval_link_minted.action`, never from the
+  denial code. The same holds for sheets.
+- **A read link approved at the write level is recorded as the write action**
+  (`approval_link_approved.action` follows the effective grant). Join approvals
+  back to mints on `request_id` before reading any per-action approval count;
+  the `docs_expose` 0/13 above survived that join.
+
+Query: `monitoring.md` 7.19.
 
 The two `sheets_grant_*` events instrument the **picker-first sheets
 approval funnel**: opening a sheets approval link verifies the Google-side
@@ -120,13 +158,32 @@ pre-existing stranded rules (dashboard chips, MCP error links); a verified
 re-check there fires `sheets_grant_recovered`. Funnel health =
 `link_open{missing}` → `magic_link{ok}` conversion.
 
+**"Opened, never approved" is not one population.** Reviewed 2026-09-09 (7 days,
+production): of the accounts that opened a sheets/docs link and never approved
+it, two had their agent CREATE a new spreadsheet through `google_api_modify`
+within ~2 minutes of the open — auto-granted (`agent_sheet_created
+{auto_granted: true}`), and both accounts were productive on the new sheet the
+same day (60+ successful `sheets_*` calls on ids different from the denied one)
+while the original sheet stayed unexposed and kept minting. Two more accounts
+took the same route without ever opening the link. The link funnel reads all
+four as leaks; the user's need was met by a substitute file. Before calling an
+opened-not-approved link a stuck user, check the person's `agent_sheet_created`
+/ `agent_doc_created` and successful `$mcp_tool_call.file_id` after the gate
+hit (query: `monitoring.md` 7.15). The remaining opened-not-approved cases that
+week were a sheet in a *different Google account* than the one connected to
+FGAC (the Picker can never list it; both users cancelled within seconds and
+went hunting through account settings — the approve page now names the
+connected account and says to share the file with it) and a Workspace user
+whose docs live in a shared drive (PR #126).
+
 **The sheets/docs adoption funnel** (instrumented end to end since the PR #72
 salvage, 2026-09): `picker_scope_redirect` → `picker_opened` →
 `picker_picked` → `rule_saved{via}` → `*_grant_verification{result=ok}` →
 first successful `$mcp_tool_call` carrying that `file_id`. The client picker
 events cover the dashboard leg (the consent redirect being the riskiest hop —
 `picker_scope_redirect` without a following `picker_opened` is an abandoned
-consent); `rule_saved.via` splits the three rule-creation paths
+consent; `picker_token_requested` is the server-side row for the same click and
+is the only one that survives an ad blocker); `rule_saved.via` splits the three rule-creation paths
 (`dashboard_manual`/`dashboard_picker`/`grant_api`/`magic_link` — the
 dashboard Picker leg is `via IN ('dashboard_picker','grant_api')`); the
 grant-verification
@@ -267,11 +324,52 @@ the fix is working if `recovered` absorbs the bulk of former 404 errors and
 the tool's error rate converges toward the other Gmail read tools.
 
 **Account-resolution failures (`failure_reason`):** `resolveAccountAndToken`'s
-four failure branches (`no_proxy_key`, `no_accessible_accounts`,
-`account_not_permitted`, `google_token_unavailable`) return ❌ text without
-ever reaching Google, so they carry no `error_status` and which branch fired
-used to be unrecoverable — the `outcome='failed'` blind class.
-`failure_reason` names the branch.
+failure branches (`no_proxy_key`, `no_accessible_accounts`,
+`account_not_permitted`, `google_token_unavailable`, and since 2026-09-04
+`delegation_inactive` — the access row exists but the delegation behind it is
+no longer active, so there is no token to fetch and nothing to reconnect)
+return text without ever reaching Google, so they carry no `error_status` and
+which branch fired used to be unrecoverable — the `outcome='failed'` blind
+class. `failure_reason` names the branch.
+
+**`account_not_permitted` splits by who chose the account (2026-09-08).** When
+the CALLER passed an explicit `account` the key does not cover, the response is
+a 🚫 refusal (outcome `denied_by_policy`, `denial_code: 'account_not_permitted'`,
+`failure_reason` still stamped) that lists the usable accounts and says to omit
+the parameter — the key's account list is user-configured policy, and one
+Claude-desktop scheduled job hit the ❌ form hourly for four days (17 rows,
+2026-09-05 → 09-08) with the fix never stated. When no account was given and the
+owner's own address is not on the key, it stays ❌ `failed`: nothing the caller
+sent caused it.
+
+**`google_token_unavailable` splits by cause (2026-09-04).** The tool-call
+event's `google_token_error` says why Clerk returned no token (`no_token`,
+`refresh_failed`, `grant_revoked` since 2026-09-09, `owner_not_found`,
+`clerk_error`, `timeout`), and the outcome
+now follows the cause: `no_token` / `refresh_failed` / `grant_revoked` /
+`owner_not_found` are
+states that cannot clear on their own, so they answer as a 🚫 refusal (outcome
+`denied_by_policy`, `denial_code: 'google_token_unavailable'`, `failure_reason`
+still stamped) naming who must act — the owner-bound reconnect link for the
+first three, "sign in to FGAC again, then re-delegate" with no link for a missing
+owner account; `clerk_error` /
+`timeout` stay ❌ `failed` with retry-first guidance. `grant_revoked` is Clerk's
+400 `oauth_token_retrieval_error` (Google refused the refresh: "Token has been
+expired or revoked"); until 2026-09-09 it fell through to `clerk_error`, so the
+three accounts it hit on 2026-09-08/09 got a pointless retry, ❌ "usually
+temporary" text, and no reconnect link — 23 failures, zero recoveries, one
+account retrying `sheets_get_spreadsheet` 14 times (docs/monitoring.md §7.13).
+Do not compare `clerk_error` counts across that deploy either. Rationale, measured over
+30 days of production: every MCP-path token failure was `clerk_error`, and the
+one account producing one per day was healthy — a sibling call on the same
+delegated mailbox ~100 ms away succeeded every time. The route now retries
+that class once server-side (`google_token_retry`), so post-deploy the daily
+`clerk_error` row should disappear from `google_token_fetch_failed` and
+reappear as `google_token_retry='recovered'` on a successful tool call. Do not
+compare `google_token_unavailable` failure counts across the deploy — split on
+`outcome` and `google_token_error`. `error_reason` is deliberately NOT stamped
+for this class: it means "Google returned this reason", and the token layer
+never reached Google — `google_token_error` is the queryable cause.
 
 > **Do not "tidy" these into `errorResult`.** They stay `textResult` on
 > purpose. Note (2026-09-03): the ❌ `failed` class DOES count in the
@@ -388,25 +486,33 @@ starts at the deploy; rows for clients that never re-initialize stay opaque.
 Capturing DCR `client_name` at OAuth registration remains a possible
 supplement.
 
-**`connector_install_started`: count `uniq(install_fingerprint)`, never raw
-events.** It fires anonymously (distinct_id `anonymous-mcp`) from the only
-FGAC-owned touchpoints that exist before a Clerk account: the OAuth discovery
-endpoints (`touchpoint=oauth_discovery`, recurs on reconnects) and
-unauthenticated MCP requests (`touchpoint=mcp_401`). The mcp_401 emission is
-**per-request identical to `mcp_auth_attempt` failures by construction**
-(same `!authInfo` path in `verifyMcpAuth`; `reason` ≡ `outcome`), so raw
-event counts are 401/retry volume — an established client with an expired
-token can emit dozens of "installs" a day, which is exactly the artifact
-that made install→signup conversion look like it collapsed in late August
-2026. `install_fingerprint` (salted sha256 of ip+user-agent; salt =
-`ANALYTICS_FINGERPRINT_SALT`, falling back to `CLERK_SECRET_KEY`) is the
-uniqueness key: unique installers per day ≈
-`uniq(properties.install_fingerprint)` filtered to `reason='no_token'` and
-`method='POST'`, and Clerk-step abandonment compares that against
-`mcp_connection_created`. Coverage starts at the fingerprint deploy
-(2026-08-27); earlier data supports no unique-count reading at all. Filter
-obvious crawlers by `user_agent`. Rotating the salt resets fingerprint
-continuity — compare uniques only within one salt era.
+**`connector_install_started`: never read raw counts as people, and never
+read fingerprints as claude.ai people either.** It fires anonymously
+(distinct_id `anonymous-mcp`) from the only FGAC-owned touchpoints that exist
+before a Clerk account: the OAuth discovery endpoints
+(`touchpoint=oauth_discovery`, recurs on reconnects) and unauthenticated MCP
+requests (`touchpoint=mcp_401`). The mcp_401 emission is **per-request
+identical to `mcp_auth_attempt` failures by construction** (same `!authInfo`
+path in `verifyMcpAuth`; `reason` ≡ `outcome`), so raw event counts are
+401/retry volume — an established client with an expired token can emit
+dozens of "installs" a day, which is exactly the artifact that made
+install→signup conversion look like it collapsed in late August 2026.
+`install_fingerprint` (salted sha256 of ip+user-agent; salt =
+`ANALYTICS_FINGERPRINT_SALT`, falling back to `CLERK_SECRET_KEY`) de-duplicates
+**direct** clients only: claude.ai traffic reaches us through Anthropic's
+shared egress proxy, so for `user_agent = 'Claude-User'` one fingerprint is
+one Anthropic IP serving many users (2026-09-08: 22 fingerprints for three
+weeks of `Anthropic/ClaudeAI` installs against 55 completed accounts). The
+directory top-of-funnel proxy is therefore the count of unauthenticated
+claude.ai `initialize` requests (`client_name = 'Anthropic/ClaudeAI'`,
+`reason='no_token'`, `method='POST'`) — one per attempt plus retries, an
+upper bound — compared against Clerk accounts created through the connector
+(`npm run funnel:scopes -- --prod`). Coverage starts at the client-name
+capture (2026-08-24); earlier data supports no attempt count at all. Filter
+crawlers by `user_agent`. Named queries: `monitoring.md` 7.5 (attempts),
+7.17 (directory disconnect-rate model) and 7.18 (per-person funnel). Rotating
+the salt resets fingerprint continuity — compare uniques only within one salt
+era.
 
 Payload capture is deliberately **off**: we never send `$mcp_parameters` or
 `$mcp_response` (they would carry customer mail/sheet content into PostHog).
