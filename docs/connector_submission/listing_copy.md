@@ -105,7 +105,7 @@ the declaration is inert, we own the origin, and it pre-clears any future
 embedded-approval-card upgrade. Never list domains we don't own.
 
 > **MCP Registry / Smithery**: the registry manifest is `server.json` at the repo
-> root (name `ai.fgac/google-workspace`, ≤100-char description derived from the
+> root (name `ai.fgac/fgac`, ≤100-char description derived from the
 > tagline above); ledger and publishing steps in `docs/growth-channels.md`.
 
 ## Connection step
