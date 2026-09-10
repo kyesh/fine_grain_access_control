@@ -52,18 +52,22 @@ dynamic client registration and PKCE; discovery at
 - **A request log** — every call your agent makes, with what was allowed and
   what was blocked and why.
 
-Your data is never stored or used for training. Free for personal use.
+Your data is never stored or used for training. See the [Terms](https://fgac.ai/terms) for service terms.
 
 ## Licensing
 
-This project is explicitly licensed for **Personal Use Only**. It may only be
-utilized by independent individuals managing their own personal Gmail or Google
-Workspace accounts.
+Two different things, two different terms:
 
-Any corporate use, use by employees on behalf of their company, or use within
-educational institutions is strictly prohibited without a separate Enterprise or
-Educational license. See `LICENSE` for exact liability limitations and
-restrictions.
+- **The hosted service at https://fgac.ai** is open to anyone — individuals,
+  teams, companies, and schools — under its [Terms of Service](https://fgac.ai/terms)
+  and [Privacy Policy](https://fgac.ai/privacy). Connecting an agent through
+  fgac.ai does not involve this repository's license at all.
+- **This source code** is licensed for **personal use only**: an independent
+  individual may self-host it to manage their own Gmail or Google Workspace
+  accounts. Use by or on behalf of a company, government agency, or educational
+  institution, and offering the code as a hosted or multi-tenant service, are
+  prohibited without a separate license from the author. See `LICENSE` for the
+  exact terms and liability limitations.
 
 ## Developing
 
