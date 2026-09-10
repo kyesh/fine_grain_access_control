@@ -5,10 +5,13 @@ import { eq, sql } from 'drizzle-orm';
 import { db } from '@/db';
 import { shortLinks } from '@/db/schema';
 import { captureServerEvent, captureServerError } from '@/lib/posthogServer';
+import { shortLinkUtm } from '@/lib/shortLinkUtm';
 
-/* ─── QR / flyer short links ─────────────────────────────────────────────────
-   fgac.ai/go/<slug> — one slug per printed flyer variant × location, managed
-   with scripts/short-links.ts (see its header for the slug naming scheme).
+/* ─── QR / flyer / reply short links ─────────────────────────────────────────
+   fgac.ai/go/<slug> — one slug per printed flyer variant × location, plus one
+   per outreach channel for the growth-prospecting digest (/go/hn, /go/rd,
+   /go/gh, /go/x — campaign `prospecting`), managed with scripts/short-links.ts
+   (see its header for the slug naming scheme).
 
    Each human scan fires a server-side `flyer_scanned` PostHog event and bumps
    the row's counter, then 302s to the stored destination with UTM params
@@ -66,8 +69,11 @@ export async function GET(
     destination = new URL('/', origin);
   }
   if (link) {
-    destination.searchParams.set('utm_source', 'qr');
-    destination.searchParams.set('utm_medium', 'flyer');
+    // qr/flyer for printed campaigns; <channel>/reply for the `prospecting`
+    // campaign's manual-reply links (see src/lib/shortLinkUtm.ts).
+    const utm = shortLinkUtm(link);
+    destination.searchParams.set('utm_source', utm.utm_source);
+    destination.searchParams.set('utm_medium', utm.utm_medium);
     destination.searchParams.set('utm_campaign', link.campaign);
     destination.searchParams.set('utm_content', slug);
     destination.searchParams.set('ref', slug);

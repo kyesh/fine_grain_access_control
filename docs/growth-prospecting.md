@@ -1,0 +1,211 @@
+# Growth prospecting (v1)
+
+Tooling for Pillar 3 of the growth strategy
+(`docs/implementation_plans/fgac-growth-opportunities_v1.md`): **find** the
+conversations and incidents worth a human reply, **measure** whether the
+replies convert, and leave the reply itself to Ken. Nothing here posts,
+comments, DMs, or emails — automated outreach gets accounts banned and reads
+as spam.
+
+```bash
+npm run growth:prospects                     # since last run (≥2d, ≤7d), all sources
+npm run growth:prospects -- --window 14d     # explicit lookback
+npm run growth:prospects -- --sources hn,feeds
+npm run growth:prospects -- --dry-run        # don't record anything as seen
+npm run growth:prospects -- --print          # echo the digest to stdout too
+npm run growth:prospects -- --growth-dir ~/GitRepos/fgac-growth   # private workspace (see below)
+```
+
+`scripts/growth-prospects.ts` — tsx, no new dependencies, no API keys.
+
+## What it watches
+
+| Source | Endpoint | Queries | Notes |
+| --- | --- | --- | --- |
+| Hacker News | Algolia `search_by_date`, stories + comments | "claude gmail", "mcp gmail", "chatgpt gmail", "agent email access", "give ai access to my email", "prompt injection gmail/email", "lethal trifecta", competitor names (Gatelet, ScopeGate, AgentPort, Archestra, MCPTotal) | Reliable, unauthenticated, ~1 req/s |
+| Reddit | `r/ClaudeAI+mcp+AI_Agents+OpenAI+selfhosted/search` | "connect gmail" / "gmail mcp", "read my email" / "email access", gmail + (claude/mcp/agent) | **Best-effort.** The `.json` endpoint returns 403 to non-browser clients; the `.rss` variant works with an app-style user agent but 429s after one or two calls from the same IP. The script tries JSON, falls back to RSS with 10 s spacing, and on refusal skips the query and says so in the digest's Sources section. Partial Reddit coverage is the expected steady state, not a bug. |
+| GitHub | Search API (`is:issue`), unauthenticated or `GITHUB_TOKEN` | New issues on the big Gmail/Workspace MCP servers (`taylorwilsdon/google_workspace_mcp`, `GongRzhe/Gmail-MCP-Server`, `jasonsum/gmail-mcp-server`, `aaronsb/google-workspace-mcp`); free-text "gmail mcp credentials / oauth / credentials.json" | People stuck on `credentials.json` are the ICP mid-pain. Long-tail hits are gated: the issue must be filed by someone other than the repo owner, and gmail/email/inbox/workspace must be in the title or repo name (bodies mention OAuth in passing far too often). Unauthenticated search is 10 req/min, so the four searches are spaced 7 s apart. |
+| GitHub star deltas | `GET /repos/{owner}/{repo}` | Gatelet, ScopeGate, AgentPort, Archestra, google_workspace_mcp, Gmail-MCP-Server | Run-over-run delta stored in `.growth/seen.json` |
+| Feeds | Atom/RSS | Simon Willison `exfiltration-attacks` (every new item = incident), Simon Willison `prompt-injection`, Embrace The Red (Johann Rehberger), Promptfoo blog | Any new incident item puts **"INCIDENT — write the teardown this week"** at the top of the digest. The last three feeds are filtered by the scoring vocabulary since they also cover non-agent topics. Candidates checked and rejected 2026-09-05: Trail of Bits (too broad), Kai Greshake (inactive since 2023), PromptArmor / Lakera / Zenity / Pillar / Invariant (no working feed URL). |
+
+## Scoring and dedupe
+
+A lead needs the mailbox side (gmail, email, inbox, sheets, docs, drive…) AND
+the agent side (claude, mcp, chatgpt, agent, llm…) of the lethal trifecta, or
+a competitor name; incidents bypass the check. Score = recency (0–3) +
+mailbox terms (≤4) + agent terms (≤2) + pain terms such as credentials/oauth/
+scope/prompt injection (≤2) + 3 when both sides are present + 2 for a
+competitor mention + 4 for incidents + engagement (HN points/comments) + 2
+for issues on the known Gmail MCP servers. Threshold 6; incidents always
+show. Obvious noise is dropped by pattern (hiring threads, auto-generated
+daily digests, `-bot` authors).
+
+Every surfaced URL is recorded in `<growth dir>/seen.json` so a lead appears
+in exactly one digest. `--dry-run` skips the recording. Delete a key from
+`seen.json` to resurface a lead.
+
+## Where digests land
+
+`<growth dir>/digests/YYYY-MM-DD.md` (a second run the same day writes
+`YYYY-MM-DD-HHMM.md`). The growth dir is `--growth-dir <path>`, else
+`$GROWTH_DIR`, else `.growth/` inside this repo — and that default tree is
+gitignored: the repo is public and a lead list is not for publication. The
+header line stamps the product commit the script ran from and the growth dir
+it used. Sections: Incidents / Reply-worthy threads / Prospects on GitHub /
+Competitor movement / Sources (per-source ✓/✗ with the reason, so a silent
+skip is impossible). Each lead carries the link, a one-line summary, a
+suggested angle (factual, 2–3 sentences, keyed off which pain terms matched)
+and the attribution link to paste.
+
+## Private workspace
+
+Lead lists, outreach state, and notes about people never belong in this
+public repo, so the working layout is a **private parent repo with this repo
+nested inside it as a git submodule** (`fgac-growth`, decision record in
+`docs/implementation_plans/growth-prospecting_v2.md`):
+
+```
+~/GitRepos/fgac-growth/        private — digests/, seen.json, config.json, tracker.md
+└── fgac/                      this repo, submodule tracking origin/main
+```
+
+- **`GROWTH_DIR`** — with `--growth-dir ~/GitRepos/fgac-growth` (or
+  `GROWTH_DIR=…`) the script reads `seen.json` and `config.json` from the
+  private repo and writes `digests/` there; nothing lead-related touches this
+  checkout. Prefer the flag: the scheduled task's command is allowlisted by
+  shape (`npm run growth:prospects -- …`) and an env-var prefix changes it.
+- **Overlay** — if `<growth dir>/config.json` exists, its arrays are appended
+  to the public defaults in the CONFIG block and deduped: `extraHnQueries`,
+  `extraRedditQueries`, `extraGithubIssueQueries`, `extraCompetitorRepos`
+  (star deltas), `extraFeeds` (`{name, url, incident}`), and `watchAuthors`
+  (usernames whose posts always surface, +3 score, tagged _watched author_ —
+  people data, which is why it lives only in the overlay). Unknown keys are
+  reported on stderr and ignored; `_`-prefixed keys are comments. Public
+  defaults stay here; anything naming a person stays there.
+- **Two session entry points.** Product work: start the Claude session inside
+  `fgac/` — it is this repo, with this `CLAUDE.md`, hooks, and settings;
+  branch + PR as always. Lead work: start at the parent — `fgac/` is
+  read-only from there (run the script, read the docs), and the parent's
+  `.claude/settings.json` re-registers this repo's two PreToolUse guards and
+  deny list so the same protections apply. The parent's SessionStart hook
+  fast-forwards `fgac/` to `origin/main` when it is on main and clean.
+
+## Adding a keyword or source
+
+Public defaults live in the CONFIG block at the top of
+`scripts/growth-prospects.ts`; private additions (and anything that names a
+person) go in the workspace overlay described above.
+
+- a phrase → `HN_QUERIES`, `REDDIT_QUERIES`, or `GITHUB_ISSUE_QUERIES`;
+- a Gmail MCP server whose issues matter → `GITHUB_GMAIL_MCP_REPOS`
+  (its issues then skip the title gate and get the +2 boost);
+- a competitor → `COMPETITOR_REPOS` (stars) and `COMPETITOR_TERMS` (mentions);
+- a feed → `FEEDS` with `incident: true` when every item is by definition an
+  incident, `false` when it needs the vocabulary filter;
+- vocabulary → `STRONG_TERMS` / `CONTEXT_TERMS` / `PAIN_TERMS`; `angle()`
+  maps pain terms to the suggested angle.
+
+Verify a new feed URL with `curl -sI` first — half the "obvious" feed URLs
+for security blogs 404.
+
+## Attribution links
+
+Manual replies carry a `/go/<slug>` link so PostHog's UTM funnel splits by
+channel. Rows in the `prospecting` campaign redirect with
+`utm_source=<channel>&utm_medium=reply&utm_campaign=prospecting&utm_content=<slug>`
+(`src/lib/shortLinkUtm.ts`; flyer rows keep `qr`/`flyer` untouched).
+
+| Slug | Channel | Paste into |
+| --- | --- | --- |
+| `https://fgac.ai/go/hn` | `hn` | Hacker News comments and submissions |
+| `https://fgac.ai/go/rd` | `reddit` | Reddit replies |
+| `https://fgac.ai/go/gh` | `github` | GitHub issue comments |
+| `https://fgac.ai/go/x` | `x` | X posts (source not automated in v1) |
+
+Create them in production (writes need both flags; run from the main clone
+after pulling prod creds to `.secrets/`):
+
+```bash
+npx vercel env pull .secrets/prod.env --environment=production
+npm run links -- add hn --dest / --campaign prospecting --channel hn --notes "manual replies on Hacker News" --prod --apply
+npm run links -- add rd --dest / --campaign prospecting --channel reddit --notes "manual replies on Reddit" --prod --apply
+npm run links -- add gh --dest / --campaign prospecting --channel github --notes "manual replies in GitHub issues" --prod --apply
+npm run links -- add x --dest / --campaign prospecting --channel x --notes "X posts" --prod --apply
+rm .secrets/prod.env
+```
+
+The same four commands without `--prod --apply` create them on a local
+branch DB. Retarget (never remove) a slug to change its landing page; the
+counter survives.
+
+Channel table query (PostHog, HogQL): signups by `utm_source` where
+`utm_campaign = 'prospecting'`, joined to `mcp_connection_created` — the same
+shape as the flyer funnel in `docs/analytics.md`.
+
+## Manual-reply rules
+
+1. **Participation first.** Answer the question that was asked, fully, as
+   if FGAC did not exist. If the thread has no question you can help with,
+   do not reply.
+2. **Disclose affiliation** every time ("I build FGAC, so discount
+   accordingly").
+3. **One FGAC mention per thread, maximum**, and only when it is the honest
+   answer to something in the thread. Never as the opener.
+4. **Never cross-post identical text.** Each reply is written for that
+   thread; the digest's "angle" is a hook, not copy.
+5. **Be honest about what FGAC would not have stopped** — especially in
+   incident teardowns. Analyses front-page; product posts don't.
+6. **Use the channel's attribution link**, never a bare `fgac.ai`, so the
+   effort is measurable.
+7. Competitor threads: only reply when alternatives are asked for; name the
+   real distinction (Workspace-specific rules enforced at the proxy, hosted,
+   free, open source) without disparaging anyone.
+
+## Schedule
+
+Daily at 06:30 local, as a **local scheduled task** (`growth-prospects`,
+`~/.claude/scheduled-tasks/growth-prospects/SKILL.md`) — the same mechanism
+as the daily analytics review, so it runs while the Claude desktop app is
+open and catches up on next launch otherwise. Daily rather than weekly for
+the threads, too: HN and Reddit threads are dead for replying after ~48 h,
+and dedupe keeps each daily digest short (a weekly bundle would surface
+threads too late to join). The incident feeds are checked on every run.
+
+The task runs one command from the main clone, reports the digest's headline
+counts plus any degraded source, then commits the new digest and `seen.json`
+in the private workspace (`digest YYYY-MM-DD`, pushed when a remote exists):
+
+```bash
+npm run growth:prospects -- --print --growth-dir /Users/kyesh/GitRepos/fgac-growth
+```
+
+If the task is missing (new machine, or it was deleted), recreate it with
+the `scheduled-tasks` MCP in a Claude Code session, or run the command by
+hand — the script is self-contained and the state file makes catch-up
+runs safe.
+
+## Human checklist
+
+- [ ] Create the four production slugs (commands above) — the script does
+      not touch the database.
+- [ ] Optional: export `GITHUB_TOKEN` (a fine-grained token with no
+      permissions is enough) in the shell that runs the task; it lifts
+      search from 10 to 30 req/min and lets more free-text queries be added.
+- [ ] Confirm the `growth-prospects` scheduled task exists on the machine
+      that stays open in the morning; otherwise create it.
+- [ ] After the first two weeks: prune keywords that only produce noise,
+      raise `MIN_SCORE` if the digest is too long, and add the PostHog
+      channel table to the daily analytics review.
+
+## Out of scope for v1 (follow-ups)
+
+- **Google Sheet outreach tracker** through FGAC's own connector
+  (lead URL / channel / state found→replied→converted / digest date) —
+  dogfooding and demo material; the script could append candidate rows via
+  `sheets_append_rows`.
+- **X/Twitter** as a source (needs authenticated access; the `twitter-digest`
+  skill's Chrome-driven approach is the likely shape).
+- **Auto-drafted replies.** Deliberately not built: the value is in Ken's
+  voice, and drafted text invites cross-posting.
+- Reddit reliability: an OAuth app registration (script-type, read-only)
+  would make the JSON endpoint dependable; skipped in v1 to stay keyless.
