@@ -55,7 +55,9 @@ Current branch: !`git branch --show-current`
    - `ERROR <classification>` → apply the matching fix **after reading the quoted log lines**:
      - `MIGRATION_SQL` — fix the migration file or the `splitStatements` parser in `migrate.ts`.
      - `NEON_BRANCH_LIMIT` — only THEN run `bash scripts/cleanup-neon-branches.sh`
-       (`--dry-run` first if in doubt). Invoke it as EXACTLY that literal command — no
+       (`--dry-run` first if in doubt). It prunes on age and idleness, so if every
+       branch is under 24h old it will correctly free nothing — that is a real
+       capacity problem, not a broken prune; say so rather than retrying. Invoke it as EXACTLY that literal command — no
        `export PATH` prefix, no `&&`, no pipes, no redirects. The allowlist matches this
        invocation; the raw `npx tsx scripts/cleanup-neon-branches.ts` form never matches
        once wrapped in the Node-22 PATH prefix, because the unmatched `export` segment

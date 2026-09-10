@@ -9,14 +9,18 @@
 # resolves Node 22 itself (system Node may be too old for tsx).
 #
 # Safety properties live in scripts/lib/neon-branch-classifier.ts (unit-tested
-# by scripts/test-neon-branch-cleanup.ts): never deletes the primary branch or
-# a branch named exactly `main`; never deletes a branch checked out in any git
-# worktree (preview/ or local-dev form); never deletes a preview branch backing
-# an open PR; deletes a local-dev branch only when its git branch is proven
-# merged (origin ref merged, or origin ref gone AND a local ref merged into
-# origin/main, or a merged/closed PR head ref matches); keeps anything that
-# maps to no git branch at all; and deletes nothing when git refs can't be
-# fetched. Pass --dry-run to print the plan without deleting.
+# by scripts/test-neon-branch-cleanup.ts). The rule is time, not git history:
+# delete a branch older than 24h whose compute has been idle more than 6h.
+# Never touched: the primary branch or one named exactly `main`, a branch Neon
+# reports as `protected`, and any branch whose compute is running right now.
+# Aborts before deleting anything if the compute endpoints can't be read (that
+# would make every branch look idle). Pass --dry-run to print the plan without
+# deleting.
+#
+# Leftover git worktrees no longer keep database branches alive — that coupling
+# is gone. `npm run worktrees:report` lists finished worktree directories; it
+# only reports, and removing them is a separate, manual decision.
+
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
