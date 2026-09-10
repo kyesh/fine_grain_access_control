@@ -99,3 +99,21 @@ exclusion despite saying fingerprints were "the right filter".
 - Preview: run the probe against the preview URL and send one request with a
   known scanner UA; confirm `mcp_auth_attempt` rows in PostHog
   (`environment = 'preview'`) carry `client_class = 'internal'` / `'scanner'`.
+
+## Validation result (preview, 2026-09-10 ~11:45Z)
+
+Preview `fine-grain-access-control-nr1ewnc4w` (commit da7ebad). Probe script:
+3/3 PASS. Eight synthetic requests, read back from PostHog
+(`environment = 'preview'`) on both `mcp_auth_attempt` and
+`connector_install_started`:
+
+| request | class | signal |
+| --- | --- | --- |
+| probe script, no token / garbage token (`kid='probe'`) / well-known GET | internal | `ua:fgac-` |
+| `SmitheryBot/1.0 (+https://smithery.ai)` initialize as `smithery-probe` | scanner | `keyword:probe` |
+| `node` UA, initialize as `glama` | scanner | `name:glama` |
+| `python-httpx2/2.12.0`, junk non-JWT bearer, initialize as `mcp` | scanner | `ua:python-httpx2/` |
+| `node` UA, bare `ping` POST | direct | — |
+| `MCPExplorerBot/0.1` GET on the discovery route | scanner | `keyword:bot` |
+
+Homepage renders on the preview (browser smoke check).
