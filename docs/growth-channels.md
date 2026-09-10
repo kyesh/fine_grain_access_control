@@ -153,7 +153,7 @@ Verify (either option):
 curl -s "https://registry.modelcontextprotocol.io/v0.1/servers?search=ai.fgac" | jq '.servers[] | {name: .server.name, version: .server.version, status: ._meta}'
 ```
 
-**Naming rule** (decided 2026-09-10): the server ID never carries a Google trademark. Google's brand guidelines allow descriptive use ("for Google Workspace", "Gmail, Sheets & Docs" in the title) but not a Google mark as the product's own name, and FGAC's restricted-scope OAuth app is re-reviewed by Google. Retire a wrongly named entry with `mcp-publisher status --status deleted <name> <version>`.
+**Naming rule** (decided 2026-09-10): the server ID never carries a Google trademark. Google's brand guidelines allow descriptive use ("for Google Workspace", "Gmail, Sheets & Docs" in the title) but not a Google mark as the product's own name, and FGAC's restricted-scope OAuth app is re-reviewed by Google. Retire a wrongly named entry with `mcp-publisher status --status deleted <name> <version>` **before** publishing the replacement — the registry allows one listing per remote URL and rejects the new name while the old one is active.
 
 
 The GitHub MCP Registry (github.com/mcp) ingests the official registry; allow

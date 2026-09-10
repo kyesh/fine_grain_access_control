@@ -29,7 +29,10 @@ costly once an install base splits.
 ## Rollout
 
 1. Merge; `/deploy-prod` (user) so the server card matches.
-2. Run the **MCP Registry Publish** action → `ai.fgac/fgac` v0.1.0.
-3. `mcp-publisher status --status deleted ai.fgac/google-workspace 0.1.0`
-   (local login with the same key) so the old name stops appearing in search.
-4. Submit Smithery as `@fgac/fgac`.
+2. **Retire first, then publish** — the registry enforces one listing per remote
+   URL: publishing `ai.fgac/fgac` while `ai.fgac/google-workspace` was active
+   failed with "remote URL … is already used by server". Done 2026-09-10 with a
+   local `mcp-publisher login http` (same key): `status --status deleted
+   ai.fgac/google-workspace 0.1.0`, then `publish server.json` → `ai.fgac/fgac`
+   v0.1.0 `active`. The publish action is not needed for this version.
+3. Submit Smithery as `@fgac/fgac`.
