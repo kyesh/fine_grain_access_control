@@ -6,22 +6,33 @@
  *   npm run growth:prospects -- --sources hn,feeds # subset (hn | reddit | github | feeds)
  *   npm run growth:prospects -- --dry-run          # don't touch .growth/seen.json
  *   npm run growth:prospects -- --print            # also echo the digest to stdout
+ *   npm run growth:prospects -- --growth-dir ~/GitRepos/fgac-growth   # private workspace
  *
  * It never posts, comments, DMs, or emails. It reads public, keyless endpoints
  * (HN Algolia, Reddit search, GitHub search, a handful of Atom/RSS feeds),
- * scores what it finds, dedupes against .growth/seen.json, and writes a dated
- * markdown digest to .growth/digests/YYYY-MM-DD.md. Ken replies by hand.
- * Everything under .growth/ is gitignored — the repo is public and a lead
- * list is not something to publish.
+ * scores what it finds, dedupes against <growth dir>/seen.json, and writes a
+ * dated markdown digest to <growth dir>/digests/YYYY-MM-DD.md. Ken replies by
+ * hand.
+ *
+ * The growth dir is `--growth-dir <path>`, else $GROWTH_DIR, else `.growth/`
+ * inside this repo (gitignored — the repo is public and a lead list is not
+ * something to publish). Pointing it at the private fgac-growth workspace keeps
+ * digests, state, and the private overlay out of this repo entirely; see
+ * docs/growth-prospecting.md → "Private workspace". If <growth dir>/config.json
+ * exists, its extra* arrays are appended to the public defaults below
+ * (deduped) and its watchAuthors always surface. Unknown keys warn and are
+ * ignored.
  *
  * Optional env: GITHUB_TOKEN (raises the search limit from 10 to 30 req/min
  * and the core limit from 60 to 5000 req/h; read-only, no scopes needed).
  *
- * Adding a keyword or source: edit the CONFIG block below — nothing else
- * needs to change. See docs/growth-prospecting.md.
+ * Adding a public keyword or source: edit the CONFIG block below — nothing
+ * else needs to change. Private additions go in the overlay, never here.
  */
+import { execSync } from 'child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
-import { join } from 'path';
+import { homedir } from 'os';
+import { join, resolve } from 'path';
 
 // ─── CONFIG ──────────────────────────────────────────────────────────────────
 
@@ -30,10 +41,6 @@ const USER_AGENT =
 // Reddit wants the platform:app:version (by /u/name) shape and returns 403 to
 // generic agents. This one is descriptive, not impersonation.
 const REDDIT_USER_AGENT = 'macos:ai.fgac.growth-prospects:v0.1 (by /u/fgac_ai)';
-
-const STATE_DIR = '.growth';
-const DIGEST_DIR = join(STATE_DIR, 'digests');
-const STATE_FILE = join(STATE_DIR, 'seen.json');
 
 // Attribution: every manual reply carries one of these so PostHog's UTM funnel
 // (utm_source=<channel>, utm_campaign=prospecting) attributes the signup.
@@ -122,11 +129,95 @@ const args = process.argv.slice(2);
 const DRY_RUN = args.includes('--dry-run');
 const PRINT = args.includes('--print');
 function flag(name: string): string | undefined {
+  const eq = args.find((a) => a.startsWith(`--${name}=`));
+  if (eq) return eq.slice(name.length + 3) || undefined;
   const i = args.indexOf(`--${name}`);
   const v = i >= 0 ? args[i + 1] : undefined;
   return v && !v.startsWith('--') ? v : undefined;
 }
 const SOURCES = new Set((flag('sources') ?? 'hn,reddit,github,feeds').split(',').map((s) => s.trim()));
+
+// ─── growth dir & private overlay ────────────────────────────────────────────
+// Where state and digests live. Default is the gitignored .growth/ in this
+// repo so the public repo works on its own; the private workspace passes
+// --growth-dir (or GROWTH_DIR) so nothing about leads is written here.
+
+function expandHome(p: string): string {
+  return p === '~' || p.startsWith('~/') ? join(homedir(), p.slice(1)) : p;
+}
+const GROWTH_DIR = resolve(expandHome(flag('growth-dir') ?? process.env.GROWTH_DIR ?? '.growth'));
+const DIGEST_DIR = join(GROWTH_DIR, 'digests');
+const STATE_FILE = join(GROWTH_DIR, 'seen.json');
+const CONFIG_FILE = join(GROWTH_DIR, 'config.json');
+
+type Overlay = {
+  extraHnQueries?: string[];
+  extraRedditQueries?: string[];
+  extraGithubIssueQueries?: string[];
+  extraCompetitorRepos?: string[];
+  extraFeeds?: Array<{ name: string; url: string; incident: boolean }>;
+  watchAuthors?: string[];
+};
+const OVERLAY_KEYS = new Set(['extraHnQueries', 'extraRedditQueries', 'extraGithubIssueQueries', 'extraCompetitorRepos', 'extraFeeds', 'watchAuthors']);
+// Usernames (lowercased) whose posts always surface — people data, so it only
+// ever comes from the private overlay.
+const WATCH_AUTHORS = new Set<string>();
+
+function appendUnique<T>(target: T[], extra: T[] | undefined, key: (t: T) => string): number {
+  if (!Array.isArray(extra)) return 0;
+  const have = new Set(target.map(key));
+  let added = 0;
+  for (const e of extra) {
+    const k = key(e);
+    if (!k || have.has(k)) continue;
+    have.add(k);
+    target.push(e);
+    added++;
+  }
+  return added;
+}
+
+function loadOverlay(): string {
+  if (!existsSync(CONFIG_FILE)) return 'no config.json';
+  let raw: Record<string, unknown>;
+  try {
+    raw = JSON.parse(readFileSync(CONFIG_FILE, 'utf8')) as Record<string, unknown>;
+  } catch (e) {
+    console.error(`growth-prospects: WARNING ${CONFIG_FILE} is not valid JSON (${(e as Error).message}); overlay ignored`);
+    return 'config.json unreadable';
+  }
+  for (const k of Object.keys(raw)) {
+    if (k.startsWith('_') || OVERLAY_KEYS.has(k)) continue; // _doc and friends are comments
+    console.error(`growth-prospects: WARNING unknown key "${k}" in ${CONFIG_FILE} — ignored (known: ${[...OVERLAY_KEYS].join(', ')})`);
+  }
+  const o = raw as Overlay;
+  const str = (s: string) => (typeof s === 'string' ? s.trim().toLowerCase() : '');
+  const counts = {
+    hn: appendUnique(HN_QUERIES, o.extraHnQueries, str),
+    reddit: appendUnique(REDDIT_QUERIES, o.extraRedditQueries, str),
+    github: appendUnique(GITHUB_ISSUE_QUERIES, o.extraGithubIssueQueries, str),
+    repos: appendUnique(COMPETITOR_REPOS, o.extraCompetitorRepos, str),
+    feeds: appendUnique(FEEDS, (o.extraFeeds ?? []).filter((f) => f && typeof f.url === 'string' && typeof f.name === 'string'), (f) => f.url.trim().toLowerCase()),
+    authors: 0,
+  };
+  for (const a of o.watchAuthors ?? []) {
+    const k = str(a).replace(/^(\/?u\/|@)/, '');
+    if (k && !WATCH_AUTHORS.has(k)) { WATCH_AUTHORS.add(k); counts.authors++; }
+  }
+  return `config.json: +${counts.hn} hn, +${counts.reddit} reddit, +${counts.github} github, +${counts.repos} repos, +${counts.feeds} feeds, ${counts.authors} watched author(s)`;
+}
+const OVERLAY_NOTE = loadOverlay();
+
+// Stamp: which product commit produced the digest (the repo the script runs
+// from), so a digest in the private workspace is traceable to the scoring
+// rules that made it.
+function productCommit(): string {
+  try {
+    return execSync('git rev-parse --short HEAD', { cwd: process.cwd(), stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim() || 'unknown';
+  } catch {
+    return 'unknown';
+  }
+}
 
 const DAY = 86_400_000;
 function parseWindow(s: string | undefined): number | undefined {
@@ -151,7 +242,7 @@ function loadState(): State {
   return JSON.parse(readFileSync(STATE_FILE, 'utf8')) as State;
 }
 function saveState(state: State): void {
-  mkdirSync(STATE_DIR, { recursive: true });
+  mkdirSync(GROWTH_DIR, { recursive: true });
   writeFileSync(STATE_FILE, JSON.stringify(state, null, 2) + '\n');
 }
 
@@ -197,6 +288,7 @@ type Lead = {
   createdAt: Date;
   engagement: string;
   terms: { strong: string[]; context: string[]; pain: string[]; competitor: string[]; specific: string[]; titleStrong: string[] };
+  watched: boolean; // author is on the private watch list
   score: number;
 };
 
@@ -237,6 +329,7 @@ function score(lead: Omit<Lead, 'score'>, now: number, engagementBoost = 0): num
   if (specific.length) s += 3; // gmail/inbox/workspace, not just "email"
   if (titleStrong.length) s += 2; // the mailbox is the subject, not an aside
   if (competitor.length) s += 2;
+  if (lead.watched) s += 3;
   if (lead.kind === 'incident') s += 4;
   if (lead.kind === 'prospect') s += 1;
   s += engagementBoost;
@@ -247,8 +340,9 @@ function isNoise(text: string): boolean {
   return NOISE_PATTERNS.some((p) => p.test(text));
 }
 
-function build(base: Omit<Lead, 'terms' | 'score'>, text: string, now: number, engagementBoost = 0): Lead | null {
-  if (isNoise(text)) return null;
+function build(base: Omit<Lead, 'terms' | 'watched' | 'score'>, text: string, now: number, engagementBoost = 0): Lead | null {
+  const watched = !!base.author && WATCH_AUTHORS.has(base.author.toLowerCase());
+  if (isNoise(text) && !watched) return null;
   const terms = {
     strong: findTerms(text, STRONG_TERMS),
     context: findTerms(text, CONTEXT_TERMS),
@@ -261,11 +355,12 @@ function build(base: Omit<Lead, 'terms' | 'score'>, text: string, now: number, e
   // product-specific (gmail/inbox/…) or the subject of the thread — a stray
   // "email" in an unrelated discussion is the main noise source.
   const relevant =
+    watched ||
     base.kind === 'incident' ||
     terms.competitor.length > 0 ||
     (terms.strong.length > 0 && terms.context.length > 0 && (terms.specific.length > 0 || terms.titleStrong.length > 0));
   if (!relevant) return null;
-  const lead = { ...base, terms };
+  const lead = { ...base, terms, watched };
   return { ...lead, score: score(lead, now, engagementBoost) };
 }
 
@@ -568,7 +663,7 @@ async function feeds(sinceMs: number, now: number, report: Report[]): Promise<Le
 function fmtLead(l: Lead): string {
   const who = l.author ? ` · ${l.author}` : '';
   const eng = l.engagement ? ` · ${l.engagement}` : '';
-  const terms = [...l.terms.pain, ...l.terms.competitor].slice(0, 4).join(', ');
+  const terms = [...(l.watched ? ['watched author'] : []), ...l.terms.pain, ...l.terms.competitor].slice(0, 4).join(', ');
   return [
     `- **[${l.title || l.url}](${l.url})** — ${l.sourceLabel}${who} · ${l.createdAt.toISOString().slice(0, 10)}${eng} · score ${l.score}${terms ? ` · _${terms}_` : ''}`,
     l.summary ? `  - ${l.summary}` : '',
@@ -594,7 +689,9 @@ async function main() {
   const sinceMs = now - windowMs;
   const today = new Date(now).toISOString().slice(0, 10);
 
+  const commit = productCommit();
   console.error(`growth-prospects: window ${(windowMs / DAY).toFixed(1)}d (since ${new Date(sinceMs).toISOString()}), sources ${[...SOURCES].join(',')}${DRY_RUN ? ', DRY RUN' : ''}`);
+  console.error(`growth-prospects: growth dir ${GROWTH_DIR} (${OVERLAY_NOTE}), product commit ${commit}`);
 
   const report: Report[] = [];
   const all: Lead[] = [];
@@ -633,7 +730,7 @@ async function main() {
   const lines = [
     `# Growth prospects — ${today}`,
     '',
-    `Window: ${new Date(sinceMs).toISOString().slice(0, 16)}Z → ${new Date(now).toISOString().slice(0, 16)}Z · ${kept.length} new lead(s), ${dropped} below threshold, ${Object.keys(state.seen).length} previously surfaced.`,
+    `Window: ${new Date(sinceMs).toISOString().slice(0, 16)}Z → ${new Date(now).toISOString().slice(0, 16)}Z · ${kept.length} new lead(s), ${dropped} below threshold, ${Object.keys(state.seen).length} previously surfaced · product commit \`${commit}\` · growth dir \`${GROWTH_DIR}\`${DRY_RUN ? ' · dry run' : ''}`,
     '',
     incidents.length
       ? `> **INCIDENT — write the teardown this week.** ${incidents.length} new item(s) below.`

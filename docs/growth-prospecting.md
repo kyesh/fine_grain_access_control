@@ -13,6 +13,7 @@ npm run growth:prospects -- --window 14d     # explicit lookback
 npm run growth:prospects -- --sources hn,feeds
 npm run growth:prospects -- --dry-run        # don't record anything as seen
 npm run growth:prospects -- --print          # echo the digest to stdout too
+npm run growth:prospects -- --growth-dir ~/GitRepos/fgac-growth   # private workspace (see below)
 ```
 
 `scripts/growth-prospects.ts` — tsx, no new dependencies, no API keys.
@@ -39,25 +40,61 @@ for issues on the known Gmail MCP servers. Threshold 6; incidents always
 show. Obvious noise is dropped by pattern (hiring threads, auto-generated
 daily digests, `-bot` authors).
 
-Every surfaced URL is recorded in `.growth/seen.json` so a lead appears in
-exactly one digest. `--dry-run` skips the recording. Delete a key from
+Every surfaced URL is recorded in `<growth dir>/seen.json` so a lead appears
+in exactly one digest. `--dry-run` skips the recording. Delete a key from
 `seen.json` to resurface a lead.
 
 ## Where digests land
 
-`.growth/digests/YYYY-MM-DD.md` (a second run the same day writes
-`YYYY-MM-DD-HHMM.md`). The whole `.growth/` tree is gitignored: the repo is
-public and a lead list is not for publication. Sections: Incidents /
-Reply-worthy threads / Prospects on GitHub / Competitor movement / Sources
-(per-source ✓/✗ with the reason, so a silent skip is impossible). Each lead
-carries the link, a one-line summary, a suggested angle (factual, 2–3
-sentences, keyed off which pain terms matched) and the attribution link to
-paste.
+`<growth dir>/digests/YYYY-MM-DD.md` (a second run the same day writes
+`YYYY-MM-DD-HHMM.md`). The growth dir is `--growth-dir <path>`, else
+`$GROWTH_DIR`, else `.growth/` inside this repo — and that default tree is
+gitignored: the repo is public and a lead list is not for publication. The
+header line stamps the product commit the script ran from and the growth dir
+it used. Sections: Incidents / Reply-worthy threads / Prospects on GitHub /
+Competitor movement / Sources (per-source ✓/✗ with the reason, so a silent
+skip is impossible). Each lead carries the link, a one-line summary, a
+suggested angle (factual, 2–3 sentences, keyed off which pain terms matched)
+and the attribution link to paste.
+
+## Private workspace
+
+Lead lists, outreach state, and notes about people never belong in this
+public repo, so the working layout is a **private parent repo with this repo
+nested inside it as a git submodule** (`fgac-growth`, decision record in
+`docs/implementation_plans/growth-prospecting_v2.md`):
+
+```
+~/GitRepos/fgac-growth/        private — digests/, seen.json, config.json, tracker.md
+└── fgac/                      this repo, submodule tracking origin/main
+```
+
+- **`GROWTH_DIR`** — with `--growth-dir ~/GitRepos/fgac-growth` (or
+  `GROWTH_DIR=…`) the script reads `seen.json` and `config.json` from the
+  private repo and writes `digests/` there; nothing lead-related touches this
+  checkout. Prefer the flag: the scheduled task's command is allowlisted by
+  shape (`npm run growth:prospects -- …`) and an env-var prefix changes it.
+- **Overlay** — if `<growth dir>/config.json` exists, its arrays are appended
+  to the public defaults in the CONFIG block and deduped: `extraHnQueries`,
+  `extraRedditQueries`, `extraGithubIssueQueries`, `extraCompetitorRepos`
+  (star deltas), `extraFeeds` (`{name, url, incident}`), and `watchAuthors`
+  (usernames whose posts always surface, +3 score, tagged _watched author_ —
+  people data, which is why it lives only in the overlay). Unknown keys are
+  reported on stderr and ignored; `_`-prefixed keys are comments. Public
+  defaults stay here; anything naming a person stays there.
+- **Two session entry points.** Product work: start the Claude session inside
+  `fgac/` — it is this repo, with this `CLAUDE.md`, hooks, and settings;
+  branch + PR as always. Lead work: start at the parent — `fgac/` is
+  read-only from there (run the script, read the docs), and the parent's
+  `.claude/settings.json` re-registers this repo's two PreToolUse guards and
+  deny list so the same protections apply. The parent's SessionStart hook
+  fast-forwards `fgac/` to `origin/main` when it is on main and clean.
 
 ## Adding a keyword or source
 
-Everything lives in the CONFIG block at the top of
-`scripts/growth-prospects.ts`:
+Public defaults live in the CONFIG block at the top of
+`scripts/growth-prospects.ts`; private additions (and anything that names a
+person) go in the workspace overlay described above.
 
 - a phrase → `HN_QUERIES`, `REDDIT_QUERIES`, or `GITHUB_ISSUE_QUERIES`;
 - a Gmail MCP server whose issues matter → `GITHUB_GMAIL_MCP_REPOS`
@@ -134,11 +171,12 @@ the threads, too: HN and Reddit threads are dead for replying after ~48 h,
 and dedupe keeps each daily digest short (a weekly bundle would surface
 threads too late to join). The incident feeds are checked on every run.
 
-The task runs one command from the main clone and reports the digest's
-headline counts plus any degraded source:
+The task runs one command from the main clone, reports the digest's headline
+counts plus any degraded source, then commits the new digest and `seen.json`
+in the private workspace (`digest YYYY-MM-DD`, pushed when a remote exists):
 
 ```bash
-npm run growth:prospects -- --print
+npm run growth:prospects -- --print --growth-dir /Users/kyesh/GitRepos/fgac-growth
 ```
 
 If the task is missing (new machine, or it was deleted), recreate it with
