@@ -21,6 +21,9 @@ Captured in `verifyMcpAuth` (`src/app/api/mcp/route.ts`):
 | `optimizations_enabled` | kill-switch state at capture time |
 | `error_class` | Clerk auth() error name, when it threw |
 | `kid` | signing-key id from the (unverified) token header, on `invalid_token` only |
+| `method` | HTTP verb (`POST`; a `GET` is a client opening the optional SSE stream and taking the stateless 405 — rare in production, one per process start for a locally run CLI) |
+| `connection_resolve` | what the auth layer's eager `resolveConnection` did on this request: `ran` (four Neon round trips), `skipped` (touched within the last 5 minutes by the same user+client — `src/lib/connectionTouchMemo.ts`), `error`. Added 2026-09-08 |
+| `connection_resolve_ms` | wall time of that eager resolve when it ran; the per-request DB cost of a handshake (see 7.16) |
 
 Volume control: failures always capture; successes are sampled **1 in 20 per
 request** (`success_sample_rate` carries the factor). Multiply `outcome=ok`
@@ -314,17 +317,33 @@ concurrent calls) before going quiet. Watch `uniq(person_id)`:
   one-shot heal event per user, i.e. a `clerkPrimaryEmail`/`resolveDbUser`
   regression. Investigate.
 
-**7.5 — Install-funnel unique installers.** Raw
+**7.5 — Install attempts (top of the acquisition funnel).** Raw
 `connector_install_started{mcp_401}` counts are per-request identical to
 `mcp_auth_attempt` failures (same code path) — they measure 401/retry volume,
 not people. `install_fingerprint` (salted ip+user-agent hash, deployed
-2026-08-27) is the uniqueness key; there is no unique-count reading for data
-before it.
+2026-08-27) was meant to be the uniqueness key, but **for claude.ai traffic
+it is useless: every claude.ai request arrives from Anthropic's shared egress
+proxy, so one fingerprint is one Anthropic IP serving many users** (measured
+2026-09-08: 22 fingerprints for `Anthropic/ClaudeAI` over three weeks, 16 of
+them recurring across days, against 55 completed connections). Fingerprints
+still de-duplicate direct clients (claude-code, curl, scanners) and are the
+right filter for excluding crawlers, but never divide sign-ups by them for a
+claude.ai conversion rate.
+
+The usable proxy for "clicked Connect in the directory" is the count of
+unauthenticated claude.ai `initialize` requests: one per install attempt, plus
+retries, so it is an **upper bound on attempts** (2026-08-28 → 09-08: 91
+requests for 55 Clerk accounts created through the connector, i.e. roughly 1.6
+requests per completed account). The exact denominator lives only on
+Anthropic's side (the listing dashboard's "accounts that sent any message").
 
 ```sql
 SELECT toDate(timestamp) AS day,
-       uniq(properties.install_fingerprint) AS unique_installers,
-       count() AS raw_401_volume
+       countIf(properties.client_name = 'Anthropic/ClaudeAI') AS claudeai_unauth_initializes,
+       countIf(properties.client_name = 'claude-code')        AS claude_code_unauth_initializes,
+       uniqIf(properties.install_fingerprint, properties.user_agent NOT IN ('Claude-User'))
+                                                              AS direct_client_fingerprints,
+       count()                                                AS raw_401_volume
 FROM events
 WHERE event = 'connector_install_started'
   AND properties.touchpoint = 'mcp_401'
@@ -334,13 +353,14 @@ WHERE event = 'connector_install_started'
 GROUP BY day ORDER BY day
 ```
 
-Install→signup conversion compares `unique_installers` against daily
-`sign_up_completed` (internal/QA accounts excluded). A large
-`raw_401_volume / unique_installers` ratio is expected and benign — it is
-retry pressure from established clients, the artifact that previously read
-as a conversion collapse. Split by client product via
-`properties.client_name` (populated when the unauthenticated request was an
-MCP `initialize`), or `mcp_client_initialize` for authenticated sessions.
+Compare `claudeai_unauth_initializes` against the same day's Clerk accounts
+created through the connector (`npm run funnel:scopes -- --prod`, or
+`sign_up_completed` persons whose `signup_source` is not `website`). A large
+`raw_401_volume` over the initialize count is retry pressure from established
+clients, the artifact that previously read as a conversion collapse. A never-
+authenticated connector does NOT keep pinging: unauthenticated initializes
+stay at 5–11/day while authenticated ones run 200–450/day, so "connected but
+never signed in to Clerk" is not a recurring population on our side.
 
 **7.6 — Gmail-scope lockouts.** Users whose Google grant lacks the Gmail scope
 (Gmail checkbox unchecked on Google's consent screen) 403 on every Gmail call
@@ -452,22 +472,88 @@ header. Our own `reason='parse_error'` 400 replaces what used to be a hang:
 `mcp-handler` awaits `req.json()` unguarded, so a malformed/empty JSON body
 never got a response until the function timeout.
 
+**Read `reason` first — the same "Unsupported protocol version" message means
+opposite things depending on the RPC method.** Corrected 2026-09-04, when the
+first day of data was 100% claude.ai clients on MCP 2026-07-28 and the
+original reading ("that user is silently broken") was wrong for all of them:
+
+- `discover_probe` — **expected, nobody is locked out.** MCP 2026-07-28
+  replaced `initialize` with a `server/discover` probe that a dual-era client
+  sends first, under `MCP-Protocol-Version: 2026-07-28`. Our SDK 1.x server
+  answers the header check with the 400 the transport spec mandates, and the
+  2026-07-28 spec's fallback rule tells the client to read a 400 *without* a
+  modern error body as "legacy server" and retry with `initialize`
+  ([versioning](https://modelcontextprotocol.io/specification/2026-07-28/basic/versioning),
+  [Streamable HTTP → Backward Compatibility](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/streamable-http)).
+  Measured on the first day: every probe was followed by a successful
+  `initialize` from the same `client_id` within seconds; probes recur about
+  every 15 minutes per client (the client caches the legacy verdict), so they
+  accompany roughly one initialize in ten. One extra small round trip per
+  client per quarter hour — not a cost worth an SDK migration on its own.
+- `unsupported_protocol_version` — the same message on any *other* method
+  (`tools/list`, `tools/call`, …): a client that shipped a version the
+  deployed SDK refuses **and never sends the legacy handshake**. That user IS
+  refused until the SDK is bumped (the supported list is printed in the
+  message). This is the row the event exists for; it has never fired in
+  production as of 2026-09-04. (`initialize` can never produce it: SDK 1.x
+  skips the header check on initialization requests and negotiates the
+  version down instead — verified on the PR #116 preview, an `initialize`
+  under the 2026-07-28 header answers 200 with `2025-11-25`.)
+- `sdk` — everything else. "Only one initialization request is allowed" is a
+  batching client; 406 is a missing `Accept`.
+- `parse_error` — our own 400 for a non-JSON body.
+
 ```sql
 SELECT properties.status AS status, properties.reason AS reason,
-       properties.message AS message, properties.protocol_version_header AS pv,
-       properties.client_id AS client, uniq(distinct_id) AS users, count() AS n
+       properties.rpc_method AS rpc_method, properties.message AS message,
+       properties.protocol_version_header AS pv,
+       uniq(properties.client_id) AS clients, uniq(distinct_id) AS users, count() AS n
 FROM events
-WHERE event = 'mcp_transport_rejected' AND timestamp > now() - INTERVAL 7 DAY
-GROUP BY status, reason, message, pv, client ORDER BY n DESC
+WHERE event = 'mcp_transport_rejected' AND properties.environment = 'production'
+  AND timestamp > now() - INTERVAL 7 DAY
+GROUP BY status, reason, rpc_method, message, pv ORDER BY n DESC
 ```
 
-Healthy: a steady, low, `anonymous-mcp`/probe-only trickle. Any row with a
-real person and `message` starting "Bad Request: Unsupported protocol version"
-means a client shipped a protocol version the deployed SDK does not accept —
-that user is silently broken until the SDK is bumped (supported list is
-printed in the message). "Only one initialization request is allowed" is a
-batching client. Correlate with `$mcp_tool_call` volume for the same
-`client_id`: rejections WITHOUT successes is a fully locked-out client.
+Healthy: `discover_probe` rows at roughly 10% of `mcp_client_initialize`
+volume, a steady low `sdk`/`parse_error` trickle, and **zero**
+`unsupported_protocol_version` rows. Any `unsupported_protocol_version` row on
+a real person is a refused user: correlate with `$mcp_tool_call` for the same
+`client_id` — rejections WITHOUT successes is a fully locked-out client.
+
+**Probes by protocol version, 7 days.** The day a NEW version string appears
+here is the day a client moved ahead of the deployed SDK — that is the early
+warning, weeks before any client drops its legacy fallback:
+
+```sql
+SELECT toDate(timestamp) AS day, properties.protocol_version_header AS pv,
+       properties.reason AS reason, properties.rpc_method AS rpc_method,
+       count() AS n, uniq(properties.client_id) AS clients
+FROM events
+WHERE event = 'mcp_transport_rejected' AND properties.environment = 'production'
+  AND timestamp > now() - INTERVAL 7 DAY
+GROUP BY day, pv, reason, rpc_method ORDER BY day, n DESC
+```
+
+**Lockout alarm: clients that probed and never initialized (24 h).** A
+modern-only client (SDK v2 `versionNegotiation: { pin: '2026-07-28' }`, no
+fallback) would show up here — probes, no `initialize`, no tool calls. This
+is the trigger for the `mcp-handler` 2.x / SDK v2 migration (plan:
+`docs/implementation_plans/claude-laughing-ardinghelli-8c32dd_v1.md`); the
+other trigger is `discover_probe` share of initializes climbing well past 10%
+(a client that stopped caching the legacy verdict). Expected value: 0.
+
+```sql
+SELECT uniq(cid) AS locked_out_clients, sum(probes) AS probes
+FROM (SELECT properties.client_id AS cid,
+             countIf(event = 'mcp_transport_rejected') AS probes,
+             countIf(event = 'mcp_client_initialize') AS inits,
+             countIf(event = '$mcp_tool_call') AS calls
+      FROM events
+      WHERE event IN ('mcp_transport_rejected', 'mcp_client_initialize', '$mcp_tool_call')
+        AND properties.environment = 'production'
+        AND timestamp > now() - INTERVAL 24 HOUR
+      GROUP BY cid HAVING probes > 0 AND inits = 0 AND calls = 0)
+```
 
 **7.10 — Tool calls the SDK refused before our code ran
 (`mcp_input_validation_failed`).** Zod argument validation and unknown-tool
@@ -587,3 +673,467 @@ GROUP BY day ORDER BY day
 (the denial's reconnect link, or the dashboard card's button); expect it to
 drain as those users reconnect, and expect `record_narrower_than_token` to
 drain once the production sign-in scope list carries `drive.file`.
+
+**7.13 — Clerk token-fetch retry (the daily delegated-mailbox race).**
+Measured 2026-09-04 over 30 days of production: every MCP-path
+`google_token_fetch_failed` was `reason='clerk_error'`, one per day came
+from a single healthy delegated mailbox, and the per-call sequence showed a
+race — the agent fires two calls on that mailbox within ~100 ms on its first
+touch of the day, one fails at Clerk in ~80-120 ms (`token_ms`), the other
+succeeds, and every later call succeeds. Since 2026-09-04 the route retries
+an unknown Clerk error once (300 ms) and stamps the result on the tool call:
+
+```sql
+SELECT toDate(timestamp) AS day, properties.google_token_retry AS retry,
+       properties.account_delegated AS delegated, count() AS calls, uniq(person_id) AS users
+FROM events
+WHERE event = '$mcp_tool_call' AND properties.google_token_retry IS NOT NULL
+  AND timestamp > now() - INTERVAL 30 DAY
+GROUP BY day, retry, delegated ORDER BY day
+```
+
+Healthy: `recovered` rows at roughly the pre-deploy daily failure rate (≈1/day
+from the one account) and **zero** `retry_failed`. `google_token_fetch_failed`
+fires only on FINAL failure, so a `clerk_error` there now means the retry did
+not help — pair it with the new `clerk_status` / `clerk_code` props before
+deciding whether it is a Clerk incident (many users, one window) or a broken
+grant (one user, every call). Since the same date the event also fires for
+`no_token`, a Clerk 404 for the owner's stored user id classifies
+`owner_not_found` (deterministic — a deleted owner account, or a row from a
+different Clerk instance, which is exactly what a preview against a copy of
+production data produces for every delegated mailbox), and the tool result
+for `no_token` / `refresh_failed` / `owner_not_found` is a 🚫
+refusal (`denial_code: 'google_token_unavailable'`, outcome
+`denied_by_policy`) that names who must reconnect; `clerk_error` / `timeout`
+stay ❌ `failed` with retry-first text. A rising `retry_failed` count, or a
+`recovered` count far above the old failure rate, means Clerk is degrading
+rather than racing.
+
+**7.13a — Revoked grants (`grant_revoked`, Clerk 400
+`oauth_token_retrieval_error`).** Re-measured 2026-09-09: the retry above had
+recovered ZERO calls since it shipped (`recovered` = 0 every day 09-03 → 09-09),
+and every `retry_failed` row (23, three own-mailbox accounts, 09-08/09) was
+Clerk's 400 `oauth_token_retrieval_error` — "Failed to retrieve a new access
+token from the OAuth provider". Probed read-only against the production
+Backend API, all three carried Google's `invalid_grant "Token has been expired
+or revoked."`, every external account was still `verified` in Clerk, and no
+account produced a single own-mailbox success after its first failure. That is
+a dead grant, not a race: the user revoked FGAC in their Google account,
+changed their Google password (Google revokes Gmail-scoped grants on a
+password change), or the grant aged out. The same code was already on record as
+a dead QA grant on 2026-08-06. Since 2026-09-09 it classifies `grant_revoked`
+on all three paths (MCP, proxy, grant check): no retry, a 🚫
+`google_token_unavailable` refusal with the owner-bound reconnect link, and
+`list_accounts` mints `reconnect_url` for it plus a top-level
+`next_steps.reconnect` nudge (the affected agents called list_accounts right
+after their first failure and got no instruction). The reconnect works because
+Google no longer holds the grant, so the consent screen shows again and a new
+refresh token is issued. Note the SDK drops Clerk's `meta.provider_error`, so
+the code alone decides; a Google token-endpoint outage would land here too —
+tell them apart by shape (many accounts in one window = incident; one account,
+every call, forever = revoked):
+
+```sql
+SELECT toDate(timestamp) AS day, properties.reason AS reason,
+       properties.clerk_status AS clerk_status, properties.clerk_code AS clerk_code,
+       properties.via AS via, count() AS failures, uniq(person_id) AS accounts
+FROM events
+WHERE event = 'google_token_fetch_failed' AND properties.environment = 'production'
+  AND timestamp > now() - INTERVAL 30 DAY
+GROUP BY day, reason, clerk_status, clerk_code, via ORDER BY day, failures DESC
+```
+
+Healthy: `oauth_token_retrieval_error` rows carry `reason = 'grant_revoked'`
+(never `clerk_error`), a handful of accounts per week, and each account's
+`$mcp_tool_call` rows after the first failure are `denied_by_policy` with
+`google_token_error = 'grant_revoked'` — not a run of `failed`. Whether the
+reconnect link converts is §7.8's `google_reconnect_*` funnel for that person.
+The per-tool split the directory table needs is now a property, no join:
+
+```sql
+SELECT properties.$mcp_tool_name AS tool, properties.outcome AS outcome,
+       properties.google_token_error AS token_error,
+       properties.google_token_clerk_code AS clerk_code, count() AS calls, uniq(person_id) AS users
+FROM events
+WHERE event = '$mcp_tool_call' AND properties.environment = 'production'
+  AND properties.failure_reason = 'google_token_unavailable'
+  AND timestamp > now() - INTERVAL 7 DAY
+GROUP BY tool, outcome, token_error, clerk_code ORDER BY calls DESC
+```
+
+Before the fix (7 d to 2026-09-09) this table put 16 of `sheets_get_spreadsheet`'s
+35 error-or-failed rows (of 242 calls, 14.5%) on this one class; after it those
+rows are `denied_by_policy` and leave the published rate.
+
+**7.14 — Approval-link conversion, per request (never per event).** The
+approve page's file-grant button shipped without a pending guard; until the
+2026-09-05 fix a rage-click on a slow sheets/docs approval re-ran the server
+action per click, and each run re-fired `approval_link_approved` and inserted a
+duplicate rule (one production link: 14 approve events, 11 rules for one sheet
+in 12 s). Raw event counts therefore overstate conversion for 2026-08-25 →
+2026-09-05 (71% raw vs 37% per link in the last pre-fix week). Count links:
+
+```sql
+SELECT properties.action AS action,
+       uniqIf(properties.request_id, event = 'approval_link_minted')   AS minted_links,
+       uniqIf(properties.request_id, event = 'approval_link_approved') AS approved_links,
+       countIf(event = 'approval_link_approved')                        AS approve_events,
+       countIf(event = 'approval_link_replayed')                        AS replays,
+       round(100 * uniqIf(properties.request_id, event = 'approval_link_approved')
+                 / greatest(uniqIf(properties.request_id, event = 'approval_link_minted'), 1), 1) AS pct
+FROM events
+WHERE event IN ('approval_link_minted', 'approval_link_approved', 'approval_link_replayed')
+  AND properties.environment = 'production'
+  AND timestamp > now() - INTERVAL 7 DAY
+GROUP BY action ORDER BY minted_links DESC
+```
+
+Healthy after the fix: `approve_events = approved_links` for every action (any
+excess is a server-side dedupe gap — the client guard alone cannot make that
+equality hold, a slow network can still land two POSTs), and `replays` small
+relative to `approved_links`; `replays` is the duplicate-submit rate, split it
+by `properties.path` (`picked` vs `grant_active`) when it climbs. Pair with
+`$rageclick` on `$pathname = '/dashboard/approve'` — the pre-fix signature was
+one rage-clicking user per day, every one of them on a file grant.
+
+**7.15 — Picker cancel → recovery, per user.** A file Google does not share
+with FGAC yet cannot be resolved by title, so a denial-minted approval link
+shows Google's opaque file id while Google's Picker lists files by NAME.
+Measured 2026-09-03 → 09-07, 13 of 33 Picker opens (approve page + dashboard)
+ended in a cancel, and the two users who cancelled on the approve page never
+approved. Since 2026-09-08 a cancel renders a recovery panel with an in-place
+Try again, `picker_opened`/`picker_cancelled` carry `attempt`, and
+`request_access` can pass the file's title (`has_resource_name` on the mint).
+Per user, did a cancel lead to a retry, and did the retry pick?
+
+```sql
+SELECT cityHash64(person.properties.email) % 100000 AS u,
+       countIf(event = 'picker_opened')                              AS opens,
+       countIf(event = 'picker_cancelled')                           AS cancels,
+       countIf(event = 'picker_opened' AND properties.attempt > 1)   AS retries,
+       countIf(event = 'picker_picked')                              AS picks,
+       round(avgIf(properties.elapsed_ms, event = 'picker_cancelled') / 1000, 1) AS avg_cancel_s,
+       groupUniqArray(properties.$pathname)                          AS pages
+FROM events
+WHERE event IN ('picker_opened', 'picker_cancelled', 'picker_picked')
+  AND properties.environment = 'production'
+  AND person.properties.email NOT IN (/* internal + QA accounts: the exclusion list in the daily review task */)
+  AND timestamp > now() - INTERVAL 7 DAY
+GROUP BY u HAVING cancels > 0 ORDER BY cancels DESC
+```
+
+Healthy: most rows with `cancels > 0` also have `retries > 0` and `picks > 0`
+(the panel got them back in and they found the file); `avg_cancel_s` under ~10 s
+with no retry is a user who could not tell which file to pick — check
+`has_resource_name` on their `approval_link_minted` rows (0 = the agent never
+passed a title; the protocol text asks it to). Pair with the post-pick loop:
+`sheets_grant_verification{via = 'magic_link', result = 'missing'}` per
+`request_id` — more than 2 per link is the 8-second retry loop, and the
+remedy is on the Google-propagation side, not the page.
+
+Two readings added 2026-09-09, after a week in which three accounts opened a
+sheets link, ran the `link_open` verification, and never approved:
+
+*The picker events are client-side and ad blockers drop them.* 8 of the 65
+people who opened an approval link in 30 days sent **no client-side event at
+all** — for them "no `picker_opened`" means nothing. `picker_token_requested`
+(server, one row per pick-button click) is the row to read instead: a person
+with `link_open` verifications and no `picker_token_requested` did not click;
+one with `picker_token_requested` and no `picker_opened` is telemetry-blind,
+not stuck. `has_drive_file_scope = false` on it is the reconnect leg (dead or
+narrowed grant), `result = 'no_token'` is a Google account that was never
+connected.
+
+```sql
+-- Per person: server-side clicks vs client-side picker events, 7 d.
+SELECT cityHash64(person.properties.email) % 100000 AS u,
+       countIf(event = 'picker_token_requested')                                   AS clicks_server,
+       countIf(event = 'picker_token_requested' AND properties.has_drive_file_scope = false) AS clicks_no_scope,
+       countIf(event = 'picker_opened')                                            AS opens_client,
+       countIf(event IN ('sheets_grant_verification','docs_grant_verification') AND properties.via = 'link_open') AS link_opens,
+       countIf(event = 'approval_link_approved')                                   AS approved
+FROM events
+WHERE event IN ('picker_token_requested','picker_opened','sheets_grant_verification','docs_grant_verification','approval_link_approved')
+  AND properties.environment = 'production'
+  AND person.properties.email NOT IN (/* internal + QA accounts */)
+  AND timestamp > now() - INTERVAL 7 DAY
+GROUP BY u HAVING link_opens > 0 ORDER BY approved, clicks_server
+```
+
+*"Opened, never approved" includes agents that built a substitute.* Two of
+the three accounts above had their agent create a NEW spreadsheet
+(`google_api_modify` → `agent_sheet_created {auto_granted: true}`) within two
+minutes of the link open and were productive on it the same day; the original
+sheet stayed unexposed and kept minting. Before treating such a link as a
+stuck user, check:
+
+```sql
+-- Gate-hit persons: denied ids vs ids they later used successfully, 7 d.
+SELECT cityHash64(person.properties.email) % 100000 AS u,
+       groupUniqArrayIf(cityHash64(toString(properties.file_id)) % 10000,
+         event = '$mcp_tool_call' AND properties.denial_code IN ('sheets_not_exposed','docs_not_exposed')) AS denied_ids,
+       groupUniqArrayIf(cityHash64(toString(properties.file_id)) % 10000,
+         event = '$mcp_tool_call' AND properties.outcome = 'success'
+         AND (properties.$mcp_tool_name LIKE 'sheets%' OR properties.$mcp_tool_name LIKE 'docs%')) AS ok_ids,
+       countIf(event IN ('agent_sheet_created','agent_doc_created')) AS agent_created,
+       countIf(event = 'approval_link_opened')   AS opened,
+       countIf(event = 'approval_link_approved') AS approved
+FROM events
+WHERE properties.environment = 'production'
+  AND person.properties.email NOT IN (/* internal + QA accounts */)
+  AND timestamp > now() - INTERVAL 7 DAY
+  AND (event IN ('approval_link_opened','approval_link_approved','agent_sheet_created','agent_doc_created')
+       OR (event = '$mcp_tool_call' AND (properties.$mcp_tool_name LIKE 'sheets%' OR properties.$mcp_tool_name LIKE 'docs%')))
+GROUP BY u HAVING length(denied_ids) > 0
+ORDER BY approved, agent_created DESC
+```
+
+A row with `approved = 0`, `agent_created > 0` and `ok_ids` disjoint from
+`denied_ids` is a substitute, not a leak — the product question there is why
+the user's own file was not pickable (other Google account, shared drive,
+Workspace policy), which the approve page's connected-account line now
+addresses for the first case.
+
+**7.16 — Handshake loops (`mcp_client_initialize` vs `$mcp_tool_call`).**
+Added 2026-09-08. Two Claude Code users ran automation that spawned a fresh
+`claude` process every ~30 s (one, 18 h a day; the other every ~2 min) — each
+spawn re-runs the MCP handshake (`initialize`, `notifications/initialized`,
+`tools/list`; three authenticated POSTs, no GET) and ends without a tool
+call. Result: claude-code initializes went from ~6 to ~37 per person per day
+while tool-call volume stayed flat, and `mcp_client_initialize` became ~50%
+of all events in the project. The pattern is the Agent SDK / headless-loop
+shape (each `query()` or `claude -p` is a new process; subagents share the
+parent's connection; the two interleaving `client_version`s from one
+`client_id` are a bundled SDK CLI next to an auto-updating global install —
+OAuth registrations live in the Keychain and are shared machine-wide). It is
+**not** a server-side reconnect. A local Claude Code 2.1.263 start-up
+(measured 2026-09-09 with a static-header config) is one probe (`400`),
+`initialize`, `notifications/initialized`, one SSE `GET` that takes the
+stateless `405` quietly with no retry, then `tools/list` — and the process
+ends. The production loop clients show no authenticated GETs at all and only
+the cached ~1 probe per 15 minutes, so their cycle is the three POSTs.
+
+What the server does about it (PR for `claude/adoring-snyder-eea430`): the
+auth layer's eager `resolveConnection` (four sequential Neon round trips per
+authenticated request, result unused for authorization) is skipped when the
+same user+client was touched within 5 minutes on this instance. Kill switch
+`MCP_CONNECTION_TOUCH_MEMO=disabled`. The initialize event itself is **not**
+sampled or coalesced (decision 2026-09-09): its per-event timestamps and
+versions are what exposed the pattern, the volume is ~6% of the plan, and a
+user building automation on FGAC is a signal worth keeping at full grain.
+Nothing is rate-limited or rejected — these are paying users whose tool calls
+succeed.
+
+```sql
+-- Clients whose handshakes dwarf their tool calls, 24 h.
+SELECT cityHash64(properties.client_id) % 100000 AS client_hash,
+       arrayStringConcat(groupUniqArrayIf(properties.client_name, event = 'mcp_client_initialize'), ',') AS client_names,
+       countIf(event = 'mcp_client_initialize') AS inits,
+       countIf(event = '$mcp_tool_call') AS calls,
+       uniq(distinct_id) AS users
+FROM events
+WHERE event IN ('mcp_client_initialize', '$mcp_tool_call')
+  AND properties.environment = 'production'
+  AND timestamp > now() - INTERVAL 24 HOUR
+GROUP BY client_hash
+HAVING inits > 200
+ORDER BY inits DESC
+```
+
+Reading it: a row with `inits > 200` and `calls < inits / 20` is a handshake
+loop — **informational, not an incident**. Report it as "N loop clients, M
+initializes" and keep those clients out of per-request health ratios
+(auth-failure rate, discover-probe share, initializes-per-person), which they
+otherwise dominate. It becomes actionable only if (a) a loop client's tool
+calls start failing (then it is a stuck client, not a loop), or (b) the
+`connection_resolve = 'skipped'` share on `mcp_auth_attempt` for that client
+is low despite the loop (memo not absorbing it — instance churn or the kill
+switch), or (c) `mcp_client_initialize` alone approaches ~300k rows/month
+(30% of the 1M free tier), which is when coalescing the event becomes worth
+its cost in lost per-event grain.
+
+```sql
+-- Is the memo absorbing the loop? Share of authenticated requests that
+-- skipped the eager DB touch, and the cost of the ones that ran (24 h).
+SELECT properties.connection_resolve AS resolve,
+       count() AS sampled_requests,
+       quantile(0.5)(toFloat(properties.connection_resolve_ms)) AS p50_ms,
+       quantile(0.95)(toFloat(properties.connection_resolve_ms)) AS p95_ms
+FROM events
+WHERE event = 'mcp_auth_attempt' AND properties.environment = 'production'
+  AND properties.outcome = 'ok' AND timestamp > now() - INTERVAL 24 HOUR
+GROUP BY resolve
+```
+
+Healthy after the deploy: `skipped` is the majority of sampled `ok` rows
+(loop clients alone are ~85% of authenticated requests), `ran` p50 sits at
+Neon-from-iad1 latency (tens of ms for four round trips), and `error` is zero.
+PostHog volume from handshakes is not a plan problem today (~6% of the free
+tier's 1M events/month); the threshold that would make it one is (c) above.
+
+**7.17 — Directory disconnect rate: what it is and our proxy for it.** The
+listing dashboard's health badge (Healthy ≤ 5%) is, per
+[Managing your listing](https://claude.com/docs/connectors/building/managing-your-listing):
+*denominator* = every distinct Claude account that sent the server ANY MCP
+message in the last 30 days (`initialize` counts, and so do connection
+attempts that never authenticated); *numerator* = those accounts that **chose
+to disconnect** during the window. We never see the click. Our proxy is a
+person whose connections stop sending `mcp_client_initialize`/`$mcp_tool_call`
+for 7+ days — claude.ai pings every connected connector each session (~2–3
+initializes per person per day), so silence is either a dormant Claude user
+or a removal.
+
+Established 2026-09-08 (listing live since 2026-08-16):
+- Every account that had made even one tool call was still messaging; the
+  silent population was **100% never-called accounts**, 13 of 19 from launch
+  week. Denials (`sheets_not_exposed`, scope missing, Google 401/403) did NOT
+  predict silence — those users have the highest call volumes.
+- The steady climb through early September was window mechanics: until day
+  30 after listing (~2026-09-15) the window covered the whole listed life, so
+  the numerator was cumulative disconnects while new accounts slowed from
+  ~50/day to ~5/day. Expect a peak mid-September and a decline as both the
+  launch accounts and their disconnects age out together.
+- Not causes: `discover_probe` 400s (7.9), `invalid_token` rows (the `probe`
+  kid), duplicate same-minute connection rows at install time.
+
+```sql
+-- Never-called accounts that have gone quiet, by week of first connection.
+-- Person-level (Anthropic counts accounts); internal accounts excluded.
+WITH per AS (
+  SELECT person_id,
+         toDate(minIf(timestamp, event = 'mcp_connection_created')) AS first_conn,
+         maxIf(timestamp, event IN ('mcp_client_initialize', '$mcp_tool_call')) AS last_msg,
+         countIf(event = '$mcp_tool_call') AS calls,
+         countIf(event = '$mcp_tool_call' AND properties.outcome = 'success') AS ok_calls
+  FROM events
+  WHERE event IN ('mcp_connection_created', 'mcp_client_initialize', '$mcp_tool_call')
+    AND properties.environment = 'production'
+    AND timestamp > now() - INTERVAL 6 WEEK
+    AND person.properties.email NOT IN (/* internal + QA accounts: the same list every query in §7 uses, plus the demo account */)
+  GROUP BY person_id
+  HAVING first_conn > toDate('2000-01-01')
+)
+SELECT toStartOfWeek(first_conn, 1) AS connect_week,
+       count()                                                          AS people,
+       countIf(calls > 0)                                               AS ever_called,
+       countIf(calls = 0 AND last_msg <  now() - INTERVAL 7 DAY)        AS never_called_silent_7d,
+       countIf(calls = 0 AND last_msg >= now() - INTERVAL 7 DAY)        AS never_called_still_pinging,
+       countIf(calls > 0 AND last_msg <  now() - INTERVAL 7 DAY)        AS called_then_silent_7d
+FROM per GROUP BY connect_week ORDER BY connect_week
+```
+
+Healthy: `called_then_silent_7d` ≈ 0 (a non-zero value here is a real
+regression — someone who used the tools and left) and
+`never_called_silent_7d` concentrated in old cohorts. The pool to work on is
+`never_called_still_pinging`: Claude loads the connector in their sessions and
+it never gets used (the 2026-09-08 baseline was 39 people, most never having
+opened the dashboard — see 7.18 for the split). Watch this weekly; a rising
+never-called share in NEW cohorts is the only thing that would push the
+published rate back up once the launch window has aged out.
+
+**7.18 — Acquisition funnel, per person.** Stages: (1) Connect click →
+7.5 upper bound; (2) Clerk account created → `sign_up_completed`
+(`user.created` webhook; `signup_source` = `claude_connector` when the
+account was born from a connection, `website` for dashboard sign-ups, unset
+for accounts created mid-OAuth that never connected); (3) Claude finished
+OAuth → `mcp_connection_created`; (3b) Google scope actually granted → Clerk,
+via `npm run funnel:scopes -- --prod` (Gmail is a checkbox at sign-in consent;
+drive.file arrives later through the Picker, so its share reads much lower and
+that is not a defect); (4) first successful `$mcp_tool_call`, split Gmail vs
+Sheets/Docs. Baseline 2026-09-08 (182 connected since launch): Gmail scope
+74% of connected, Gmail tried 41%, Gmail succeeded 32%; Sheets/Docs tried
+53%, succeeded 37%, and 29 people tried Sheets and never succeeded (the
+Sheets equivalent of the unchecked Gmail box — most never opened the
+approval link). The recent cohort is Sheets-first.
+
+```sql
+WITH per AS (
+  SELECT person_id,
+         min(timestamp) AS first_ev,
+         any(person.properties.signup_source) AS src,
+         countIf(event = 'sign_up_completed')      AS signed_up,
+         countIf(event = 'mcp_connection_created') AS conns,
+         countIf(event = '$pageview' AND properties.$current_url LIKE '%/dashboard%') AS dash_views,
+         countIf(event = 'google_scope_missing' AND properties.scope = 'gmail') AS gmail_scope_denied,
+         countIf(event = '$mcp_tool_call' AND properties.$mcp_tool_name LIKE 'gmail_%') AS gmail_tried,
+         countIf(event = '$mcp_tool_call' AND properties.$mcp_tool_name LIKE 'gmail_%' AND properties.outcome = 'success') AS gmail_ok,
+         countIf(event = '$mcp_tool_call' AND (properties.$mcp_tool_name LIKE 'sheets_%' OR properties.$mcp_tool_name LIKE 'docs_%')) AS sd_tried,
+         countIf(event = '$mcp_tool_call' AND properties.denial_code IN ('sheets_not_exposed', 'docs_not_exposed')) AS sd_not_exposed,
+         countIf(event = 'approval_link_opened')   AS link_opened,
+         countIf(event = 'approval_link_approved') AS link_approved,
+         countIf(event = 'picker_picked')          AS picked,
+         countIf(event = '$mcp_tool_call' AND (properties.$mcp_tool_name LIKE 'sheets_%' OR properties.$mcp_tool_name LIKE 'docs_%') AND properties.outcome = 'success') AS sd_ok,
+         countIf(event = '$mcp_tool_call' AND properties.outcome = 'success') AS any_ok
+  FROM events
+  WHERE properties.environment = 'production'
+    AND timestamp > now() - INTERVAL 6 WEEK
+    AND person.properties.email NOT IN (/* internal + QA accounts: the same list every query in §7 uses, plus the demo account */)
+  GROUP BY person_id
+)
+SELECT toStartOfWeek(first_ev, 1) AS cohort_week,
+       countIf(signed_up > 0 AND coalesce(src, '') != 'website') AS clerk_accounts_via_connector,
+       countIf(conns > 0)                     AS connected,
+       countIf(conns > 0 AND dash_views > 0)  AS connected_opened_dashboard,
+       countIf(conns > 0 AND any_ok > 0)      AS any_tool_success,
+       countIf(conns > 0 AND gmail_tried > 0) AS gmail_tried,
+       countIf(conns > 0 AND gmail_ok > 0)    AS gmail_success,
+       countIf(conns > 0 AND gmail_scope_denied > 0) AS gmail_scope_denied,
+       countIf(conns > 0 AND sd_tried > 0)    AS sheets_docs_tried,
+       countIf(conns > 0 AND sd_not_exposed > 0) AS sheets_docs_hit_gate,
+       countIf(conns > 0 AND link_opened > 0) AS opened_approval_link,
+       countIf(conns > 0 AND (link_approved > 0 OR picked > 0)) AS approved_or_picked,
+       countIf(conns > 0 AND sd_ok > 0)       AS sheets_docs_success,
+       countIf(conns > 0 AND sd_tried > 0 AND sd_ok = 0) AS sheets_docs_tried_never_succeeded
+FROM per
+WHERE conns > 0 OR signed_up > 0
+GROUP BY cohort_week ORDER BY cohort_week
+```
+
+Read it with 7.17: the gap between `connected` and `any_tool_success` is the
+disconnect pool; the gap between `sheets_docs_hit_gate` and
+`opened_approval_link` is link delivery (the nudge lives in the denial text,
+`policyDenialWithLink` in `src/app/api/mcp/route.ts`); `gmail_scope_denied`
+only counts people who tried Gmail — the scope share itself comes from the
+Clerk script. `connected_opened_dashboard` is a browser-SDK count and
+undercounts ad-blocked visitors.
+
+**7.19 — Approval funnel per action, per link (minted → opened → approved).**
+Locates a conversion loss before anyone names a fix: an action whose links are
+minted but not *opened* is losing users between the agent's reply and the
+click (the agent paraphrased the link away, or the user never asked for that
+file); an action whose links are opened but not approved is losing them on the
+approve page (Picker cancel, verification loop, wrong account). Measured
+2026-09-08 (7 d): `docs_expose` 13 minted / 1 opened / 0 approved — an
+open-step leak — against `sheets_expose` 36 / 24 / 17. Read
+`analytics.md` → "Read the funnel per action" for the two joins this depends
+on (denial code ≠ link action; approvals are recorded at the effective level).
+
+```sql
+WITH minted AS (
+  SELECT properties.request_id AS rid, any(properties.action) AS action
+  FROM events
+  WHERE event = 'approval_link_minted' AND properties.environment = 'production'
+    AND timestamp > now() - INTERVAL 7 DAY
+    AND person.properties.email NOT IN (/* internal / QA accounts — .qa_test_emails.json + founder addresses, never inline them here */)
+  GROUP BY rid),
+opened AS (SELECT DISTINCT properties.request_id AS rid FROM events
+  WHERE event = 'approval_link_opened' AND timestamp > now() - INTERVAL 30 DAY),
+appr AS (SELECT DISTINCT properties.request_id AS rid FROM events
+  WHERE event = 'approval_link_approved' AND timestamp > now() - INTERVAL 30 DAY)
+SELECT m.action,
+       count()                 AS links,
+       countIf(o.rid != '')    AS opened,
+       countIf(a.rid != '')    AS approved
+FROM minted m
+LEFT JOIN opened o ON o.rid = m.rid
+LEFT JOIN appr   a ON a.rid = m.rid
+GROUP BY m.action ORDER BY m.action
+```
+
+ClickHouse LEFT JOIN fills unmatched String columns with `''` (and DateTimes
+with the 1970 epoch), so test `!= ''`, never `IS NOT NULL`. Healthy: `opened /
+links` above ~60% for file actions and `approved / opened` above ~70%. An
+open rate far below the sibling action (docs vs sheets) with a normal
+approve-given-open rate is not a page problem — look at what minted the links
+(`$mcp_tool_call` rows carrying `approval_request_id`: which tool, in what
+burst, after what) before changing the approve page.

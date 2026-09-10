@@ -8,8 +8,16 @@ import { useFormStatus } from "react-dom";
  * consumed the link, the second landed on "already used" — an error shown
  * to a user whose approval had just SUCCEEDED (rage-click evidence,
  * 2026-08-17).
+ *
+ * Shared by BOTH approve forms since 2026-09-05. FileApprovalFlow shipped its
+ * own plain submit button; React 19 queues every submit behind the in-flight
+ * action, so a rage-click on a slow sheets/docs approval re-ran the server
+ * action per click — one production link produced 14 approval_link_approved
+ * events and 11 duplicate rules (PostHog, 2026-08-30 → 2026-09-04). Any new
+ * approve form must render this, never a bare <button type="submit">.
+ * Pinned by scripts/test-approve-submit-button.ts.
  */
-export function ApproveSubmitButton() {
+export function ApproveSubmitButton({ label = "Approve this grant" }: { label?: string }) {
   const { pending } = useFormStatus();
   return (
     <button
@@ -17,7 +25,7 @@ export function ApproveSubmitButton() {
       disabled={pending}
       className="rounded-sm bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
     >
-      {pending ? "Approving…" : "Approve this grant"}
+      {pending ? "Approving…" : label}
     </button>
   );
 }

@@ -7,6 +7,7 @@ import { compileRulePattern } from '@/lib/rulePatterns';
 import { checkReadRestrictions } from '@/lib/gmailRules';
 import { captureServerEvent } from '@/lib/posthogServer';
 import { GOOGLE_FETCH_TIMEOUT_MS, CLERK_TOKEN_TIMEOUT_MS, withTimeout, isUpstreamTimeout } from '@/lib/upstreamTimeouts';
+import { classifyClerkTokenError } from '@/lib/googleTokenFailure';
 
 export const dynamic = 'force-dynamic';
 
@@ -106,12 +107,16 @@ async function fetchClerkGoogleToken(
   } catch (err) {
     telemetry.tokenMs = Date.now() - started;
     const message = err instanceof Error ? err.message : String(err);
+    // Same classifier as the MCP path (since 2026-09-09), so a revoked grant
+    // reads as `grant_revoked` here too instead of hiding in `clerk_error`.
+    const cls = classifyClerkTokenError(err);
     captureServerEvent(reporterClerkUserId, 'google_token_fetch_failed', {
-      reason: isUpstreamTimeout(err) ? 'timeout'
-        : /refresh/i.test(message) ? 'refresh_failed' : 'clerk_error',
+      reason: isUpstreamTimeout(err) ? 'timeout' : cls.reason,
       via: 'proxy',
+      ...(cls.clerkStatus !== undefined ? { clerk_status: cls.clerkStatus } : {}),
+      ...(cls.clerkCode ? { clerk_code: cls.clerkCode } : {}),
     });
-    console.error('[PROXY] Google token fetch failed:', message);
+    console.error(`[PROXY] Google token fetch failed (${cls.reason}):`, message);
     return null;
   }
 }

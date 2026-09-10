@@ -33,7 +33,11 @@ intentionally differs, the assertion says so.
   Google Docs Rules card.
 - **Expected**: The Google Picker modal opens on this page with the Documents
   tab (not spreadsheets). No navigation, no dead-end. (If the drive.file grant
-  is missing, a redirect to Google consent is acceptable — see A2.)
+  is missing, a redirect to Google consent is acceptable — see A2.) As for
+  sheets (capability 09 A1): two views — the flat documents list first
+  (files at the root without a search), then a "Shared drives" view that lists
+  a Workspace account's shared drives with navigable, unselectable folders;
+  only documents can be picked.
 
 ### A2: Consent round-trip returns kind-scoped — the docs picker reopens, not the sheets one
 - Deterministic proxy for the return leg: navigate to
@@ -67,8 +71,9 @@ intentionally differs, the assertion says so.
 - Call `docs_read_document` (and raw `google_api_get` with path
   `v1/documents/<external doc id>`) for a doc with NO docs rule.
 - **Expected**: 🚫 denial naming the document id, `denial_code=docs_not_exposed`
-  on the tool-call event, and a single-use approval link whose action is
-  `docs_expose` (30-minute TTL). The `documents` family must NOT fall through
+  on the tool-call event, and a deterministic, permanent approval link whose
+  action is `docs_expose` (same URL on every repeat of the denial, no expiry —
+  capability 14 A12/A13). The `documents` family must NOT fall through
   to raw passthrough (pre-docs behavior) — the denial is FGAC's, not Google's.
 
 ### A7: Exposed doc reads succeed through every read surface

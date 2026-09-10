@@ -74,11 +74,16 @@ export async function getOwnerGoogleToken(clerkUserId: string): Promise<string |
     // Same observability as the MCP path: a Clerk "cannot refresh" here means
     // grant verification will read as `missing` for a user whose real problem
     // is a dead token, not a missing pick. Make that measurable.
-    const message = err instanceof Error ? err.message : String(err);
     const { captureServerEvent } = await import('@/lib/posthogServer');
+    const { classifyClerkTokenError } = await import('@/lib/googleTokenFailure');
+    // Same classifier as the MCP path (since 2026-09-09): a revoked grant
+    // reads as `grant_revoked`, not `clerk_error`.
+    const cls = classifyClerkTokenError(err);
     captureServerEvent(clerkUserId, 'google_token_fetch_failed', {
-      reason: /refresh/i.test(message) ? 'refresh_failed' : 'clerk_error',
+      reason: cls.reason,
       via: 'grant_check',
+      ...(cls.clerkStatus !== undefined ? { clerk_status: cls.clerkStatus } : {}),
+      ...(cls.clerkCode ? { clerk_code: cls.clerkCode } : {}),
     });
     return null;
   }
