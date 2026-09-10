@@ -36,7 +36,9 @@ export type DenialCode =
   | 'raw_api_batch_unsupported'
   | 'raw_api_family_unsupported'
   | 'gmail_write_unsupported'
-  | 'gmail_settings_unsupported';
+  | 'gmail_settings_unsupported'
+  | 'file_id_malformed'
+  | 'file_id_wrong_kind';
 
 /**
  * Google API families FGAC's OAuth grant can never authorize. The grant is
@@ -473,4 +475,108 @@ export function docsApprovalAction(
   const level = fileApprovalLevel(denial, isMutating);
   if (!level) return null;
   return { action: level === 'write' ? 'docs_write' : 'docs_expose', documentId };
+}
+
+// ── Drive file id shape ───────────────────────────────────────────────
+
+/**
+ * What a Google Drive file id looks like, in words the denial text can quote.
+ * Real ids seen in production are 33–44 characters; the range is deliberately
+ * loose because a false rejection strands a legitimate call, while a
+ * well-formed-but-unknown id merely takes the ordinary not-exposed path.
+ */
+export const DRIVE_FILE_ID_SHAPE = '20-80 characters from A-Z, a-z, 0-9, "-" and "_" (the segment after /d/ in the file\'s URL)';
+const DRIVE_FILE_ID_RE = /^[A-Za-z0-9_-]{20,80}$/;
+
+export function isWellFormedDriveFileId(id: string): boolean {
+  return DRIVE_FILE_ID_RE.test(id);
+}
+
+/** Which product a Docs/Sheets URL path names, when it names one. */
+export type DriveUrlKind = 'sheet' | 'doc' | 'other';
+
+export type DriveFileIdParse =
+  /** `input` records how the id arrived: `bare` needs no normalization;
+   * `url` and `suffixed` were extracted (stamped on $mcp_tool_call as
+   * `file_id_input` so URL-pasting agents stay countable). */
+  | { ok: true; id: string; input: 'bare' | 'url' | 'suffixed'; urlKind?: DriveUrlKind }
+  | { ok: false; code: 'file_id_malformed' | 'file_id_wrong_kind'; reason: string };
+
+const KIND_NOUN: Record<'sheet' | 'doc' | 'file', string> = { sheet: 'spreadsheet', doc: 'document', file: 'file' };
+
+function urlKindFromPath(pathname: string): DriveUrlKind {
+  if (/\/spreadsheets\//.test(pathname)) return 'sheet';
+  if (/\/document\//.test(pathname)) return 'doc';
+  return 'other';
+}
+
+function clip(raw: string): string {
+  return raw.length > 120 ? `${raw.slice(0, 117)}...` : raw;
+}
+
+/**
+ * Validate — and where the intent is unambiguous, normalize — a
+ * caller-supplied Google file id BEFORE any rule lookup or approval-link mint.
+ *
+ * Why this exists (verified locally 2026-09-08): `docs_read_document` with
+ * `<realId>/edit` (what an agent pastes from a Docs URL) or with a junk
+ * 44-character string was denied as "not exposed" AND minted a live approval
+ * link for the literal value. Such a link can never verify with Google — the
+ * Picker shows a substitution at best — so the user got a dead end dressed as
+ * a one-click approval. Production ids in the week to 2026-09-08 were all
+ * well-formed 44-character ids, so this is hardening, not the cause of the
+ * docs_expose conversion gap.
+ *
+ * Accepted forms, in order:
+ *   - a bare id (`[A-Za-z0-9_-]{20,80}`) → returned as-is;
+ *   - a full URL (`https://docs.google.com/document/d/<id>/edit?usp=…`,
+ *     `…/spreadsheets/d/<id>/edit#gid=0`, `drive.google.com/open?id=<id>`)
+ *     → the id is extracted. A URL whose path names the OTHER product
+ *     (a spreadsheets URL passed as a documentId) is refused as
+ *     `file_id_wrong_kind`: minting a docs link for a sheet id is the same
+ *     dead end, since the Documents Picker view never lists the sheet;
+ *   - an id with a trailing URL fragment (`<id>/edit`, `<id>?usp=sharing`,
+ *     `<id>#gid=0`, `/d/<id>/edit`) → the id is extracted.
+ * Anything else is `file_id_malformed` and the reason names the shape. Neither
+ * refusal mints an approval link.
+ */
+export function parseDriveFileId(raw: string, expected: 'sheet' | 'doc' | 'file'): DriveFileIdParse {
+  const s = raw.trim();
+  if (DRIVE_FILE_ID_RE.test(s)) return { ok: true, id: s, input: 'bare' };
+
+  const noun = KIND_NOUN[expected];
+  const malformed = (): DriveFileIdParse => ({
+    ok: false,
+    code: 'file_id_malformed',
+    reason: `🚫 Access Denied: '${clip(s)}' is not a Google Drive file id, so FGAC cannot look up rules for it or ask the user to approve it (no approval link was created — one for this value could never be approved). A ${noun} id is ${DRIVE_FILE_ID_SHAPE}; pass the bare id, or the full Google Docs/Sheets URL and FGAC will extract it.`,
+  });
+
+  if (/^https?:\/\//i.test(s)) {
+    let url: URL;
+    try { url = new URL(s); } catch { return malformed(); }
+    const fromPath = url.pathname.match(/\/d\/([A-Za-z0-9_-]+)/);
+    const id = fromPath?.[1] ?? url.searchParams.get('id') ?? '';
+    if (!DRIVE_FILE_ID_RE.test(id)) return malformed();
+    const urlKind = urlKindFromPath(url.pathname);
+    if ((expected === 'sheet' && urlKind === 'doc') || (expected === 'doc' && urlKind === 'sheet')) {
+      const isSheetUrl = urlKind === 'sheet';
+      return {
+        ok: false,
+        code: 'file_id_wrong_kind',
+        reason: `🚫 Access Denied: '${clip(s)}' is a Google ${isSheetUrl ? 'Sheets' : 'Docs'} URL, but this call addresses a ${noun}. ` +
+          (isSheetUrl
+            ? `Use the sheets_* tools (or request_access with type sheets_read / sheets_write) with spreadsheetId '${id}'.`
+            : `Use docs_read_document / docs_edit (or request_access with type docs_read / docs_write) with documentId '${id}'.`) +
+          ' No approval link was created.',
+      };
+    }
+    return { ok: true, id, input: 'url', urlKind };
+  }
+
+  // `<id>/edit`, `<id>?usp=sharing`, `<id>#gid=0`, `/d/<id>/edit` — the id is
+  // the leading (or post-`/d/`) run, and what follows is URL residue.
+  const suffixed = s.match(/^(?:\/d\/)?([A-Za-z0-9_-]+)(?=[/?#])/);
+  if (suffixed && DRIVE_FILE_ID_RE.test(suffixed[1])) return { ok: true, id: suffixed[1], input: 'suffixed' };
+
+  return malformed();
 }

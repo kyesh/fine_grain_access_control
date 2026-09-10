@@ -43,7 +43,7 @@ import { recordApprovalMint, getApprovalRequestResourceName } from '@/lib/approv
 import { TOOL_DEFS, toolAnnotations, type FgacToolDef } from './toolDefs';
 import {
   classifyGoogleApiCall, canonicalizeGoogleApiPath, extractSendRecipients, extractDraftSendInfo,
-  sheetsApprovalAction, docsApprovalAction,
+  sheetsApprovalAction, docsApprovalAction, parseDriveFileId,
   templateGoogleApiPath, rawApiFamily, extractGoogleErrorReason,
   type RawCallClass, type GoogleErrorReason,
 } from './googleApiPolicy';
@@ -1255,6 +1255,33 @@ const checkSheetsPermission = (userId: string, proxyKeyId: string, spreadsheetId
 const checkDocsPermission = (userId: string, proxyKeyId: string, documentId: string, isMutating: boolean) =>
   checkFilePermission('doc', userId, proxyKeyId, documentId, isMutating);
 
+/**
+ * Validate — and normalize, when a URL or `<id>/edit` makes the intent
+ * unambiguous — a caller-supplied file id BEFORE the rule lookup and before
+ * any approval link is minted (parseDriveFileId has the history). Sits at
+ * every per-file entry point rather than inside checkFilePermission because
+ * callers forward the id to Google and into the link action: the normalized
+ * value has to replace theirs, not just the lookup key. A refusal here is a
+ * 🚫 with `denial_code` `file_id_malformed` / `file_id_wrong_kind` and NO
+ * link — a link for a value Google can never verify is a dead end dressed as
+ * a one-click approval. `file_id_input` records how the id arrived
+ * (`url` / `suffixed` on extraction, `malformed` on refusal; absent for a
+ * bare id) so URL-pasting agents stay countable.
+ */
+function resolveDriveFileId(kind: 'sheet' | 'doc' | 'file', raw: string): { id: string } | { denial: ReturnType<typeof textResult> } {
+  const parsed = parseDriveFileId(raw, kind);
+  if (!parsed.ok) {
+    addToolCallProps({
+      denial_code: parsed.code,
+      file_id_input: parsed.code === 'file_id_wrong_kind' ? 'url' : 'malformed',
+      ...(kind === 'file' ? {} : { file_service: DRIVE_FILE_KINDS[kind].service }),
+    });
+    return { denial: textResult(parsed.reason) };
+  }
+  if (parsed.input !== 'bare') addToolCallProps({ file_id_input: parsed.input });
+  return { id: parsed.id };
+}
+
 /** Map a sheets denial onto an approvable action matching the access level
  * the denied operation requires (see sheetsApprovalAction in googleApiPolicy). */
 function sheetsDenialAction(perm: SheetsPermission, spreadsheetId: string, isMutating: boolean): ApprovalAction | null {
@@ -1929,6 +1956,8 @@ async function executeRawGoogleCall(
     // rule (comment writes need Read & Write) instead of scope-only
     // passthrough. Same enforcement as the comments_read / comments_add
     // typed tools.
+    const fid = resolveDriveFileId('file', cls.fileId);
+    if ('denial' in fid) return fid.denial;
     const check = await checkCommentsPermission(conn, resolved.proxyKeyId, cls.fileId, cls.isMutating);
     if ('denial' in check) return check.denial;
     const result = await withGrantGrace(check.kind, check.perm, () => googleFetch(rawUrl(cleanPath), resolved.token, method, serializeBody(body), resolved.targetEmail));
@@ -1953,6 +1982,8 @@ async function executeRawGoogleCall(
   }
 
   if (cls.kind === 'sheets') {
+    const sid = resolveDriveFileId('sheet', cls.spreadsheetId);
+    if ('denial' in sid) return sid.denial;
     const perm = await checkSheetsPermission(conn.user.id, resolved.proxyKeyId, cls.spreadsheetId, cls.isMutating);
     if (!perm.allowed) return policyDenialWithLink(conn, resolved.proxyKeyId, perm.reason, sheetsDenialAction(perm, cls.spreadsheetId, cls.isMutating));
 
@@ -1962,6 +1993,8 @@ async function executeRawGoogleCall(
   }
 
   if (cls.kind === 'docs') {
+    const did = resolveDriveFileId('doc', cls.documentId);
+    if ('denial' in did) return did.denial;
     const perm = await checkDocsPermission(conn.user.id, resolved.proxyKeyId, cls.documentId, cls.isMutating);
     if (!perm.allowed) return policyDenialWithLink(conn, resolved.proxyKeyId, perm.reason, docsDenialAction(perm, cls.documentId, cls.isMutating));
 
@@ -2490,7 +2523,7 @@ const handler = createMcpHandler(
     server.registerTool(
       TOOL_DEFS.sheets_get_spreadsheet.name,
       toolConfig(TOOL_DEFS.sheets_get_spreadsheet, {
-        spreadsheetId: z.string().describe('Google Spreadsheet ID (e.g. 1BxiMVs0...)'),
+        spreadsheetId: z.string().describe('Google Spreadsheet ID (e.g. 1BxiMVs0...) — the segment after /d/ in the sheet URL; a full URL is accepted and the id extracted'),
         account: z.string().optional().describe('Email account to use.'),
         offset: z.number().int().min(0).optional().describe('Start position (chars into the serialized JSON response) for a windowed read of large metadata. Use the next_offset from the previous response to continue; start at 0.'),
         limit: z.number().int().min(1).optional().describe('Max chars to return in this response (server caps at 200000). Size this to YOUR tool-result budget. Passing offset or limit switches to the windowed envelope.'),
@@ -2504,6 +2537,9 @@ const handler = createMcpHandler(
         const scopeDenial = driveFileScopeDenial(conn, resolved);
         if (scopeDenial) return scopeDenial;
 
+        const sid = resolveDriveFileId('sheet', spreadsheetId);
+        if ('denial' in sid) return sid.denial;
+        spreadsheetId = sid.id;
         const perm = await checkSheetsPermission(conn.user.id, resolved.proxyKeyId, spreadsheetId, false);
         if (!perm.allowed) return policyDenialWithLink(conn, resolved.proxyKeyId, perm.reason, sheetsDenialAction(perm, spreadsheetId, false));
 
@@ -2537,6 +2573,9 @@ const handler = createMcpHandler(
         const scopeDenial = driveFileScopeDenial(conn, resolved);
         if (scopeDenial) return scopeDenial;
 
+        const sid = resolveDriveFileId('sheet', spreadsheetId);
+        if ('denial' in sid) return sid.denial;
+        spreadsheetId = sid.id;
         const perm = await checkSheetsPermission(conn.user.id, resolved.proxyKeyId, spreadsheetId, false);
         if (!perm.allowed) return policyDenialWithLink(conn, resolved.proxyKeyId, perm.reason, sheetsDenialAction(perm, spreadsheetId, false));
 
@@ -2568,6 +2607,9 @@ const handler = createMcpHandler(
         const scopeDenial = driveFileScopeDenial(conn, resolved);
         if (scopeDenial) return scopeDenial;
 
+        const sid = resolveDriveFileId('sheet', spreadsheetId);
+        if ('denial' in sid) return sid.denial;
+        spreadsheetId = sid.id;
         const perm = await checkSheetsPermission(conn.user.id, resolved.proxyKeyId, spreadsheetId, true);
         if (!perm.allowed) return policyDenialWithLink(conn, resolved.proxyKeyId, perm.reason, sheetsDenialAction(perm, spreadsheetId, true));
 
@@ -2600,6 +2642,9 @@ const handler = createMcpHandler(
         const scopeDenial = driveFileScopeDenial(conn, resolved);
         if (scopeDenial) return scopeDenial;
 
+        const sid = resolveDriveFileId('sheet', spreadsheetId);
+        if ('denial' in sid) return sid.denial;
+        spreadsheetId = sid.id;
         const perm = await checkSheetsPermission(conn.user.id, resolved.proxyKeyId, spreadsheetId, true);
         if (!perm.allowed) return policyDenialWithLink(conn, resolved.proxyKeyId, perm.reason, sheetsDenialAction(perm, spreadsheetId, true));
 
@@ -2631,6 +2676,9 @@ const handler = createMcpHandler(
         const scopeDenial = driveFileScopeDenial(conn, resolved);
         if (scopeDenial) return scopeDenial;
 
+        const sid = resolveDriveFileId('sheet', spreadsheetId);
+        if ('denial' in sid) return sid.denial;
+        spreadsheetId = sid.id;
         const perm = await checkSheetsPermission(conn.user.id, resolved.proxyKeyId, spreadsheetId, true);
         if (!perm.allowed) return policyDenialWithLink(conn, resolved.proxyKeyId, perm.reason, sheetsDenialAction(perm, spreadsheetId, true));
 
@@ -2645,7 +2693,7 @@ const handler = createMcpHandler(
     server.registerTool(
       TOOL_DEFS.docs_read_document.name,
       toolConfig(TOOL_DEFS.docs_read_document, {
-        documentId: z.string().describe('Google Docs document ID (e.g. 1NQiAY...)'),
+        documentId: z.string().describe('Google Docs document ID (e.g. 1NQiAY...) — the segment after /d/ in the doc URL; a full URL is accepted and the id extracted'),
         fields: z.string().optional().describe('Optional Docs API field mask to trim the response (e.g. "title,body.content"). Use when a full read is too large.'),
         account: z.string().optional().describe('Email account to use.'),
         offset: z.number().int().min(0).optional().describe('Start position (chars into the serialized JSON response) for a windowed read of a large document. Use the next_offset from the previous response to continue; start at 0.'),
@@ -2660,6 +2708,9 @@ const handler = createMcpHandler(
         const scopeDenial = driveFileScopeDenial(conn, resolved);
         if (scopeDenial) return scopeDenial;
 
+        const did = resolveDriveFileId('doc', documentId);
+        if ('denial' in did) return did.denial;
+        documentId = did.id;
         const perm = await checkDocsPermission(conn.user.id, resolved.proxyKeyId, documentId, false);
         if (!perm.allowed) return policyDenialWithLink(conn, resolved.proxyKeyId, perm.reason, docsDenialAction(perm, documentId, false));
 
@@ -2693,6 +2744,9 @@ const handler = createMcpHandler(
         const scopeDenial = driveFileScopeDenial(conn, resolved);
         if (scopeDenial) return scopeDenial;
 
+        const did = resolveDriveFileId('doc', documentId);
+        if ('denial' in did) return did.denial;
+        documentId = did.id;
         const perm = await checkDocsPermission(conn.user.id, resolved.proxyKeyId, documentId, true);
         if (!perm.allowed) return policyDenialWithLink(conn, resolved.proxyKeyId, perm.reason, docsDenialAction(perm, documentId, true));
 
@@ -2733,6 +2787,9 @@ const handler = createMcpHandler(
         const scopeDenial = driveFileScopeDenial(conn, resolved);
         if (scopeDenial) return scopeDenial;
 
+        const fid = resolveDriveFileId('file', fileId);
+        if ('denial' in fid) return fid.denial;
+        fileId = fid.id;
         const check = await checkCommentsPermission(conn, resolved.proxyKeyId, fileId, false);
         if ('denial' in check) return check.denial;
 
@@ -2765,6 +2822,9 @@ const handler = createMcpHandler(
         const scopeDenial = driveFileScopeDenial(conn, resolved);
         if (scopeDenial) return scopeDenial;
 
+        const fid = resolveDriveFileId('file', fileId);
+        if ('denial' in fid) return fid.denial;
+        fileId = fid.id;
         const check = await checkCommentsPermission(conn, resolved.proxyKeyId, fileId, true);
         if ('denial' in check) return check.denial;
 
@@ -2851,8 +2911,8 @@ const handler = createMcpHandler(
       toolConfig(TOOL_DEFS.request_access, {
         type: z.enum(['send', 'sheets_read', 'sheets_write', 'docs_read', 'docs_write']).describe('What to request: permission to send email to a recipient, or read / read-write access to a spreadsheet or document'),
         recipient: z.string().optional().describe('Email address to whitelist (required for type "send")'),
-        spreadsheetId: z.string().optional().describe('Google Spreadsheet ID (required for sheets types)'),
-        documentId: z.string().optional().describe('Google Docs document ID (required for docs types)'),
+        spreadsheetId: z.string().optional().describe('Google Spreadsheet ID (required for sheets types) — the segment after /d/ in the sheet URL; a full URL is accepted'),
+        documentId: z.string().optional().describe('Google Docs document ID (required for docs types) — the segment after /d/ in the doc URL; a full URL is accepted'),
         resourceName: z.string().max(200).optional().describe('Title of the spreadsheet or document, when you know it (from the user\'s message or an earlier call). Shown on the approval page so the user can find the file by name in Google\'s picker — without it they only see the file id.'),
       }),
       async ({ type, recipient, spreadsheetId, documentId, resourceName }, { authInfo }) => {
@@ -2875,6 +2935,9 @@ const handler = createMcpHandler(
           if (!documentId) {
             return textResult(`🚫 A "documentId" is required to request document access. ${REQUESTABLE}`);
           }
+          const did = resolveDriveFileId('doc', documentId);
+          if ('denial' in did) return did.denial;
+          documentId = did.id;
           action = type === 'docs_read'
             ? { action: 'docs_expose', documentId, ...named }
             : { action: 'docs_write', documentId, ...named };
@@ -2882,6 +2945,9 @@ const handler = createMcpHandler(
           if (!spreadsheetId) {
             return textResult(`🚫 A "spreadsheetId" is required to request spreadsheet access. ${REQUESTABLE}`);
           }
+          const sid = resolveDriveFileId('sheet', spreadsheetId);
+          if ('denial' in sid) return sid.denial;
+          spreadsheetId = sid.id;
           action = type === 'sheets_read'
             ? { action: 'sheets_expose', spreadsheetId, ...named }
             : { action: 'sheets_write', spreadsheetId, ...named };

@@ -152,6 +152,25 @@ environment's DB branch. Verified end to end on a Vercel preview 2026-08-30.
   so the rule list, `get_my_permissions`, and approval-page copy showed the
   grant-time name forever.
 
+### A11: Malformed spreadsheet ids are refused without an approval link; URLs are normalized
+- Call `sheets_get_spreadsheet` (and `request_access` with `type=sheets_read`)
+  with (a) `<unexposed sheet id>/edit#gid=0`, (b) the full
+  `https://docs.google.com/spreadsheets/d/<unexposed sheet id>/edit?usp=sharing`
+  URL, (c) a junk value such as `Q3 Budget` or `abc123`, and (d) a Docs URL
+  (`https://docs.google.com/document/d/<fixture doc id>/edit`). Also
+  `google_api_get` with path `v4/spreadsheets/abc123`.
+- **Expected** (drive-file-id hardening, 2026-09-09): (a) and (b) are denied
+  exactly as the bare id is — `denial_code=sheets_not_exposed` and the SAME
+  deterministic approval link the bare id produces (`r=<id>`, never
+  `r=<id>%2Fedit`), the tool-call event carrying `file_id_input=suffixed` /
+  `url` and `file_id=<bare id>`. (c) and the raw-path variant are 🚫 with
+  `denial_code=file_id_malformed`, the text naming the expected shape (20–80
+  chars of `A-Za-z0-9_-`), and NO link: no `approval_link_minted`, no
+  `approval_request_id`, no new `approval_requests` row. (d) is 🚫
+  `file_id_wrong_kind` naming `docs_read_document` and the extracted id, also
+  link-free. A link minted for a value Google can never verify is the failure
+  this guards against.
+
 ### A7: Drive listing is Google-native; per-file Drive access respects sheet rules
 - `GET {proxy}/drive/v3/files` with the profile's bearer token, then
   `GET {proxy}/drive/v3/files/<id>` for (a) an exposed sheet, (b) a sheet with a
