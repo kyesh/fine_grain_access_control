@@ -59,10 +59,23 @@ export interface NeonBranchLike {
   created_at?: string;
 }
 
-export type Verdict =
-  | { action: 'skip'; reason: string }
-  | { action: 'keep'; reason: string }
-  | { action: 'delete'; reason: string };
+/**
+ * Measurements behind the verdict, so callers can tabulate without recomputing
+ * them (and without a second, divergent copy of the arithmetic).
+ * `eligibleInHours` is how long until a kept branch becomes deletable, or null
+ * when no timer will get it there (running compute, protected, unreadable age).
+ */
+export interface VerdictMetrics {
+  ageHours: number | null;
+  idleHours: number | null;
+  eligibleInHours: number | null;
+}
+
+export type Verdict = { reason: string; metrics: VerdictMetrics } & (
+  | { action: 'skip' }
+  | { action: 'keep' }
+  | { action: 'delete' }
+);
 
 const hoursSince = (iso: string | null | undefined, now: Date): number | null => {
   if (!iso) return null;
@@ -82,38 +95,60 @@ export function classifyNeonBranch(
   endpoints: NeonEndpointLike[],
   now: Date = new Date()
 ): Verdict {
-  if (branch.primary || branch.default || branch.name === 'main') {
-    return { action: 'skip', reason: 'primary branch' };
-  }
-  if (branch.protected) {
-    return { action: 'keep', reason: 'marked protected in Neon' };
-  }
-
-  if (endpoints.some(e => e.current_state === 'active')) {
-    return { action: 'keep', reason: 'compute is running right now' };
-  }
-
   const ageHours = hoursSince(branch.created_at, now);
-  if (ageHours === null) {
-    // No usable creation timestamp = no way to prove the age floor. Age is the
-    // one fact the policy cannot infer from anything else, so refuse to guess.
-    return { action: 'keep', reason: 'no readable created_at — cannot age it' };
-  }
-  if (ageHours < AGE_THRESHOLD_HOURS) {
-    return { action: 'keep', reason: `created ${fmt(ageHours)} ago (under ${AGE_THRESHOLD_HOURS}h)` };
-  }
-
   // Most recent activity across every endpoint on the branch. None recorded =
   // nothing ever connected, so it has been idle since it was created.
   const idleCandidates = endpoints
     .map(e => hoursSince(e.last_active, now))
     .filter((h): h is number => h !== null);
-  const idleHours = idleCandidates.length > 0 ? Math.min(...idleCandidates) : ageHours;
+  const idleHours = idleCandidates.length > 0
+    ? Math.min(...idleCandidates)
+    : ageHours;
 
-  if (idleHours < IDLE_THRESHOLD_HOURS) {
-    return { action: 'keep', reason: `active ${fmt(idleHours)} ago (under ${IDLE_THRESHOLD_HOURS}h)` };
+  const never: VerdictMetrics = { ageHours, idleHours, eligibleInHours: null };
+
+  if (branch.primary || branch.default || branch.name === 'main') {
+    return { action: 'skip', reason: 'primary branch', metrics: never };
+  }
+  if (branch.protected) {
+    return { action: 'keep', reason: 'marked protected in Neon', metrics: never };
+  }
+  if (endpoints.some(e => e.current_state === 'active')) {
+    return { action: 'keep', reason: 'compute is running right now', metrics: never };
+  }
+  if (ageHours === null) {
+    // No usable creation timestamp = no way to prove the age floor. Age is the
+    // one fact the policy cannot infer from anything else, so refuse to guess.
+    return { action: 'keep', reason: 'no readable created_at — cannot age it', metrics: never };
   }
 
-  const idleNote = idleCandidates.length > 0 ? `idle ${fmt(idleHours)}` : 'never connected to';
-  return { action: 'delete', reason: `created ${fmt(ageHours)} ago, ${idleNote}` };
+  // Both timers must expire, so the wait is however long the slower one has
+  // left. Idleness resets whenever something connects, making this an estimate
+  // that assumes the branch stays untouched — which is the point of reporting it.
+  const waitForAge = AGE_THRESHOLD_HOURS - ageHours;
+  const waitForIdle = IDLE_THRESHOLD_HOURS - (idleHours ?? ageHours);
+  const eligibleInHours = Math.max(waitForAge, waitForIdle);
+  const metrics: VerdictMetrics = { ageHours, idleHours, eligibleInHours };
+
+  if (ageHours < AGE_THRESHOLD_HOURS) {
+    return {
+      action: 'keep',
+      reason: `created ${fmt(ageHours)} ago (under ${AGE_THRESHOLD_HOURS}h)`,
+      metrics,
+    };
+  }
+  if (idleHours !== null && idleHours < IDLE_THRESHOLD_HOURS) {
+    return {
+      action: 'keep',
+      reason: `active ${fmt(idleHours)} ago (under ${IDLE_THRESHOLD_HOURS}h)`,
+      metrics,
+    };
+  }
+
+  const idleNote = idleCandidates.length > 0 ? `idle ${fmt(idleHours!)}` : 'never connected to';
+  return {
+    action: 'delete',
+    reason: `created ${fmt(ageHours)} ago, ${idleNote}`,
+    metrics: { ...metrics, eligibleInHours: 0 },
+  };
 }

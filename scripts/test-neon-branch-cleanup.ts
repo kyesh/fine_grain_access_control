@@ -116,6 +116,27 @@ check('a branch whose git branch is still open is deleted once cold',
 check('a hand-made branch with no git branch is deleted once cold',
   verdict(branch('claude-stoic-pare-6de772', 405), [idleEndpoint(320)]).action === 'delete');
 
+console.log('metrics reported alongside the verdict (feeds the kept-branch table):');
+{
+  const v = verdict(branch('claude-young', 10), [idleEndpoint(3)]);
+  check('age and idle are surfaced', v.metrics.ageHours === 10 && v.metrics.idleHours === 3);
+  check('eligibility waits on the SLOWER timer (age here, 14h out)',
+    Math.abs((v.metrics.eligibleInHours ?? 0) - 14) < 1e-9);
+}
+{
+  const v = verdict(branch('claude-old-but-warm', 300), [idleEndpoint(2)]);
+  check('past the age floor, eligibility waits on idleness (4h out)',
+    Math.abs((v.metrics.eligibleInHours ?? 0) - 4) < 1e-9);
+}
+check('a deleted branch reports 0h to eligibility',
+  verdict(branch('claude-cold', 300), [idleEndpoint(50)]).metrics.eligibleInHours === 0);
+check('running compute is not on a timer at all',
+  verdict(branch('claude-live', 300), [activeEndpoint()]).metrics.eligibleInHours === null);
+check('a protected branch is not on a timer at all',
+  verdict(branch('claude-pinned', 300, { protected: true }), [idleEndpoint(50)]).metrics.eligibleInHours === null);
+check('no endpoint: idle equals age, so the table shows a real number',
+  verdict(branch('claude-never-used', 10), []).metrics.idleHours === 10);
+
 if (failures > 0) {
   console.error(`\n${failures} neon-branch-cleanup test(s) failed`);
   process.exit(1);
