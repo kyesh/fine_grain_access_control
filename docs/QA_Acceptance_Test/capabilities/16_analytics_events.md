@@ -347,8 +347,9 @@ attributable to it.
   pins the per-class wording.)
 - **Expected** (since 2026-09-04):
   - `google_token_unavailable` rows carry `google_token_error` (`no_token` /
-    `refresh_failed` / `owner_not_found` / `clerk_error` / `timeout`) and the
-    outcome follows the cause: `no_token` / `refresh_failed` /
+    `refresh_failed` / `grant_revoked` / `owner_not_found` / `clerk_error` /
+    `timeout`) and the
+    outcome follows the cause: `no_token` / `refresh_failed` / `grant_revoked` /
     `owner_not_found` classify `denied_by_policy` with
     `denial_code: 'google_token_unavailable'` (🚫 text that says STOP and
     names who must act — for a delegated mailbox, the OWNER signed in as that
@@ -368,6 +369,13 @@ attributable to it.
     failure, whose standalone event carries `retried: true` and, when Clerk
     threw an API error, `clerk_status` / `clerk_code`. `google_token_fetch_failed`
     also fires for `reason = 'no_token'` (it did not before this date).
+  - (since 2026-09-09) A Clerk 400 `oauth_token_retrieval_error` classifies
+    `grant_revoked` on every path (`via` = `mcp` / `proxy` / `grant_check`):
+    `retried: false` (never retried), outcome `denied_by_policy`, and the
+    tool-call row carries `google_token_clerk_code:
+    'oauth_token_retrieval_error'`. A `grant_revoked` row classifying `failed`,
+    an `oauth_token_retrieval_error` row with `reason = 'clerk_error'`, or a
+    `retried: true` on that code, is a regression.
   - `error_reason` stays absent on every token-layer row — it is the
     Google-response property and the token layer never reached Google.
 

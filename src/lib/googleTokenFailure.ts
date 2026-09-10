@@ -17,6 +17,18 @@
  * retry-then-reconnect guidance as a ❌ failure; only the states that cannot
  * clear on their own (no grant stored at all, Clerk cannot refresh) get the
  * 🚫 stop-and-reconnect refusal.
+ *
+ * The 2026-09-08 lesson: "unknown Clerk error" must not swallow a KNOWN
+ * dead-grant code. Clerk's 400 `oauth_token_retrieval_error` ("Failed to
+ * retrieve a new access token from the OAuth provider") is Clerk relaying
+ * Google's refusal to refresh; every production instance inspected on
+ * 2026-09-09 (three accounts, raw Backend API) carried Google's
+ * `invalid_grant "Token has been expired or revoked."`, no account recovered
+ * on its own, and the retry had recovered nothing since it shipped. Falling
+ * through to `clerk_error` meant a pointless retry, a ❌ "usually temporary"
+ * answer, and no reconnect link from list_accounts — 14 identical Sheets
+ * failures from one account in two days. That code now classifies
+ * `grant_revoked` (deterministic, reconnect repairs it).
  */
 
 export type GoogleTokenFailureReason =
@@ -25,8 +37,14 @@ export type GoogleTokenFailureReason =
   /** Clerk answered with a refresh failure (422 cannot-refresh: the stored
    * grant has no usable refresh token). Deterministic until reconnect. */
   | 'refresh_failed'
-  /** Any other Clerk error — the only class seen in production so far, and
-   * transient every time it was inspected. */
+  /** Clerk asked Google to refresh and Google refused (400
+   * `oauth_token_retrieval_error`, Google: invalid_grant "Token has been
+   * expired or revoked"): the user revoked FGAC in their Google account,
+   * changed their Google password (Google revokes Gmail-scoped grants on a
+   * password change), or the grant aged out. Deterministic until the user
+   * reconnects — Google then shows consent again and issues a new grant. */
+  | 'grant_revoked'
+  /** Any other Clerk error — transient every time it was inspected. */
   | 'clerk_error'
   /** Clerk answered cleanly but holds no Google token for the user: no
    * Google external account, or one with no stored grant. */
@@ -43,14 +61,21 @@ export type GoogleTokenFailureReason =
   | 'delegation_inactive';
 
 export interface ClassifiedClerkTokenError {
-  reason: Extract<GoogleTokenFailureReason, 'timeout' | 'refresh_failed' | 'clerk_error' | 'owner_not_found'>;
+  reason: Extract<GoogleTokenFailureReason, 'timeout' | 'refresh_failed' | 'grant_revoked' | 'clerk_error' | 'owner_not_found'>;
   /** Worth one immediate server-side retry. Timeouts already burned the
-   * budget; refresh failures are deterministic. */
+   * budget; refresh failures and revoked grants are deterministic. */
   retryable: boolean;
   /** Clerk's HTTP status and first error code, when the thrown value is a
    * ClerkAPIResponseError. Enum-like, no customer data — safe on events. */
   clerkStatus?: number;
   clerkCode?: string;
+  /** The upstream provider's error, when Clerk relays one under
+   * `errors[0].meta.provider_error` (e.g. `oauth2: "invalid_grant" "Token has
+   * been expired or revoked."`). The installed @clerk/backend (3.4.x) maps
+   * `meta` onto a fixed key set and DROPS this field, so it is normally
+   * absent — it was read from the raw Backend API during the 2026-09-09
+   * triage. Kept so a future SDK that surfaces it sharpens the class. */
+  providerError?: string;
 }
 
 /**
@@ -62,19 +87,33 @@ export interface ClassifiedClerkTokenError {
 export function classifyClerkTokenError(err: unknown): ClassifiedClerkTokenError {
   const message = err instanceof Error ? err.message : String(err);
   const isTimeout = err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError');
-  const e = err as { status?: unknown; errors?: Array<{ code?: unknown }> } | null;
+  const e = err as { status?: unknown; errors?: Array<{ code?: unknown; meta?: Record<string, unknown> }> } | null;
   const clerkStatus = typeof e?.status === 'number' ? e.status : undefined;
-  const firstCode = Array.isArray(e?.errors) ? e.errors[0]?.code : undefined;
-  const clerkCode = typeof firstCode === 'string' ? firstCode : undefined;
+  const first = Array.isArray(e?.errors) ? e.errors[0] : undefined;
+  const clerkCode = typeof first?.code === 'string' ? first.code : undefined;
+  const rawProvider = first?.meta?.provider_error ?? first?.meta?.providerError;
+  const providerError = typeof rawProvider === 'string' ? rawProvider.slice(0, 200) : undefined;
+  const base = { clerkStatus, clerkCode, ...(providerError ? { providerError } : {}) };
 
-  if (isTimeout) return { reason: 'timeout', retryable: false, clerkStatus, clerkCode };
+  if (isTimeout) return { reason: 'timeout', retryable: false, ...base };
   if (clerkStatus === 404 || clerkCode === 'resource_not_found') {
-    return { reason: 'owner_not_found', retryable: false, clerkStatus, clerkCode };
+    return { reason: 'owner_not_found', retryable: false, ...base };
+  }
+  if (clerkCode === 'oauth_token_retrieval_error') {
+    // Clerk 400: it asked the provider for a new access token and the
+    // provider refused. Deterministic on the code alone (see the header);
+    // the only escape hatch is a relayed provider error that is explicitly
+    // NOT a dead grant (a Google token-endpoint outage would read as a
+    // server_error / temporarily_unavailable), which stays transient.
+    if (providerError && !/invalid_grant|expired|revoked/i.test(providerError)) {
+      return { reason: 'clerk_error', retryable: true, ...base };
+    }
+    return { reason: 'grant_revoked', retryable: false, ...base };
   }
   if (/refresh/i.test(message) || (clerkCode !== undefined && /refresh/i.test(clerkCode))) {
-    return { reason: 'refresh_failed', retryable: false, clerkStatus, clerkCode };
+    return { reason: 'refresh_failed', retryable: false, ...base };
   }
-  return { reason: 'clerk_error', retryable: true, clerkStatus, clerkCode };
+  return { reason: 'clerk_error', retryable: true, ...base };
 }
 
 /** Reasons that cannot clear on their own: the tool refuses (🚫) instead of
@@ -82,14 +121,14 @@ export function classifyClerkTokenError(err: unknown): ClassifiedClerkTokenError
  * action. `delegation_inactive` is deterministic too but is not a token
  * problem — it gets its own text. */
 export function isDeterministicTokenFailure(reason: GoogleTokenFailureReason): boolean {
-  return reason === 'no_token' || reason === 'refresh_failed' || reason === 'owner_not_found';
+  return reason === 'no_token' || reason === 'refresh_failed' || reason === 'grant_revoked' || reason === 'owner_not_found';
 }
 
 /** Subset of the deterministic reasons that a reconnect actually repairs —
  * what list_accounts mints a reconnect link for. A missing owner account
  * has nothing to reconnect. */
 export function reconnectRepairs(reason: GoogleTokenFailureReason): boolean {
-  return reason === 'no_token' || reason === 'refresh_failed';
+  return reason === 'no_token' || reason === 'refresh_failed' || reason === 'grant_revoked';
 }
 
 export interface TokenFailureGuidanceInput {
@@ -159,7 +198,9 @@ export function tokenFailureGuidance(input: TokenFailureGuidanceInput): TokenFai
   if (isDeterministicTokenFailure(reason)) {
     const why = reason === 'no_token'
       ? `FGAC's auth provider holds no Google grant for '${targetEmail}' — the Google account was never connected, or the connection was removed`
-      : `FGAC's auth provider can no longer refresh the Google grant for '${targetEmail}' (the stored grant has no usable refresh token — this happens when Google revokes access or the account was connected without offline access)`;
+      : reason === 'grant_revoked'
+        ? `Google has expired or revoked FGAC's access to '${targetEmail}' (Google's answer when FGAC asked for a fresh token: "Token has been expired or revoked" — the user removed FGAC from their Google account's third-party access, changed their Google password, or the grant aged out)`
+        : `FGAC's auth provider can no longer refresh the Google grant for '${targetEmail}' (the stored grant has no usable refresh token — this happens when Google revokes access or the account was connected without offline access)`;
     return {
       denialCode: 'google_token_unavailable',
       text: `🚫 Not available yet: ${why}. ` +

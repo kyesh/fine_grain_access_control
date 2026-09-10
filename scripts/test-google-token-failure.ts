@@ -57,6 +57,34 @@ console.log('classifyClerkTokenError');
   check('Clerk 404 resource_not_found → owner_not_found, not retryable', nfc.reason === 'owner_not_found' && !nfc.retryable);
   const nfCodeOnly = Object.assign(new Error('x'), { errors: [{ code: 'resource_not_found' }] });
   check('resource_not_found code alone → owner_not_found', classifyClerkTokenError(nfCodeOnly).reason === 'owner_not_found');
+
+  // The exact shape Clerk's SDK threw in production 2026-09-08/09 (three
+  // accounts, 23 failures, zero recoveries): 400 oauth_token_retrieval_error.
+  // The SDK drops meta.provider_error, so the code alone must decide.
+  const revoked = Object.assign(new Error('Token retrieval failed'), {
+    status: 400, errors: [{ code: 'oauth_token_retrieval_error', message: 'Token retrieval failed', longMessage: 'Failed to retrieve a new access token from the OAuth provider', meta: {} }],
+  });
+  const rv = classifyClerkTokenError(revoked);
+  check('400 oauth_token_retrieval_error → grant_revoked, not retryable', rv.reason === 'grant_revoked' && !rv.retryable);
+  check('grant_revoked surfaces status/code, no provider error from the SDK shape', rv.clerkStatus === 400 && rv.clerkCode === 'oauth_token_retrieval_error' && rv.providerError === undefined);
+  // What the raw Backend API carried for every affected account.
+  const revokedRaw = Object.assign(new Error('Token retrieval failed'), {
+    status: 400, errors: [{ code: 'oauth_token_retrieval_error', meta: { provider_error: 'oauth2: "invalid_grant" "Token has been expired or revoked."' } }],
+  });
+  const rr = classifyClerkTokenError(revokedRaw);
+  check('relayed invalid_grant → grant_revoked with providerError kept', rr.reason === 'grant_revoked' && /invalid_grant/.test(rr.providerError ?? ''));
+  // A relayed provider error that is explicitly NOT a dead grant stays
+  // transient (a Google token-endpoint outage must not mint reconnect links).
+  const outage = Object.assign(new Error('Token retrieval failed'), {
+    status: 400, errors: [{ code: 'oauth_token_retrieval_error', meta: { provider_error: 'oauth2: "temporarily_unavailable" "The service is currently unavailable"' } }],
+  });
+  const oc2 = classifyClerkTokenError(outage);
+  check('relayed non-invalid_grant provider error → clerk_error, retryable', oc2.reason === 'clerk_error' && oc2.retryable);
+  // Clerk's other documented "cannot refresh" code (400).
+  const noRefresh = Object.assign(new Error('Missing refresh token'), {
+    status: 400, errors: [{ code: 'external_account_missing_refresh_token' }],
+  });
+  check('external_account_missing_refresh_token → refresh_failed', classifyClerkTokenError(noRefresh).reason === 'refresh_failed');
 }
 
 // ---- deterministic boundary --------------------------------------------------
@@ -67,7 +95,8 @@ check('refresh_failed is deterministic', isDeterministicTokenFailure('refresh_fa
 check('clerk_error is NOT deterministic (the production race)', !isDeterministicTokenFailure('clerk_error'));
 check('timeout is NOT deterministic', !isDeterministicTokenFailure('timeout'));
 check('owner_not_found is deterministic', isDeterministicTokenFailure('owner_not_found'));
-check('reconnect repairs no_token / refresh_failed only', reconnectRepairs('no_token') && reconnectRepairs('refresh_failed') && !reconnectRepairs('owner_not_found') && !reconnectRepairs('clerk_error'));
+check('grant_revoked is deterministic', isDeterministicTokenFailure('grant_revoked'));
+check('reconnect repairs no_token / refresh_failed / grant_revoked only', reconnectRepairs('no_token') && reconnectRepairs('refresh_failed') && reconnectRepairs('grant_revoked') && !reconnectRepairs('owner_not_found') && !reconnectRepairs('clerk_error') && !reconnectRepairs('timeout'));
 
 // ---- guidance wording ------------------------------------------------------
 
@@ -101,6 +130,16 @@ const LINK = 'https://fgac.example/dashboard/accounts?reconnect=1&for=owner%40ex
 {
   const g = tokenFailureGuidance({ targetEmail: OWNER, keyOwnerEmail: KEY, reason: 'refresh_failed', reconnectUrl: LINK, retried: false });
   check('refresh_failed → 🚫 with the refresh explanation', g.text.startsWith('🚫') && /refresh token/.test(g.text));
+}
+{
+  const g = tokenFailureGuidance({ targetEmail: OWNER, keyOwnerEmail: OWNER, reason: 'grant_revoked', reconnectUrl: LINK, retried: false });
+  check('grant_revoked → 🚫 Not available yet with denial code', g.text.startsWith('🚫 Not available yet:') && g.denialCode === 'google_token_unavailable');
+  check('grant_revoked says Google expired or revoked the access, quoting Google', /expired or revoked/.test(g.text) && /Token has been expired or revoked/.test(g.text));
+  check('grant_revoked says STOP / retrying will NOT help', /STOP/.test(g.text) && /retrying will NOT help/.test(g.text));
+  check('grant_revoked own-account carries the one-click link for the user', /Send the user this one-click link/.test(g.text) && g.text.includes(LINK));
+  check('grant_revoked never says "usually temporary"', !/usually temporary/.test(g.text));
+  const d = tokenFailureGuidance({ targetEmail: OWNER, keyOwnerEmail: KEY, reason: 'grant_revoked', reconnectUrl: LINK, retried: false });
+  check('grant_revoked delegated → owner must open the link', /forward this one-click link to the owner of/.test(d.text));
 }
 {
   const g = tokenFailureGuidance({ targetEmail: OWNER, keyOwnerEmail: KEY, reason: 'clerk_error', reconnectUrl: LINK, retried: true });
@@ -137,6 +176,12 @@ check('route retries a retryable Clerk error once', /google_token_retry/.test(ro
 check('route builds token-failure text through tokenFailureGuidance', /tokenFailureGuidance\(/.test(route));
 check('route stamps denial_code from the guidance (🚫 path)', /denial_code: guidance\.denialCode/.test(route));
 check('route no longer emits the old one-size-fits-all token text', !/Could not fetch Google token for/.test(route));
+check('route stamps clerk_code on the tool call (directory error-table split)', /google_token_clerk_code: cls\.clerkCode/.test(route));
+check('list_accounts nudges on a reconnect-repairable dead grant', /next_steps: \{[\s\S]*?tokenBroken \? \{[\s\S]*?reconnect:/.test(route) && /tokenBroken = accountDetails\.find\(d => d\.google_token === 'unavailable' && d\.reconnect_url\)/.test(route));
+const proxy = readFileSync(join(__dirname, '../src/app/api/proxy/[...path]/route.ts'), 'utf8');
+const grantCheck = readFileSync(join(__dirname, '../src/lib/driveFileGrantCheck.ts'), 'utf8');
+check('proxy path classifies through the shared helper', /classifyClerkTokenError\(err\)/.test(proxy) && !/\/refresh\/i\.test\(message\) \? 'refresh_failed'/.test(proxy));
+check('grant-check path classifies through the shared helper', /classifyClerkTokenError\(err\)/.test(grantCheck) && !/\/refresh\/i\.test\(message\) \? 'refresh_failed'/.test(grantCheck));
 
 if (failures) {
   console.error(`\n${failures} check(s) failed`);

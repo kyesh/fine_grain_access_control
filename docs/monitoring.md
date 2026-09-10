@@ -709,6 +709,62 @@ stay ❌ `failed` with retry-first text. A rising `retry_failed` count, or a
 `recovered` count far above the old failure rate, means Clerk is degrading
 rather than racing.
 
+**7.13a — Revoked grants (`grant_revoked`, Clerk 400
+`oauth_token_retrieval_error`).** Re-measured 2026-09-09: the retry above had
+recovered ZERO calls since it shipped (`recovered` = 0 every day 09-03 → 09-09),
+and every `retry_failed` row (23, three own-mailbox accounts, 09-08/09) was
+Clerk's 400 `oauth_token_retrieval_error` — "Failed to retrieve a new access
+token from the OAuth provider". Probed read-only against the production
+Backend API, all three carried Google's `invalid_grant "Token has been expired
+or revoked."`, every external account was still `verified` in Clerk, and no
+account produced a single own-mailbox success after its first failure. That is
+a dead grant, not a race: the user revoked FGAC in their Google account,
+changed their Google password (Google revokes Gmail-scoped grants on a
+password change), or the grant aged out. The same code was already on record as
+a dead QA grant on 2026-08-06. Since 2026-09-09 it classifies `grant_revoked`
+on all three paths (MCP, proxy, grant check): no retry, a 🚫
+`google_token_unavailable` refusal with the owner-bound reconnect link, and
+`list_accounts` mints `reconnect_url` for it plus a top-level
+`next_steps.reconnect` nudge (the affected agents called list_accounts right
+after their first failure and got no instruction). The reconnect works because
+Google no longer holds the grant, so the consent screen shows again and a new
+refresh token is issued. Note the SDK drops Clerk's `meta.provider_error`, so
+the code alone decides; a Google token-endpoint outage would land here too —
+tell them apart by shape (many accounts in one window = incident; one account,
+every call, forever = revoked):
+
+```sql
+SELECT toDate(timestamp) AS day, properties.reason AS reason,
+       properties.clerk_status AS clerk_status, properties.clerk_code AS clerk_code,
+       properties.via AS via, count() AS failures, uniq(person_id) AS accounts
+FROM events
+WHERE event = 'google_token_fetch_failed' AND properties.environment = 'production'
+  AND timestamp > now() - INTERVAL 30 DAY
+GROUP BY day, reason, clerk_status, clerk_code, via ORDER BY day, failures DESC
+```
+
+Healthy: `oauth_token_retrieval_error` rows carry `reason = 'grant_revoked'`
+(never `clerk_error`), a handful of accounts per week, and each account's
+`$mcp_tool_call` rows after the first failure are `denied_by_policy` with
+`google_token_error = 'grant_revoked'` — not a run of `failed`. Whether the
+reconnect link converts is §7.8's `google_reconnect_*` funnel for that person.
+The per-tool split the directory table needs is now a property, no join:
+
+```sql
+SELECT properties.$mcp_tool_name AS tool, properties.outcome AS outcome,
+       properties.google_token_error AS token_error,
+       properties.google_token_clerk_code AS clerk_code, count() AS calls, uniq(person_id) AS users
+FROM events
+WHERE event = '$mcp_tool_call' AND properties.environment = 'production'
+  AND properties.failure_reason = 'google_token_unavailable'
+  AND timestamp > now() - INTERVAL 7 DAY
+GROUP BY tool, outcome, token_error, clerk_code ORDER BY calls DESC
+```
+
+Before the fix (7 d to 2026-09-09) this table put 16 of `sheets_get_spreadsheet`'s
+35 error-or-failed rows (of 242 calls, 14.5%) on this one class; after it those
+rows are `denied_by_policy` and leave the published rate.
+
 **7.14 — Approval-link conversion, per request (never per event).** The
 approve page's file-grant button shipped without a pending guard; until the
 2026-09-05 fix a rage-click on a slow sheets/docs approval re-ran the server
