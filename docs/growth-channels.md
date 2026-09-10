@@ -13,8 +13,8 @@ Listing copy source of truth: `docs/connector_submission/listing_copy.md`
 | surface | submitted | status | listing link |
 |---|---|---|---|
 | Claude connector directory | 2026-08-16 | **live** | https://claude.ai/directory (search "FGAC") |
-| Official MCP Registry (registry.modelcontextprotocol.io) | — | pending — manifest `server.json` + domain proof route in repo; publish via the **MCP Registry Publish** GitHub Action | https://registry.modelcontextprotocol.io/v0.1/servers?search=ai.fgac |
-| GitHub MCP Registry (github.com/mcp) | — | pending — auto-propagates from the official registry, no separate submission (VS Code / Copilot `/mcp search` consumes it) | https://github.com/mcp |
+| Official MCP Registry (registry.modelcontextprotocol.io) | 2026-09-10 | **live** — `ai.fgac/google-workspace` v0.1.0, status `active`, published 2026-09-10T02:32Z by the **MCP Registry Publish** action (run 34429857385) | https://registry.modelcontextprotocol.io/v0.1/servers?search=ai.fgac |
+| GitHub MCP Registry (github.com/mcp) | 2026-09-10 (via official) | pending propagation — auto-ingests from the official registry, no separate submission (VS Code / Copilot `/mcp search` consumes it); check within a day and paste the link | https://github.com/mcp |
 | Smithery | — | pending — submit URL at https://smithery.ai/new; `/.well-known/mcp/server-card.json` fallback is served in case the auto-scan stalls on DCR | https://smithery.ai/server/fgac (expected slug) |
 | ChatGPT Plugin directory | — | pending (30–120 day review, no fee; see memory note "OpenAI Plugin Directory") | https://chatgpt.com/plugins |
 | Cline MCP Marketplace | — | optional, not submitted — GitHub issue template below | https://github.com/cline/mcp-marketplace |
@@ -23,6 +23,48 @@ Listing copy source of truth: `docs/connector_submission/listing_copy.md`
 | awesome-mcp-servers (mcpservers.org) | — | optional, not submitted | https://mcpservers.org/submit |
 
 Update the *submitted* and *status* columns as each step lands.
+
+## Attribution: which directory did an install come from?
+
+There is **no direct listing-source signal** — an MCP OAuth handshake carries no
+referrer, and the official/GitHub registries do not proxy traffic. What FGAC
+does capture, per `docs/analytics.md`:
+
+- `mcp_client_initialize` — `client_name` / `client_version` (the client's
+  self-reported MCP clientInfo), `client_id`, `user_agent`. One row per session.
+- `connector_install_started` — `user_agent` + `install_fingerprint` on the
+  OAuth discovery routes, before any account exists.
+- `$mcp_tool_call` — `client_name`, `client_id`, `user_agent` on every call.
+
+So attribution is **by client family**, which maps to a directory closely
+enough for the channels above: `Anthropic/ClaudeAI` / `claude-ai` = Claude
+connector directory; VS Code / Copilot client names = GitHub MCP Registry
+(the official registry is not a VS Code surface by itself); Cline = Cline
+marketplace; Smithery **proxies** every request through its gateway, so its
+installs show a Smithery user agent. PulseMCP, Glama and awesome-lists cannot
+be told apart from organic (any client). Baseline in the 30 days to
+2026-09-10, before any registry listing: `claude-code` (129 users),
+`Anthropic/ClaudeAI` (179), `Anthropic/Toolbox` (64 — directory inspection),
+`sheet-add-in` (9); **no VS Code, Cursor, Cline or Smithery client at all**, so
+any of those appearing after 2026-09-10 is registry-driven.
+
+Query (new client families per week since the registry listing):
+
+```sql
+select toStartOfWeek(timestamp) as week, properties.client_name as client,
+       uniq(distinct_id) as users, count() as inits
+from events
+where event = 'mcp_client_initialize' and timestamp >= '2026-09-10'
+group by week, client order by week, users desc
+```
+
+Date-bound the cohorts with a PostHog annotation at each listing's go-live
+(the Claude directory has one at 2026-08-16T17:00Z; the registry publish at
+2026-09-10T02:32Z still needs one — the CI key lacks `annotation:write`, add it
+in the PostHog UI). If a listing ever needs hard attribution, the profile-slug
+mechanism already proves path-suffixed MCP URLs work with real clients, so a
+reserved per-directory suffix is feasible; not worth it until a channel shows
+volume.
 
 ## What is in the repo (automated)
 
@@ -41,6 +83,8 @@ Actions secret. Losing both means re-keying: regenerate the pair, replace the
 record string in the route, redeploy, re-add the secret.
 
 ## Human checklist (in order)
+
+> Steps 1–4 completed 2026-09-10 (key in 1Password, `MCP_PUBLISHER_PRIVATE_KEY` set, PR #120 deployed, published via the action). Steps 5–6 remain.
 
 ### 1. Back up the private key to 1Password
 
