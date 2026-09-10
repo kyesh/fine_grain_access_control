@@ -12,6 +12,7 @@
     "db:branch": "tsx scripts/branch-db.ts",
     "db:prune-branches": "bash scripts/cleanup-neon-branches.sh",
     "worktrees:report": "tsx scripts/report-stale-worktrees.ts",
+    "branches:creation-report": "tsx scripts/report-branch-creation.ts",
     "db:push": "drizzle-kit push",
     "db:migrate": "tsx src/db/migrate.ts",
     "db:generate": "drizzle-kit generate",

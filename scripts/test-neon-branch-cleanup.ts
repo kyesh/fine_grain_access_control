@@ -3,10 +3,12 @@
  * (scripts/lib/neon-branch-classifier.ts, used by scripts/cleanup-neon-branches.ts).
  * Run: npx tsx scripts/test-neon-branch-cleanup.ts  (part of `npm run mcp:lint`)
  *
- * The policy under test (2026-09-10): delete when idle more than 6h AND either
- * older than 24h or the PR for its git branch is merged. Guards: primary
- * branch, Neon-`protected` branches, and any branch whose compute is running
- * right now.
+ * The policy under test (2026-09-10):
+ *   - a merged local-dev branch (`<sanitized-git-branch>`) goes IMMEDIATELY;
+ *   - everything else needs idle > 6h AND (age > 24h OR its PR is merged).
+ * Guards: primary branch, Neon-`protected` branches, and any branch whose
+ * compute is running right now — the last is the only thing protecting a
+ * merged local-dev branch, so its coverage below is load-bearing.
  *
  * The load-bearing invariant, asserted below: git state may only ACCELERATE
  * deletion. An empty merged-ref map (no `gh`, no network) must fall back to the
@@ -146,16 +148,32 @@ check('a merged ref with a slash-heavy name maps through sanitize',
 check('same branch WITHOUT the merged map → kept by the 24h floor',
   verdict(branch('claude-shipped-work', 3), [idleEndpoint(7)]).action === 'keep');
 
-console.log('the 6h idle floor still guards the merged path:');
+console.log('a merged LOCAL-DEV branch skips the idle wait entirely:');
+{
+  const v = verdict(branch('claude-shipped-work', 0.1), [idleEndpoint(0.1)], MERGED);
+  check('merged, 6 minutes old, active 6 minutes ago → delete anyway', v.action === 'delete');
+  check('  …reason says why the idle wait did not apply', /no idle wait/.test(v.reason));
+  check('  …and it is eligible now', v.metrics.eligibleInHours === 0);
+}
+check('an UNMERGED local-dev branch still owes both timers',
+  verdict(branch('claude-open-work', 0.1), [idleEndpoint(0.1)], MERGED).action === 'keep');
+
+console.log('the 6h idle floor still guards merged PREVIEWS:');
 {
   const v = verdict(branch('preview/claude/shipped-work', 3), [idleEndpoint(1)], MERGED);
-  check('merged but active 1h ago → keep', v.action === 'keep');
+  check('merged preview but active 1h ago → keep', v.action === 'keep');
   check('  …with the idle reason', /under 6h/.test(v.reason));
   check('  …and only the idle timer left to wait (5h)',
     Math.abs((v.metrics.eligibleInHours ?? 0) - 5) < 1e-9);
 }
-check('merged but compute running right now → keep',
+check('merged preview, idle 7h → delete',
+  verdict(branch('preview/claude/shipped-work', 8), [idleEndpoint(7)], MERGED).action === 'delete');
+
+console.log('the guards still beat a merged local-dev branch:');
+check('merged but compute running right now → keep (the ONLY protection left)',
   verdict(branch('claude-shipped-work', 300), [activeEndpoint()], MERGED).action === 'keep');
+check('merged, brand new, compute running → keep',
+  verdict(branch('claude-shipped-work', 0.1), [activeEndpoint()], MERGED).action === 'keep');
 check('merged but marked protected → keep',
   verdict(branch('claude-shipped-work', 300, { protected: true }), [idleEndpoint(50)], MERGED).action === 'keep');
 check('merged does NOT override the primary-branch guard',
@@ -164,6 +182,8 @@ check('merged does NOT override the primary-branch guard',
 console.log('degraded PR lookup falls back to the clock, never to keeping:');
 check('empty merged map: young branch kept exactly as before',
   verdict(branch('claude-shipped-work', 3), [idleEndpoint(7)], new Map()).action === 'keep');
+check('empty merged map: a brand-new local-dev branch is NOT deleted',
+  verdict(branch('claude-shipped-work', 0.1), [idleEndpoint(0.1)], new Map()).action === 'keep');
 check('empty merged map: old cold branch still deleted',
   verdict(branch('claude-shipped-work', 300), [idleEndpoint(50)], new Map()).action === 'delete');
 

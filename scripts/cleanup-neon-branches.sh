@@ -9,9 +9,9 @@
 # resolves Node 22 itself (system Node may be too old for tsx).
 #
 # Safety properties live in scripts/lib/neon-branch-classifier.ts (unit-tested
-# by scripts/test-neon-branch-cleanup.ts). Delete a branch whose compute has
-# been idle more than 6h, once EITHER it is older than 24h OR the PR for its git
-# branch is merged. Git state can only bring deletion forward, never hold it off
+# by scripts/test-neon-branch-cleanup.ts). A local-dev branch whose PR is merged
+# is deleted immediately, no idle wait. Everything else needs idle > 6h, once
+# EITHER it is older than 24h OR the PR for its git branch is merged. Git state can only bring deletion forward, never hold it off
 # — if the PR lookup fails the 24h clock still applies.
 # Never touched: the primary branch or one named exactly `main`, a branch Neon
 # reports as `protected`, and any branch whose compute is running right now.

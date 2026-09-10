@@ -341,9 +341,12 @@ deploy of that git branch. Facts that are easy to get wrong:
   bring deletion forward, never hold it off** — that direction is the invariant; a git
   fact used as a *keep* is what let leftover worktrees pin branches forever. If the PR
   lookup fails (no `gh`), merged-PR pruning goes quiet and the 24h clock still applies. So:
-  - **A merged PR's branches go within 6h of last use**, both the `preview/` one and
-    the local `db:branch` one. Merging is the end of that database's life — finish any
-    QA against a branch before you merge, not after.
+  - **Merging a PR ends its local `db:branch` database immediately** — no idle wait,
+    on the next prune. The running-compute guard is the only thing left protecting it,
+    and Neon suspends compute after a few minutes, so a dev server sitting idle between
+    queries does NOT count as running. Its `preview/` twin gets the 6h idle floor,
+    because a deployed URL can be hit by anyone at any moment. **Finish QA against a
+    branch before you merge, not after.**
   - **A preview whose PR is still open is not exempt either.** If its preview URL has
     been quiet for 6h AND it is over 24h old, the database goes; redeploy the PR to get
     a fresh branch. To keep one across the timers, mark it `protected` in the Neon

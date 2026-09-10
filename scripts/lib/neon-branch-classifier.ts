@@ -5,11 +5,22 @@
  *
  * POLICY (set 2026-09-10):
  *
- *   A Neon branch is stale when its compute has been idle more than 6h AND
+ *   A local-dev branch (`<sanitized-git-branch>`, made by `npm run db:branch`)
+ *   whose PR is merged is deleted IMMEDIATELY — no idle wait. The work is
+ *   finished and exactly one machine's dev server could be using it, which the
+ *   running-compute guard already covers.
+ *
+ *   Every other branch is stale when its compute has been idle more than 6h AND
  *   either
  *     (a) it is older than 24h, or
- *     (b) the PR for its git branch is merged — the work is finished, so there
- *         is nothing left to wait for.
+ *     (b) the PR for its git branch is merged.
+ *
+ *   The asymmetry is deliberate. A `preview/<git-branch>` branch serves a
+ *   deployed URL that anyone can hit at any moment, and Neon suspends compute
+ *   between requests — so "idle" there does not mean "unused", and the 6h floor
+ *   is what stops a merge from killing a preview somebody is looking at. A
+ *   local-dev branch has one consumer on one machine, and if its dev server is
+ *   actually running, `current_state === 'active'` keeps it.
  *
  * THE INVARIANT: git state may only ACCELERATE deletion, never prevent it.
  * The original bug was a git fact used as a KEEP — "checked out in a worktree"
@@ -26,10 +37,12 @@
  * that turns out to be wanted again is one `npm run db:branch` away (a fresh
  * copy of main; accumulated QA state does not survive).
  *
- * The 6h idle floor is what makes the merged path safe: merging does not mean
- * every session has stopped touching the branch, and Neon's compute suspends
- * after a few minutes, so `current_state === 'active'` alone would not catch a
- * session that is merely between queries.
+ * The 6h idle floor is what makes the merged path safe FOR PREVIEWS: merging
+ * does not mean every caller has stopped hitting the URL, and Neon's compute
+ * suspends after a few minutes, so `current_state === 'active'` alone would not
+ * catch traffic that is merely between requests. Local-dev branches opt out of
+ * that floor by Ken's instruction (2026-09-10): merging is the end of that
+ * branch's life, and a dev server left running is caught by the same guard.
  *
  * Guards that remain:
  *   1. The primary/default branch and a branch named exactly `main` are never
@@ -165,28 +178,39 @@ export function classifyNeonBranch(
   }
 
   const mergedLabel = mergedLabelFor(branch.name, merged);
+  const isPreview = branch.name.startsWith('preview/');
   const effectiveIdle = idleHours ?? ageHours;
 
-  // Idleness always has to expire. A merged PR removes the age requirement, so
-  // its remaining wait is the idle timer alone. Both estimates assume nothing
-  // connects in the meantime — a connection resets the idle clock.
+  // A merged local-dev branch is eligible the moment we see it; a merged
+  // preview still owes the idle timer; anything unmerged owes the slower of the
+  // two. All of these assume nothing connects meanwhile — that resets idleness.
   const waitForIdle = IDLE_THRESHOLD_HOURS - effectiveIdle;
   const eligibleInHours = mergedLabel !== null
-    ? waitForIdle
+    ? (isPreview ? waitForIdle : 0)
     : Math.max(AGE_THRESHOLD_HOURS - ageHours, waitForIdle);
   const metrics: VerdictMetrics = { ageHours, idleHours, eligibleInHours };
 
+  const idleNote = idleCandidates.length > 0 ? `idle ${fmt(effectiveIdle)}` : 'never connected to';
+
+  // Merged local-dev branch: gone now. The running-compute guard above is the
+  // only thing standing between a merge and this branch, by design.
+  if (mergedLabel !== null && !isPreview) {
+    return {
+      action: 'delete',
+      reason: `PR ${mergedLabel} merged (local dev branch — no idle wait)`,
+      metrics: { ...metrics, eligibleInHours: 0 },
+    };
+  }
+
   if (effectiveIdle < IDLE_THRESHOLD_HOURS) {
-    // Covers the merged path too: merging does not prove every session has let
-    // go of the branch, only that the work is done.
+    // Previews only: merging does not prove every caller has stopped hitting
+    // the deployed URL, only that the work is done.
     return {
       action: 'keep',
       reason: `active ${fmt(effectiveIdle)} ago (under ${IDLE_THRESHOLD_HOURS}h)`,
       metrics,
     };
   }
-
-  const idleNote = idleCandidates.length > 0 ? `idle ${fmt(effectiveIdle)}` : 'never connected to';
 
   if (mergedLabel !== null) {
     return {
