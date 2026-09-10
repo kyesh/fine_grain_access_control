@@ -831,6 +831,69 @@ passed a title; the protocol text asks it to). Pair with the post-pick loop:
 `request_id` — more than 2 per link is the 8-second retry loop, and the
 remedy is on the Google-propagation side, not the page.
 
+Two readings added 2026-09-09, after a week in which three accounts opened a
+sheets link, ran the `link_open` verification, and never approved:
+
+*The picker events are client-side and ad blockers drop them.* 8 of the 65
+people who opened an approval link in 30 days sent **no client-side event at
+all** — for them "no `picker_opened`" means nothing. `picker_token_requested`
+(server, one row per pick-button click) is the row to read instead: a person
+with `link_open` verifications and no `picker_token_requested` did not click;
+one with `picker_token_requested` and no `picker_opened` is telemetry-blind,
+not stuck. `has_drive_file_scope = false` on it is the reconnect leg (dead or
+narrowed grant), `result = 'no_token'` is a Google account that was never
+connected.
+
+```sql
+-- Per person: server-side clicks vs client-side picker events, 7 d.
+SELECT cityHash64(person.properties.email) % 100000 AS u,
+       countIf(event = 'picker_token_requested')                                   AS clicks_server,
+       countIf(event = 'picker_token_requested' AND properties.has_drive_file_scope = false) AS clicks_no_scope,
+       countIf(event = 'picker_opened')                                            AS opens_client,
+       countIf(event IN ('sheets_grant_verification','docs_grant_verification') AND properties.via = 'link_open') AS link_opens,
+       countIf(event = 'approval_link_approved')                                   AS approved
+FROM events
+WHERE event IN ('picker_token_requested','picker_opened','sheets_grant_verification','docs_grant_verification','approval_link_approved')
+  AND properties.environment = 'production'
+  AND person.properties.email NOT IN (/* internal + QA accounts */)
+  AND timestamp > now() - INTERVAL 7 DAY
+GROUP BY u HAVING link_opens > 0 ORDER BY approved, clicks_server
+```
+
+*"Opened, never approved" includes agents that built a substitute.* Two of
+the three accounts above had their agent create a NEW spreadsheet
+(`google_api_modify` → `agent_sheet_created {auto_granted: true}`) within two
+minutes of the link open and were productive on it the same day; the original
+sheet stayed unexposed and kept minting. Before treating such a link as a
+stuck user, check:
+
+```sql
+-- Gate-hit persons: denied ids vs ids they later used successfully, 7 d.
+SELECT cityHash64(person.properties.email) % 100000 AS u,
+       groupUniqArrayIf(cityHash64(toString(properties.file_id)) % 10000,
+         event = '$mcp_tool_call' AND properties.denial_code IN ('sheets_not_exposed','docs_not_exposed')) AS denied_ids,
+       groupUniqArrayIf(cityHash64(toString(properties.file_id)) % 10000,
+         event = '$mcp_tool_call' AND properties.outcome = 'success'
+         AND (properties.$mcp_tool_name LIKE 'sheets%' OR properties.$mcp_tool_name LIKE 'docs%')) AS ok_ids,
+       countIf(event IN ('agent_sheet_created','agent_doc_created')) AS agent_created,
+       countIf(event = 'approval_link_opened')   AS opened,
+       countIf(event = 'approval_link_approved') AS approved
+FROM events
+WHERE properties.environment = 'production'
+  AND person.properties.email NOT IN (/* internal + QA accounts */)
+  AND timestamp > now() - INTERVAL 7 DAY
+  AND (event IN ('approval_link_opened','approval_link_approved','agent_sheet_created','agent_doc_created')
+       OR (event = '$mcp_tool_call' AND (properties.$mcp_tool_name LIKE 'sheets%' OR properties.$mcp_tool_name LIKE 'docs%')))
+GROUP BY u HAVING length(denied_ids) > 0
+ORDER BY approved, agent_created DESC
+```
+
+A row with `approved = 0`, `agent_created > 0` and `ok_ids` disjoint from
+`denied_ids` is a substitute, not a leak — the product question there is why
+the user's own file was not pickable (other Google account, shared drive,
+Workspace policy), which the approve page's connected-account line now
+addresses for the first case.
+
 **7.16 — Handshake loops (`mcp_client_initialize` vs `$mcp_tool_call`).**
 Added 2026-09-08. Two Claude Code users ran automation that spawned a fresh
 `claude` process every ~30 s (one, 18 h a day; the other every ~2 min) — each

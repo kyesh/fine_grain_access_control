@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useGooglePicker, PickedFile, type PickerCancelInfo } from "../useGooglePicker";
-import { pickerRecoveryCopy, pickByNameHint } from "@/lib/pickerRecoveryCopy";
+import { pickerRecoveryCopy, pickByNameHint, pickerAccountHint } from "@/lib/pickerRecoveryCopy";
 import { TrackedVideoEmbed } from "@/components/TrackedVideoEmbed";
 import { DRIVE_FILE_KINDS, type DriveFileKind } from "@/lib/driveFileKinds";
 import type { ApprovalSearchParams } from "@/lib/approvalLinks";
@@ -38,6 +38,7 @@ export function FileApprovalFlow({
   kind,
   fileId,
   resourceName,
+  connectedGoogleEmail,
   level,
   approveAction,
 }: {
@@ -45,6 +46,8 @@ export function FileApprovalFlow({
   kind: DriveFileKind;
   fileId: string;
   resourceName: string | null;
+  /** Google account whose Drive the Picker lists (Clerk's Google external account); null when unknown. */
+  connectedGoogleEmail: string | null;
   /** 'expose' = read grant with an upgrade choice; 'write' = read & write. */
   level: "expose" | "write";
   approveAction: (formData: FormData) => Promise<void>;
@@ -132,6 +135,7 @@ export function FileApprovalFlow({
           <div className="rounded-md border border-warning-foreground/30 bg-warning px-4 py-3 text-sm text-warning-foreground [overflow-wrap:anywhere]" data-testid={`${testPrefix}-flow-pick-cancelled`}>
             <p className="font-semibold">{recovery.heading}</p>
             <p className="mt-2">{"The agent asked for "}<strong>{recovery.target}</strong>{". "}{recovery.hint}</p>
+            <p className="mt-2">{pickerAccountHint({ short, googleEmail: connectedGoogleEmail })}</p>
             <p className="mt-2">{recovery.reassurance}</p>
           </div>
         ) : (
@@ -158,6 +162,9 @@ export function FileApprovalFlow({
         </button>
         <p className="text-xs text-subtle" data-testid={`${testPrefix}-flow-pick-hint`}>
           {pickByNameHint({ short, title: resourceName })}
+        </p>
+        <p className="text-xs text-subtle [overflow-wrap:anywhere]" data-testid={`${testPrefix}-flow-account-hint`}>
+          {pickerAccountHint({ short, googleEmail: connectedGoogleEmail })}
         </p>
         <p className="text-xs text-subtle">
           First time? Google will ask you to allow FGAC&apos;s file picker

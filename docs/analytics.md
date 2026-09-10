@@ -40,7 +40,7 @@ keep internal/QA traffic out of the numbers.
 | `delegation_created` | server (dashboard action) | `delegate_email`, `reactivated` |
 | `account_linked` | server (dashboard action) | `target_email`, `delegated`, `via` |
 | `approval_link_minted` | server (`/api/mcp` — policy denial, send denial, `request_access`) | `action`, `request_id`, `target_hash`, `mint_count`, `via` (`send_denial`/`request_access`; absent for policy denials), and on `request_access` mints since 2026-09-08 `has_resource_name` (the request has a title — passed on this call or stored by an earlier one in `approval_requests.resource_name`, shown on the approve page: the only name source for a file Google does not share with FGAC yet) and `resource_name_supplied` (this call passed one). **Fires once per mint ATTEMPT**, so `uniq(request_id)` is demand and `count()` is retry pressure |
-| `approval_link_opened` | server (approve-page load, `/dashboard/approve`) | `status` (`fresh`/`already_granted`/`wrong_account`/`invalid`), `request_id` (real id for `wrong_account` — recomputed against the resolved owner; `undefined` only for `invalid`), `action`, `agent_driven`, `user_agent` |
+| `approval_link_opened` | server (approve-page load, `/dashboard/approve`) | `status` (`fresh`/`already_granted`/`wrong_account`/`invalid`), `request_id` (real id for `wrong_account` — recomputed against the resolved owner; `undefined` only for `invalid`), `action`, `agent_driven`, `user_agent`; since 2026-09-09 `client` (`browser` / `claude_desktop` / `agent`, from `src/lib/approveClientClass.ts`). **`claude_desktop` is a person** — the Claude desktop app's in-app browser sends a Chrome UA with a `Claude/<build>` token, and before this the bare "claude" agent test counted those opens as `agent_driven: true` (19 opens / 7 people in the 30 days to 2026-09-09, every one followed by that person's own pageviews and pick-button clicks). Read human reach as `client != 'agent'`; `agent_driven` on older rows overstates agents by exactly this class. Fires on every server render of the page (a route refresh or navigation re-renders it — local QA 2026-09-09 saw extra rows while the tab sat idle), so rows overcount opens: always read `uniq(request_id)` |
 | `approval_link_approved` | server (`actions.ts`, all approval paths) | `action`, `request_id`; per-file grants add `substituted` and `granted_count`. **Fires only when a grant is actually written.** A submit that finds every grant already active fires `approval_link_replayed` instead (since PR for `claude/dreamy-tesla-946fdc`, 2026-09-05). Before that fix the picked-file path re-fired this event (and inserted a duplicate rule) on every extra click of an unguarded button — raw counts between 2026-08-25 and the fix are inflated (81 links → 93 events in the last pre-fix week); read the funnel as `uniq(request_id)`, never `count()` |
 | `approval_link_replayed` | server (`actions.ts`, `approveMagicLink` / `applyFileGrantApproval`) | `action`, `request_id`, `path` (`grant_active` = generic idempotency short-circuit; `picked` = every picked file already granted). A no-op re-submit of a link whose grant is already live: a double-click that slipped past the client-side guard, a re-opened permanent link, or a retry after the success page. Not a funnel stage — its rate is the duplicate-submit rate. Runbook: `monitoring.md` 7.14 |
 | `read_restriction_enforced` | server (`/api/mcp`) | `via` (tool name), `restriction` |
@@ -51,6 +51,7 @@ keep internal/QA traffic out of the numbers.
 | `picker_picked` | client (`useGooglePicker`) | `kind`, `count` (files picked) |
 | `picker_cancelled` | client (`useGooglePicker`) | `kind`; since 2026-09-08 `attempt`, `elapsed_ms` (open → cancel), `from_oauth_return`. On the approve page a cancel now renders a recovery panel (what the agent asked for, by title when `request_access` supplied one, else by Google id + "the picker lists files by name") with an in-place Try again; before that a cancel changed nothing on screen. Measured 09-03 → 09-07: 13 of 33 Picker opens ended in a cancel, every one from a plain open (`from_oauth_return: false`) |
 | `picker_flow_error` | client (`useGooglePicker`, pre-existing) | `stage`, `message` |
+| `picker_token_requested` | server (`/api/auth/google-picker-token`, the first request a pick-button click makes) | `result` (`ok` / `no_token` = Clerk holds no Google grant for this user / `error`), `has_drive_file_scope` (false sends the browser into the reconnect leg — a dead or narrowed grant reads as this, see `google_scope_missing`), `scope_source` (`google-tokeninfo` / `clerk-cache`), `app_id_resolved`, `page` (Referer pathname: `/dashboard/approve`, a profile page, `/dashboard/accounts`). Added 2026-09-09 as the **server-side twin of the browser's `picker_*` funnel**: posthog-js is blocked for a share of users — 8 of the 65 people who opened an approval link in the 30 days to 2026-09-09 sent no client-side event at all (two of that week's three "opened, never picked" accounts among them) — so a person with a `link_open` verification and no `picker_opened` could be a non-click OR an ad-blocked browser, and only this row tells them apart. One row per click; `count()` vs the same person's `picker_opened` is the telemetry-blind share. Runbook: `monitoring.md` 7.15 |
 | `google_reconnect_started` / `_returned` / `_verified` / `_incomplete` / `_wrong_account` | client (`ReconnectGoogleButton`, Accounts page) | The reconnect funnel (closed 2026-09-03 — `returned`/`verified` are new; before them, silence after `started` was ambiguous between abandoned consent, a session dropped during the OAuth round-trip, and plain success). `started` {`source`} fires before the consent redirect; `returned` when the page processes `?reconnected=1` (fires even after a mid-flow re-sign-in — the redirect_url chain preserves the param); `verified` when the tokeninfo poll confirms both scopes; `incomplete` {`missing_scopes`} when it does not; `wrong_account` {`intended_for`} when a bound reconnect link is opened by the wrong user. Detection query: monitoring.md §7.8 |
 | `sheets_grant_verification` | server (approve-page load via `/api/rules/verify-sheets-access`, approval in `actions.ts`, rule creation in `createRule`/`grantFileAccessPOST`, recovery re-checks) | `result` (`ok`/`missing`/`unknown`), `via` (`link_open`/`magic_link`/`post_approval`/`dashboard_manual`/`grant_api`/`recovery`), `spreadsheet_id`; `magic_link` + `result: missing` (since 2026-09-08, with `picked_count` and `request_id`) = the approve page's post-pick verification found none of the picked files reachable and sent the user back to pick again — the retry loop one launch-cohort user ran 12 times in two minutes before granting from the dashboard instead; before this only the successful `magic_link` verification was captured. `grant_api` (and `dashboard_manual`, for direct server-action calls — the manual modal is Gmail-only today) = grant verified at rule birth (the stranded-at-birth case — telemetry only, a Google hiccup never fails rule creation); `recovery` = EVERY recovery-UI re-check, captured regardless of result (attempts that stay `missing` are the funnel's stuck users — before this, only successes were visible via `sheets_grant_recovered`, which still fires on `ok`) |
 | `sheets_grant_recovered` | server (`/api/rules/verify-sheets-access`) | `spreadsheet_id` |
@@ -157,13 +158,32 @@ pre-existing stranded rules (dashboard chips, MCP error links); a verified
 re-check there fires `sheets_grant_recovered`. Funnel health =
 `link_open{missing}` → `magic_link{ok}` conversion.
 
+**"Opened, never approved" is not one population.** Reviewed 2026-09-09 (7 days,
+production): of the accounts that opened a sheets/docs link and never approved
+it, two had their agent CREATE a new spreadsheet through `google_api_modify`
+within ~2 minutes of the open — auto-granted (`agent_sheet_created
+{auto_granted: true}`), and both accounts were productive on the new sheet the
+same day (60+ successful `sheets_*` calls on ids different from the denied one)
+while the original sheet stayed unexposed and kept minting. Two more accounts
+took the same route without ever opening the link. The link funnel reads all
+four as leaks; the user's need was met by a substitute file. Before calling an
+opened-not-approved link a stuck user, check the person's `agent_sheet_created`
+/ `agent_doc_created` and successful `$mcp_tool_call.file_id` after the gate
+hit (query: `monitoring.md` 7.15). The remaining opened-not-approved cases that
+week were a sheet in a *different Google account* than the one connected to
+FGAC (the Picker can never list it; both users cancelled within seconds and
+went hunting through account settings — the approve page now names the
+connected account and says to share the file with it) and a Workspace user
+whose docs live in a shared drive (PR #126).
+
 **The sheets/docs adoption funnel** (instrumented end to end since the PR #72
 salvage, 2026-09): `picker_scope_redirect` → `picker_opened` →
 `picker_picked` → `rule_saved{via}` → `*_grant_verification{result=ok}` →
 first successful `$mcp_tool_call` carrying that `file_id`. The client picker
 events cover the dashboard leg (the consent redirect being the riskiest hop —
 `picker_scope_redirect` without a following `picker_opened` is an abandoned
-consent); `rule_saved.via` splits the three rule-creation paths
+consent; `picker_token_requested` is the server-side row for the same click and
+is the only one that survives an ad blocker); `rule_saved.via` splits the three rule-creation paths
 (`dashboard_manual`/`dashboard_picker`/`grant_api`/`magic_link` — the
 dashboard Picker leg is `via IN ('dashboard_picker','grant_api')`); the
 grant-verification
