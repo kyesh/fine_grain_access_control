@@ -1,6 +1,6 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-  "name": "ai.fgac/google-workspace",
+  "name": "ai.fgac/fgac",
   "title": "FGAC.ai: Multiple Gmail Accounts, Google Sheets & Docs",
   "description": "Multiple Gmail accounts, editable Google Sheets & Docs for AI agents. Deny-by-default access rules.",
   "version": "0.1.0",

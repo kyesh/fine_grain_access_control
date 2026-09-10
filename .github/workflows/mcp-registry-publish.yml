@@ -55,4 +55,4 @@ jobs:
         run: |
           sleep 5
           curl -fsS "https://registry.modelcontextprotocol.io/v0.1/servers?search=ai.fgac" | tee /tmp/search.json
-          grep -q '"ai.fgac/google-workspace"' /tmp/search.json || { echo "::error::published but not yet returned by search — re-run this step in a minute"; exit 1; }
+          grep -q '"ai.fgac/fgac"' /tmp/search.json || { echo "::error::published but not yet returned by search — re-run this step in a minute"; exit 1; }

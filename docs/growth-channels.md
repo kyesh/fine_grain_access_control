@@ -13,9 +13,9 @@ Listing copy source of truth: `docs/connector_submission/listing_copy.md`
 | surface | submitted | status | listing link |
 |---|---|---|---|
 | Claude connector directory | 2026-08-16 | **live** | https://claude.ai/directory (search "FGAC") |
-| Official MCP Registry (registry.modelcontextprotocol.io) | 2026-09-10 | **live** — `ai.fgac/google-workspace` v0.1.0, status `active`, published 2026-09-10T02:32Z by the **MCP Registry Publish** action (run 34429857385) | https://registry.modelcontextprotocol.io/v0.1/servers?search=ai.fgac |
+| Official MCP Registry (registry.modelcontextprotocol.io) | 2026-09-10 | **live** — `ai.fgac/fgac` v0.1.0 (renamed 2026-09-10 from `ai.fgac/google-workspace`, which is marked `deleted`: a Google trademark must not be the server's own name — descriptive use in title/description is fine) via the **MCP Registry Publish** action | https://registry.modelcontextprotocol.io/v0.1/servers?search=ai.fgac |
 | GitHub MCP Registry (github.com/mcp) | 2026-09-10 (via official) | pending propagation — auto-ingests from the official registry, no separate submission (VS Code / Copilot `/mcp search` consumes it); check within a day and paste the link | https://github.com/mcp |
-| Smithery | — | pending — submit URL at https://smithery.ai/new; `/.well-known/mcp/server-card.json` fallback is served in case the auto-scan stalls on DCR | https://smithery.ai/server/fgac (expected slug) |
+| Smithery | — | pending — submit URL at https://smithery.ai/new as namespace `fgac` (GitHub org) / server ID `fgac` → `@fgac/fgac`; `/.well-known/mcp/server-card.json` fallback is served in case the auto-scan stalls on DCR | https://smithery.ai/server/@fgac/fgac (expected slug) |
 | ChatGPT Plugin directory | — | pending (30–120 day review, no fee; see memory note "OpenAI Plugin Directory") | https://chatgpt.com/plugins |
 | Cline MCP Marketplace | — | optional, not submitted — GitHub issue template below | https://github.com/cline/mcp-marketplace |
 | PulseMCP | — | optional, not submitted — submit button on the site | https://www.pulsemcp.com/submit |
@@ -70,7 +70,7 @@ volume.
 
 | piece | path | serves |
 |---|---|---|
-| Registry manifest | `server.json` (repo root) | `ai.fgac/google-workspace`, remote `streamable-http` at `https://fgac.ai/api/mcp`; version tracks `package.json` (enforced by `scripts/test-server-json.ts` in `npm run mcp:lint`) |
+| Registry manifest | `server.json` (repo root) | `ai.fgac/fgac`, remote `streamable-http` at `https://fgac.ai/api/mcp`; version tracks `package.json` (enforced by `scripts/test-server-json.ts` in `npm run mcp:lint`) |
 | Domain proof | `src/app/.well-known/mcp-registry-auth/route.ts` | `v=MCPv1; k=ed25519; p=<public key>` as text/plain at `https://fgac.ai/.well-known/mcp-registry-auth` |
 | Smithery server card | `src/app/.well-known/mcp/server-card.json/route.ts` | JSON card built from `server.json` + `TOOL_DEFS` at `https://fgac.ai/.well-known/mcp/server-card.json` |
 | Glama maintainer file | `public/.well-known/glama.json` | `https://fgac.ai/.well-known/glama.json` |
@@ -153,6 +153,9 @@ Verify (either option):
 curl -s "https://registry.modelcontextprotocol.io/v0.1/servers?search=ai.fgac" | jq '.servers[] | {name: .server.name, version: .server.version, status: ._meta}'
 ```
 
+**Naming rule** (decided 2026-09-10): the server ID never carries a Google trademark. Google's brand guidelines allow descriptive use ("for Google Workspace", "Gmail, Sheets & Docs" in the title) but not a Google mark as the product's own name, and FGAC's restricted-scope OAuth app is re-reviewed by Google. Retire a wrongly named entry with `mcp-publisher status --status deleted <name> <version>` **before** publishing the replacement — the registry allows one listing per remote URL and rejects the new name while the old one is active.
+
+
 The GitHub MCP Registry (github.com/mcp) ingests the official registry; allow
 up to a day, then search "FGAC" there and record the link in the ledger.
 
@@ -163,7 +166,7 @@ re-run the workflow. The registry refuses to overwrite an existing version.
 ### 5. Smithery
 
 1. Sign in at https://smithery.ai/new (GitHub account).
-2. Submit the server URL `https://fgac.ai/api/mcp` (Streamable HTTP, OAuth).
+2. Submit the server URL `https://fgac.ai/api/mcp` (Streamable HTTP, OAuth). Namespace `fgac` (create an empty GitHub org `fgac` or `fgac-ai` and pick it — do not move the repo), server ID `fgac`, so the install string matches the registry name.
 3. If the automatic scan stalls at the auth wall (Smithery registers clients
    via Client ID Metadata Documents; FGAC's Clerk authorization server uses
    Dynamic Client Registration), Smithery falls back to the card at
