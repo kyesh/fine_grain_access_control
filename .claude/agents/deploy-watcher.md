@@ -53,7 +53,7 @@ One of:
 - `READY <preview-url>` (plus deployment id)
 - `ERROR <classification>` followed by the decisive log excerpt and, for
   `NEON_BRANCH_LIMIT` only, the note that
-  `npx tsx scripts/cleanup-neon-branches.ts` is the documented remedy —
+  `bash scripts/cleanup-neon-branches.sh` is the documented remedy —
   suggested, never run by you.
 - `TIMEOUT` if 30 minutes pass without a terminal state (include the last
   observed status).

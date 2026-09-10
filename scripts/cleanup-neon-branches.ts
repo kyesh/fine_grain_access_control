@@ -1,7 +1,16 @@
 /* eslint-disable */
 import { config } from 'dotenv'
 import { execSync } from 'child_process'
-import { classifyNeonBranch, type GitState } from './lib/neon-branch-classifier'
+import {
+  classifyNeonBranch,
+  sanitize,
+  AGE_THRESHOLD_HOURS,
+  IDLE_THRESHOLD_HOURS,
+  type NeonBranchLike,
+  type NeonEndpointLike,
+  type Verdict,
+  type MergedRefs,
+} from './lib/neon-branch-classifier'
 
 // Load environment variables from .env.local
 config({ path: '.env.local' })
@@ -9,32 +18,22 @@ config({ path: '.env.local' })
 /**
  * Prune stale Neon database branches — safe enough to run AUTOMATICALLY
  * (scripts/branch-db.ts invokes it when branch creation hits Neon's branch
- * limit; the scheduled cost check runs it; it can be run by hand any time).
+ * limit; the daily neon-branch-prune task runs it; it can be run by hand any
+ * time).
  *
- * The rules live in scripts/lib/neon-branch-classifier.ts (pure, unit-tested
- * by scripts/test-neon-branch-cleanup.ts). In order of precedence:
+ * Delete a branch whose compute has been idle more than 6h, once EITHER it is
+ * older than 24h OR the PR for its git branch is merged. The primary branch,
+ * anything marked `protected` in Neon, and any branch whose compute is running
+ * right now are never touched. Git state can only bring deletion forward, never
+ * hold it off — when the PR lookup fails the 24h clock still applies. See
+ * scripts/lib/neon-branch-classifier.ts for the reasoning and
+ * scripts/test-neon-branch-cleanup.ts for the unit tests.
  *
- *   1. The primary/default branch, and a branch named exactly `main`, are
- *      never touched. Exact match only — a substring test once hid every
- *      branch whose name merely CONTAINED "main" (ger·main, do·main…) from
- *      the run output entirely.
- *   2. A Neon branch whose git branch is checked out in ANY git worktree
- *      (`git worktree list`) is kept, in both the `preview/<git-branch>` and
- *      the sanitized local-dev form — even if that branch is already merged.
- *      A session running a dev server must never lose its database mid-run.
- *   3. `preview/<git-branch>` (Vercel preview integration) is stale when the
- *      git branch is gone from origin or merged into origin/main. One backing
- *      an OPEN PR is never touched — deleting it breaks that PR's live
- *      preview deployment.
- *   4. `<sanitized-git-branch>` (local dev via db:branch) is stale when its
- *      origin ref is merged, OR — since GitHub deletes the head branch on
- *      merge, so "gone from origin" is the normal end-of-life state — when the
- *      origin ref is gone and either a leftover LOCAL branch is an ancestor of
- *      origin/main or a merged/closed PR's head ref matches. An unmerged local
- *      branch is kept (it may be an active unpushed session).
- *   5. Anything that maps to no git branch anywhere is kept (unknown ≠ stale).
- *
- * A failed `git fetch` / `ls-remote` aborts BEFORE any deletion.
+ * A deleted branch is recoverable in the sense that matters: `npm run db:branch`
+ * recreates one from main. It is NOT recoverable in the sense of accumulated
+ * QA state (approved connections, proxy keys, rules) — that is gone, and a
+ * worktree whose .env.local still points at the deleted branch must re-run
+ * db:branch before its dev server will connect.
  *
  * `--dry-run` prints what would be deleted without deleting.
  */
@@ -52,8 +51,94 @@ function runNeonCmd(cmd: string) {
   }
 }
 
+/**
+ * Latest PR per head ref: `claude/foo` -> { label: '#128', merged: true }.
+ *
+ * This feeds a DELETE decision (a merged PR drops the 24h requirement), so its
+ * failure mode is deliberate: on any error the map is empty, the merged path
+ * goes dormant, and every branch falls back to the 24h clock. Git can only make
+ * the pruner more prompt, never keep a branch alive — that direction is the bug
+ * this whole rewrite removed.
+ *
+ * Only the NEWEST PR for a ref counts. A reused branch name whose latest PR is
+ * open is live work, whatever older merged PRs share the name.
+ */
+function prStates(): Map<string, { label: string; merged: boolean }> {
+  const out = new Map<string, { label: string; merged: boolean }>();
+  try {
+    const prs = JSON.parse(
+      execSync('gh pr list --state all --limit 200 --json number,headRefName,state', {
+        encoding: 'utf-8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+      })
+    ) as { number: number; headRefName: string; state: string }[];
+    // gh lists newest first, so the first entry for a ref is its current PR.
+    for (const pr of prs) {
+      if (out.has(pr.headRefName)) continue;
+      out.set(pr.headRefName, { label: `#${pr.number}`, merged: pr.state === 'MERGED' });
+    }
+  } catch {
+    console.log('ℹ️  gh unavailable — merged-PR pruning is off this run; the 24h clock still applies.');
+  }
+  return out;
+}
+
+/** Just the merged refs, as the classifier wants them. */
+function mergedRefs(prs: ReturnType<typeof prStates>): MergedRefs {
+  const out: MergedRefs = new Map();
+  for (const [ref, { label, merged }] of prs) if (merged) out.set(ref, label);
+  return out;
+}
+
+/** `preview/<git-branch>` and `<sanitized-git-branch>` both trace back to a ref. */
+function annotate(branchName: string, prs: ReturnType<typeof prStates>): string {
+  if (prs.size === 0) return '';
+  const previewRef = branchName.startsWith('preview/') ? branchName.slice('preview/'.length) : null;
+  const hit = previewRef !== null
+    ? prs.get(previewRef)
+    : [...prs].find(([ref]) => sanitize(ref) === branchName)?.[1];
+  return hit ? `${hit.label} ${hit.merged ? 'merged' : 'open'}` : '';
+}
+
+const pad = (v: string, w: number) => v.length >= w ? v : v + ' '.repeat(w - v.length);
+const hours = (h: number | null) => (h === null ? '—' : h < 48 ? `${h.toFixed(1)}h` : `${Math.round(h / 24)}d`);
+
+/** The kept-branch table — the part of the daily report Ken actually reads. */
+function printKeptTable(kept: { branch: NeonBranchLike; verdict: Verdict }[], prs: ReturnType<typeof prStates>) {
+  if (kept.length === 0) return;
+  console.log(`\n📋 Kept ${kept.length} branch(es) — nothing here is billable until the project exceeds 10:\n`);
+
+  const rows = kept.map(({ branch, verdict }) => ({
+    name: branch.name,
+    age: hours(verdict.metrics.ageHours),
+    idle: hours(verdict.metrics.idleHours),
+    why: verdict.reason,
+    next: verdict.metrics.eligibleInHours === null
+      ? 'not on a timer'
+      : `in ~${hours(Math.max(0, verdict.metrics.eligibleInHours))}`,
+    pr: annotate(branch.name, prs),
+  }));
+
+  const cols = [
+    { h: 'BRANCH', get: (r: typeof rows[0]) => r.name },
+    { h: 'AGE', get: (r: typeof rows[0]) => r.age },
+    { h: 'IDLE', get: (r: typeof rows[0]) => r.idle },
+    { h: 'KEPT BECAUSE', get: (r: typeof rows[0]) => r.why },
+    { h: 'PRUNES', get: (r: typeof rows[0]) => r.next },
+    { h: 'PR', get: (r: typeof rows[0]) => r.pr },
+  ];
+  const widths = cols.map(c => Math.max(c.h.length, ...rows.map(r => c.get(r).length)));
+
+  console.log('   ' + cols.map((c, i) => pad(c.h, widths[i])).join('  ').trimEnd());
+  console.log('   ' + widths.map(w => '-'.repeat(w)).join('  '));
+  for (const r of rows) {
+    console.log('   ' + cols.map((c, i) => pad(c.get(r), widths[i])).join('  ').trimEnd());
+  }
+}
+
 async function main() {
   console.log(`🧹 Scanning for stale Neon database branches...${DRY_RUN ? ' (dry run)' : ''}`);
+  console.log(`   Policy: delete when idle more than ${IDLE_THRESHOLD_HOURS}h AND either older than ${AGE_THRESHOLD_HOURS}h or its PR is merged.`);
 
   let projectId = process.env.NEON_PROJECT_ID;
   if (!projectId) {
@@ -67,94 +152,50 @@ async function main() {
 
   console.log(`Using project ID: ${projectId}`);
 
-  const branches = runNeonCmd(`branches list --project-id ${projectId}`);
+  const branches: NeonBranchLike[] = runNeonCmd(`branches list --project-id ${projectId}`);
 
-  // Remote git branches (raw names). origin/main must be current for the
-  // merge checks below, so this fetch is not optional.
-  let remoteBranches: string[];
+  // Compute endpoints carry `last_active` — the only trustworthy idleness
+  // signal (see the classifier's note on why branch.updated_at is not).
+  // This neonctl build has no `endpoints` subcommand; go through the raw API.
+  // Without it every branch would look permanently idle, which would delete
+  // branches a running dev server is using — so a failure here aborts.
+  let endpointsByBranch = new Map<string, NeonEndpointLike[]>();
   try {
-    execSync('git fetch origin --quiet', { encoding: 'utf-8' });
-    remoteBranches = execSync('git ls-remote --heads origin', { encoding: 'utf-8' })
-      .split('\n')
-      .map(line => line.split('refs/heads/')[1]?.trim())
-      .filter((b): b is string => !!b);
-  } catch (error) {
-    // No remote view = no way to prove staleness. Refuse to guess.
-    console.error('❌ Could not fetch remote git branches — aborting without deleting anything.');
+    const payload = runNeonCmd(`api "/projects/${projectId}/endpoints"`);
+    const endpoints: NeonEndpointLike[] = payload.endpoints ?? payload;
+    if (!Array.isArray(endpoints)) throw new Error('unexpected endpoints payload');
+    for (const e of endpoints) {
+      if (!e.branch_id) continue;
+      const list = endpointsByBranch.get(e.branch_id) ?? [];
+      list.push(e);
+      endpointsByBranch.set(e.branch_id, list);
+    }
+  } catch (error: any) {
+    console.error('❌ Could not read compute endpoints — aborting without deleting anything.');
+    console.error(`   ${error?.message ?? error}`);
     process.exit(1);
   }
 
-  const isMergedIntoMain = (ref: string): boolean => {
-    try {
-      execSync(`git merge-base --is-ancestor "${ref}" origin/main`, { encoding: 'utf-8' });
-      return true;
-    } catch {
-      return false;
-    }
-  };
-
-  // Local branches (includes branches owned by other worktrees) — an unpushed
-  // or merge-deleted branch has no remote ref but may still prove state.
-  let localBranches: string[] = [];
-  try {
-    localBranches = execSync("git for-each-ref --format='%(refname:short)' refs/heads", { encoding: 'utf-8' })
-      .split('\n')
-      .map(b => b.replace(/^'|'$/g, '').trim())
-      .filter(Boolean);
-  } catch { /* no local view — the unknown-branch rule keeps them */ }
-
-  // Head refs of finished (merged or closed) PRs, so a db:branch Neon branch
-  // whose git branch was deleted everywhere can still be proven stale.
-  // Best-effort: without gh, unknown names are simply kept.
-  const finishedPrHeadRefs = new Map<string, 'merged' | 'closed'>();
-  try {
-    for (const state of ['merged', 'closed'] as const) {
-      JSON.parse(
-        execSync(`gh pr list --state ${state} --limit 300 --json headRefName`, { encoding: 'utf-8' })
-      ).forEach((pr: { headRefName: string }) => {
-        if (!finishedPrHeadRefs.has(pr.headRefName)) finishedPrHeadRefs.set(pr.headRefName, state);
-      });
-    }
-  } catch {
-    console.log('ℹ️  gh unavailable — skipping finished-PR matching (unknown branches will be kept).');
+  // Read once, used twice: as a delete input (merged PRs) and as display-only
+  // annotation in the kept table.
+  const prs = prStates();
+  const merged = mergedRefs(prs);
+  if (merged.size > 0) {
+    console.log(`🔎 ${merged.size} merged PR head ref(s) — their branches skip the ${AGE_THRESHOLD_HOURS}h wait.`);
   }
 
-  let currentBranch: string | null = null;
-  try {
-    const head = execSync('git rev-parse --abbrev-ref HEAD', { encoding: 'utf-8' }).trim();
-    if (head && head !== 'HEAD') currentBranch = head;
-  } catch { /* detached HEAD etc. — worktree protection below still applies */ }
-
-  // Branches checked out in ANY worktree. Their Neon branches are kept even
-  // when merged — a live session's database must never vanish mid-run.
-  const checkedOutBranches: string[] = [];
-  try {
-    execSync('git worktree list --porcelain', { encoding: 'utf-8' })
-      .split('\n')
-      .filter(l => l.startsWith('branch refs/heads/'))
-      .forEach(l => checkedOutBranches.push(l.slice('branch refs/heads/'.length).trim()));
-  } catch { /* worktrees unavailable — current-branch protection still applies */ }
-  if (checkedOutBranches.length > 0) {
-    console.log(`🔒 Protecting ${checkedOutBranches.length} branch(es) checked out in git worktrees`);
-  }
-
-  const git: GitState = {
-    remoteBranches,
-    localBranches,
-    checkedOutBranches,
-    currentBranch,
-    finishedPrHeadRefs,
-    isMergedIntoMain,
-  };
-
+  const now = new Date();
+  const kept: { branch: NeonBranchLike; verdict: Verdict }[] = [];
   let deletedCount = 0;
+
   for (const branch of branches) {
-    const verdict = classifyNeonBranch(branch, git);
+    const verdict = classifyNeonBranch(branch, endpointsByBranch.get(branch.id ?? '') ?? [], now, merged);
 
     if (verdict.action === 'skip') continue;
 
     if (verdict.action === 'keep') {
       console.log(`⏭️  Keeping ${branch.name} (${verdict.reason})`);
+      kept.push({ branch, verdict });
       continue;
     }
 
@@ -166,10 +207,14 @@ async function main() {
   }
 
   if (deletedCount === 0) {
-    console.log('✨ No stale branches found to clean up.');
+    console.log(`✨ No stale branches found to clean up (${kept.length} still in the window).`);
   } else {
-    console.log(`✅ ${DRY_RUN ? 'Would clean up' : 'Successfully cleaned up'} ${deletedCount} stale branch(es).`);
+    console.log(`✅ ${DRY_RUN ? 'Would clean up' : 'Successfully cleaned up'} ${deletedCount} stale branch(es); ${kept.length} kept.`);
   }
+
+  printKeptTable(kept, prs);
+  const billable = Math.max(0, branches.length - deletedCount - 10);
+  console.log(`\n💰 ${branches.length - deletedCount} branch(es) remain (including main) — ${billable} billable ≈ $${(billable * 1.5).toFixed(2)}/month.`);
 }
 
 main().catch(console.error);
