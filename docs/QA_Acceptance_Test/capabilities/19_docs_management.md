@@ -75,6 +75,23 @@ intentionally differs, the assertion says so.
   action is `docs_expose` (same URL on every repeat of the denial, no expiry —
   capability 14 A12/A13). The `documents` family must NOT fall through
   to raw passthrough (pre-docs behavior) — the denial is FGAC's, not Google's.
+- Then repeat `docs_read_document` with (a) `<external doc id>/edit` (what an
+  agent pastes from a Docs URL), (b) the full
+  `https://docs.google.com/document/d/<external doc id>/edit?usp=sharing` URL,
+  (c) a junk value such as `not-a-real-id`, and (d) a Sheets URL
+  (`https://docs.google.com/spreadsheets/d/<fixture sheet id>/edit`). Run the
+  same four through `request_access` with `type=docs_read`.
+- **Expected** (drive-file-id hardening, 2026-09-09): (a) and (b) behave
+  exactly like the bare id — the same `docs_not_exposed` denial and the SAME
+  approval link the bare id produces (`r=<id>`, never `r=<id>%2Fedit`), the
+  tool-call event carrying `file_id_input=suffixed` / `url` and
+  `file_id=<bare id>`. (c) is 🚫 with `denial_code=file_id_malformed`, the text
+  naming the expected shape (20–80 chars of `A-Za-z0-9_-`), and NO link: no
+  `approval_link_minted`, no `approval_request_id`, no new `approval_requests`
+  row. (d) is 🚫 `file_id_wrong_kind` naming the sheets tools and the extracted
+  id, also link-free. `request_access` follows the same matrix — (a)/(b) mint
+  the bare-id link, (c)/(d) refuse without minting. A link for a value Google
+  can never verify is the dead end this guards against.
 
 ### A7: Exposed doc reads succeed through every read surface
 - With the exposed fixture doc under a `doc_read` rule: call

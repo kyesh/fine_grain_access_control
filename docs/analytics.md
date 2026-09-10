@@ -230,6 +230,34 @@ observability is unchanged: rows still carry `error_status`, `error_reason`,
 queries must not compare across these deploys — split on `outcome` and
 date-bound at the deploy windows (2026-09-02 demotion, 2026-09-03 graduation).
 
+**Malformed file ids never mint a link (drive-file-id hardening,
+2026-09-09):** every per-file entry point (typed `sheets_*` / `docs_*` /
+`comments_*` tools, the raw Sheets/Docs/comments branches of `google_api_get`
+/ `google_api_modify`, and `request_access`) validates the caller-supplied id
+BEFORE the rule lookup and before any approval link is minted
+(`resolveDriveFileId` → `parseDriveFileId`). A value that is not a Drive id
+(`[A-Za-z0-9_-]{20,80}`) is refused as 🚫 `denied_by_policy` with
+`denial_code: 'file_id_malformed'` and no `approval_request_id`; a Docs URL
+passed as a `spreadsheetId` (or the reverse) is `file_id_wrong_kind`, also
+link-free, because a docs link for a sheet id is the same dead end (the
+Documents Picker view never lists the sheet). Unambiguous forms are
+normalized rather than refused — a full `docs.google.com/…/d/<id>/edit?usp=…`
+URL, `drive.google.com/open?id=<id>`, or `<id>/edit` / `<id>#gid=0` residue —
+and the event carries `file_id_input: 'url' | 'suffixed'` (`'malformed'` on
+refusal; absent for a bare id) so URL-pasting agents stay countable, with
+`file_id` then holding the normalized id. Before this change a `<realId>/edit`
+or junk 44-character value was denied as `*_not_exposed` and minted a live
+link for the literal value (verified locally 2026-09-08) that Google could
+never verify — a dead end that looked like a one-click approval. Production
+ids in the week to 2026-09-08 were all well-formed, so this is hardening,
+not the cause of the docs_expose gap (`claude_busy-jang-032d40_v1`). Metric
+boundary: these are caller-data errors like stale-id 404s, but they were
+already 🚫 (`*_not_exposed`) before, so staying 🚫 moves nothing in the
+public rate; `denial_code` is what separates them from real not-exposed
+demand — exclude `file_id_*` codes from any not-exposed / approval-demand
+count, and expect the `sheets_not_exposed` / `docs_not_exposed` counts in
+monitoring.md §7 queries to drop by exactly the malformed share.
+
 > **Legacy naming (before 2026-08):** tool calls were captured as a custom
 > `mcp_tool_call` event with `tool` / `duration_ms` properties. That name
 > collides with the event PostHog's archived beta MCP SDK once emitted, so the
