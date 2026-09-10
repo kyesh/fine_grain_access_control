@@ -21,6 +21,16 @@ keep internal/QA traffic out of the numbers.
   `src/lib/toolCallContext.ts` (AsyncLocalStorage rides the props from account
   resolution to the single capture site).
 
+**Organizations.** There is no org object; an organization is inferred from
+email domains on two fields that need not agree — `person.properties.email`
+(the sign-up address) and `properties.account_email` on `$mcp_tool_call` (the
+mailbox being accessed, own or delegated). Roll both up by domain family
+(first DNS label, hyphens stripped; consumer providers excluded, universities
+kept) and read them together: a delegation rollout shows as many sign-ups and
+one caller, a consultant reading company mailboxes shows only on the mailbox
+side. Teammates who signed up solely to grant a delegation never connect an
+agent and are not "never-called" churn. Queries: `monitoring.md` 7.20a–d.
+
 ## Event catalog
 
 | Event | Source | Key properties |
