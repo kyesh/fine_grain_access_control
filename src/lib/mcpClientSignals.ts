@@ -174,3 +174,175 @@ export async function parseInitializeClientInfo(req: Request): Promise<McpClient
     return undefined;
   }
 }
+
+/* ------------------------------------------------------------------------ */
+/* Client classification: registry crawlers vs the clients we sell to.      */
+/* ------------------------------------------------------------------------ */
+
+/**
+ * Coarse class of an MCP caller, stamped on `connector_install_started` and
+ * `mcp_auth_attempt` as `client_class` (with the matching rule in
+ * `client_class_signal`) so alerts and funnel queries can leave crawler
+ * traffic out without a hand-maintained filter in every query.
+ *
+ *   - `claude`   — the products the acquisition funnel counts: claude.ai,
+ *                  Claude Code, Cowork/Toolbox, the Sheets add-in.
+ *   - `internal` — FGAC's own synthetic traffic (auth probe, smoke tests).
+ *   - `scanner`  — MCP registry crawlers, directory health probes, "MCP
+ *                  security" scanners, SEO bots. A 401 is the correct answer
+ *                  for every one of them; nothing is blocked or rate-limited
+ *                  on this value — it is a measurement label only.
+ *   - `direct`   — everything else: unknown MCP clients, browsers, curl.
+ *
+ * Why both user_agent and client_name: the registry ecosystem is split. Most
+ * crawlers announce themselves in the user-agent (`SmitheryBot/1.0
+ * (+https://smithery.ai)`), but a large minority run on a stock HTTP client
+ * (`node`, `undici`, `Go-http-client/2.0`, `python-httpx/0.28.1`, Deno on
+ * Supabase) and are only identifiable by the `clientInfo.name` they send in
+ * an unauthenticated `initialize` (`glama`, `verifymcp-probe`,
+ * `MCP-Marketplace-Scanner`). Measured on the first day after the MCP
+ * Registry listing (2026-09-10, ~60 distinct sources in 9 hours): the two
+ * fields together cover the population; either alone misses a third of it.
+ *
+ * Three layers, cheapest first, so a new crawler is usually caught without a
+ * code change:
+ *   1. explicit names / user-agent prefixes for sources whose strings say
+ *      nothing (`glama`, `span-pipeline`, `frndOS`, `python-httpx2/…`);
+ *   2. a vocabulary match on whole tokens of either string (`probe`,
+ *      `scanner`, `crawler`, `health`, `registry`, `census`, …, plus the
+ *      `…Bot` suffix), which is how most of them describe themselves;
+ *   3. the crawler self-identification convention `(+https://…)` /
+ *      `(+mailto:…)` in the user-agent, which no interactive MCP client uses.
+ *
+ * Both inputs are caller-controlled, so the label is spoofable in both
+ * directions — acceptable for the same reason `kid='probe'` is (nothing is
+ * authorized on it; the tool-call volume floor alert is the compensating
+ * control, see docs/monitoring.md 2–3).
+ */
+export type McpClientClass = 'claude' | 'internal' | 'scanner' | 'direct';
+
+export interface McpClientClassification {
+  client_class: McpClientClass;
+  /** Which rule matched, e.g. `ua:SmitheryBot/`, `name:glama`, `keyword:probe`, `ua:self-link`. */
+  client_class_signal?: string;
+}
+
+/** The products whose unauthenticated `initialize` is an install attempt (7.5). */
+const CLAUDE_CLIENT_NAMES = new Set([
+  'anthropic/claudeai',
+  'anthropic/toolbox',
+  'claude-code',
+  'claude-ai',
+  'sheet-add-in',
+]);
+const CLAUDE_UA_PREFIXES = ['Claude-User', 'claude-code/'];
+
+/** FGAC's own probes and smoke tests (clientInfo names used by our scripts and runbooks). */
+const INTERNAL_CLIENT_NAMES = new Set([
+  'auth-probe',
+  'probe',
+  'prod-smoke',
+  'smoke-test',
+  'deploy-smoke',
+  'qa-probe',
+  'post-deploy-probe',
+  'qa-prod-verify',
+  'diag',
+]);
+const INTERNAL_UA_PREFIXES = ['fgac-'];
+
+/**
+ * Sources whose strings carry no crawler vocabulary. Names are compared
+ * case-insensitively and whole; user-agent prefixes are case-sensitive
+ * (they are the product strings as sent). Measured population, 2026-09-10.
+ */
+const SCANNER_CLIENT_NAMES = new Set([
+  'glama',
+  'glama-mcp-inspector',
+  'span-pipeline',
+  'frndos',
+  'reliability-bureau-spike',
+  'measure-mcp-schema',
+  'cracked',
+  'mcp-selection-lab-prospective-gold-lock',
+  'selection lab prospective gold lock',
+  'directory-admin-dashboard',
+]);
+const SCANNER_UA_PREFIXES = [
+  // Not the real httpx UA (`python-httpx/`): the junk-bearer sender that was
+  // every non-probe invalid_token on 2026-09-10.
+  'python-httpx2/',
+  'mcp-selection-lab-',
+  'directory-admin-dashboard-inspection',
+  'Mozilla/5.0 (compatible)', // the bare "compatible" UA is a bot convention
+];
+
+/**
+ * Whole-token vocabulary. Tokens are runs of letters/digits; `bot`,
+ * `scan`, `scanner`, `probe`, `crawler` and `index` also match as suffixes
+ * (`SmitheryBot`, `mcpscan`, `agentprobe`, `mcpindex`). Deliberately absent: `inspector`
+ * (the official MCP Inspector is a person debugging), `client`, `agent`,
+ * `gateway`, `router` (aggregators can front real users).
+ */
+const SCANNER_KEYWORDS = new Set([
+  'bot', 'bots', 'crawler', 'crawl', 'spider',
+  'probe', 'prober', 'probes', 'probing',
+  'scanner', 'scan',
+  'healthcheck', 'health', 'liveness', 'monitor',
+  'census', 'observatory', 'observer', 'witness',
+  'indexer', 'index', 'catalog', 'registry', 'marketplace', 'sync', 'archive', 'ledger',
+  'verify', 'checker', 'grader', 'reputation', 'research', 'inspection', 'introspect',
+  'discovery', 'explorer', 'enricher', 'lab', 'googleother',
+]);
+const SCANNER_SUFFIXES = ['bot', 'scan', 'scanner', 'probe', 'crawler', 'index'];
+const SELF_LINK = /\(\+(https?:\/\/|mailto:|[a-z])/i;
+
+function keywordHit(s: string | undefined): string | undefined {
+  if (!s) return undefined;
+  for (const raw of s.split(/[^A-Za-z0-9]+/)) {
+    if (!raw) continue;
+    const t = raw.toLowerCase();
+    if (SCANNER_KEYWORDS.has(t)) return t;
+    for (const suf of SCANNER_SUFFIXES) {
+      if (t.length > suf.length && t.endsWith(suf)) return suf;
+    }
+  }
+  return undefined;
+}
+
+function prefixHit(s: string | undefined, prefixes: readonly string[]): string | undefined {
+  if (!s) return undefined;
+  return prefixes.find((p) => s.startsWith(p));
+}
+
+export function classifyMcpClient(input: {
+  userAgent?: string;
+  clientName?: string;
+}): McpClientClassification {
+  const ua = input.userAgent?.trim() || undefined;
+  const name = input.clientName?.trim() || undefined;
+  const lname = name?.toLowerCase();
+
+  let p = prefixHit(ua, INTERNAL_UA_PREFIXES);
+  if (p) return { client_class: 'internal', client_class_signal: `ua:${p}` };
+  if (lname && INTERNAL_CLIENT_NAMES.has(lname)) {
+    return { client_class: 'internal', client_class_signal: `name:${lname}` };
+  }
+
+  p = prefixHit(ua, CLAUDE_UA_PREFIXES);
+  if (p) return { client_class: 'claude', client_class_signal: `ua:${p}` };
+  if (lname && CLAUDE_CLIENT_NAMES.has(lname)) {
+    return { client_class: 'claude', client_class_signal: `name:${lname}` };
+  }
+
+  if (lname && SCANNER_CLIENT_NAMES.has(lname)) {
+    return { client_class: 'scanner', client_class_signal: `name:${lname}` };
+  }
+  p = prefixHit(ua, SCANNER_UA_PREFIXES);
+  if (p) return { client_class: 'scanner', client_class_signal: `ua:${p}` };
+  const kw = keywordHit(name) ?? keywordHit(ua);
+  if (kw) return { client_class: 'scanner', client_class_signal: `keyword:${kw}` };
+  if (ua && SELF_LINK.test(ua)) return { client_class: 'scanner', client_class_signal: 'ua:self-link' };
+
+  return { client_class: 'direct' };
+}

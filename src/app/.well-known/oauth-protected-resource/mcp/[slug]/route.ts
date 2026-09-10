@@ -14,7 +14,7 @@ import {
 } from '@clerk/mcp-tools/server';
 import { metadataCorsOptionsRequestHandler } from '@clerk/mcp-tools/next';
 import { captureServerEvent } from '@/lib/posthogServer';
-import { installFingerprint } from '@/lib/mcpClientSignals';
+import { classifyMcpClient, installFingerprint } from '@/lib/mcpClientSignals';
 import { PROFILE_SLUG_RE } from '@/lib/profileSlugs';
 
 export async function GET(
@@ -32,6 +32,7 @@ export async function GET(
     profile_slug: slug,
     user_agent: req.headers.get('user-agent') ?? undefined,
     install_fingerprint: installFingerprint(req),
+    ...classifyMcpClient({ userAgent: req.headers.get('user-agent') ?? undefined }),
   });
 
   const publishableKey = process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
