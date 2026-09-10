@@ -334,6 +334,33 @@ deploy of that git branch. Facts that are easy to get wrong:
 - **Preview branches and local `db:branch` branches share the same Neon branch cap.**
   Both kinds count toward the plan limit; when preview deploys fail instantly with
   empty Builds, check the combined branch count first (read-only) before any cleanup.
+- **Both kinds are pruned on a timer.** `bash scripts/cleanup-neon-branches.sh`
+  (`npm run db:prune-branches`, and a daily scheduled task) deletes any branch whose
+  compute has been idle more than 6h, once EITHER it is older than 24h OR the PR for
+  its git branch is merged. A worktree checkout protects nothing. **Git state can only
+  bring deletion forward, never hold it off** — that direction is the invariant; a git
+  fact used as a *keep* is what let leftover worktrees pin branches forever. If the PR
+  lookup fails (no `gh`), merged-PR pruning goes quiet and the 24h clock still applies. So:
+  - **Merging a PR ends its local `db:branch` database immediately** — no idle wait,
+    on the next prune. The running-compute guard is the only thing left protecting it,
+    and Neon suspends compute after a few minutes, so a dev server sitting idle between
+    queries does NOT count as running. Its `preview/` twin gets the 6h idle floor,
+    because a deployed URL can be hit by anyone at any moment. **Finish QA against a
+    branch before you merge, not after.**
+  - **A preview whose PR is still open is not exempt either.** If its preview URL has
+    been quiet for 6h AND it is over 24h old, the database goes; redeploy the PR to get
+    a fresh branch. To keep one across the timers, mark it `protected` in the Neon
+    console — that is the only opt-out.
+  - **A worktree you come back to after a day needs `npm run db:branch` again.** Its
+    `.env.local` still names the deleted branch, and the dev server will fail to
+    connect until you re-run it. The replacement is a fresh copy of main: accumulated
+    QA state (approved connections, proxy keys, rules) does not survive, so re-run the
+    relevant `docs/QA_Acceptance_Test/setup/` steps before trusting a stale worktree.
+  - **A branch with compute running right now is never deleted**, so a live dev server
+    or an in-flight preview request cannot lose its database mid-run.
+  - Leftover worktree directories no longer pin database branches. `npm run
+    worktrees:report` lists finished ones; it only reports — removing a worktree stays
+    a manual decision, because a clean merged directory can still be a live session's cwd.
 
 ## Database Rules
 

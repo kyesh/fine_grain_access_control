@@ -52,7 +52,17 @@ async function probe(
 }
 
 const mcpBody = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' });
-const mcpHeaders = { 'content-type': 'application/json', accept: 'application/json, text/event-stream' };
+// Self-identifying user-agent: the `fgac-` prefix classifies every request
+// this script makes as client_class='internal' (src/lib/mcpClientSignals.ts),
+// so the probe's own 401s never read as install attempts or as a 401 storm.
+// Before 2026-09-10 the probe sent Node's default `node` UA and its no_token
+// rows were indistinguishable from a registry crawler on the same runtime.
+const PROBE_USER_AGENT = 'fgac-auth-probe/1 (+https://github.com/kyesh/fine_grain_access_control)';
+const mcpHeaders = {
+  'content-type': 'application/json',
+  accept: 'application/json, text/event-stream',
+  'user-agent': PROBE_USER_AGENT,
+};
 
 async function main() {
   const results: ProbeResult[] = [];
@@ -83,7 +93,7 @@ async function main() {
     await probe(
       'oauth-resource-metadata',
       '/.well-known/oauth-protected-resource/mcp',
-      { method: 'GET' },
+      { method: 'GET', headers: { 'user-agent': PROBE_USER_AGENT } },
       async (res) => {
         if (res.status !== 200) return `expected 200, got ${res.status}`;
         const body = await res.json().catch(() => null);
@@ -99,7 +109,7 @@ async function main() {
       await probe(
         'proxy-authenticated',
         '/api/proxy/gmail/v1/users/me/profile',
-        { method: 'GET', headers: { authorization: `Bearer ${proxyKey}` } },
+        { method: 'GET', headers: { authorization: `Bearer ${proxyKey}`, 'user-agent': PROBE_USER_AGENT } },
         async (res) => (res.status === 200 ? null : `expected 200, got ${res.status}`),
       ),
     );

@@ -24,6 +24,8 @@ Captured in `verifyMcpAuth` (`src/app/api/mcp/route.ts`):
 | `method` | HTTP verb (`POST`; a `GET` is a client opening the optional SSE stream and taking the stateless 405 — rare in production, one per process start for a locally run CLI) |
 | `connection_resolve` | what the auth layer's eager `resolveConnection` did on this request: `ran` (four Neon round trips), `skipped` (touched within the last 5 minutes by the same user+client — `src/lib/connectionTouchMemo.ts`), `error`. Added 2026-09-08 |
 | `connection_resolve_ms` | wall time of that eager resolve when it ran; the per-request DB cost of a handshake (see 7.16) |
+| `user_agent`, `client_name` | who failed: the request's UA and, when the unauthenticated request was an MCP `initialize`, its self-reported `clientInfo.name`. Added 2026-09-10 so a 401 spike is diagnosable from this event alone (the registry-launch spike had to be attributed by joining `connector_install_started` by minute) |
+| `client_class`, `client_class_signal` | `claude` \| `internal` \| `scanner` \| `direct`, and the rule that decided it (`ua:SmitheryBot/`, `name:glama`, `keyword:probe`, `ua:self-link`). `scanner` = MCP registry crawlers, directory health probes, "MCP security" scanners, SEO bots — classified from **both** fields because about a third of them run on a stock `node` / `undici` / `Go-http-client` / `python-httpx` UA and only identify themselves in `clientInfo.name`. `classifyMcpClient` in `src/lib/mcpClientSignals.ts`; also stamped on `connector_install_started`. A measurement label only: nothing is blocked or rate-limited on it, and a 401 is the correct answer to every probe. Added 2026-09-10; see 7.21 |
 
 Volume control: failures always capture; successes are sampled **1 in 20 per
 request** (`success_sample_rate` carries the factor). Multiply `outcome=ok`
@@ -94,7 +96,7 @@ are the trustworthy series for any historical question.
 | alert | insight | threshold | rationale |
 | --- | --- | --- | --- |
 | MCP tool-call volume floor | [MFYwjsQU](https://us.posthog.com/project/343912/insights/MFYwjsQU) | completed day < 50 tool calls | observed daily range 168–1,203 post-launch; near-zero = clients silently locked out |
-| MCP invalid_token spike | [mGzUClRs](https://us.posthog.com/project/343912/insights/mGzUClRs) | day (incl. today) > 50 invalid_token failures, **excluding `kid = 'probe'`** | real-user baseline is **0/day**; a spike means verification broke or a rejection storm |
+| MCP invalid_token spike | [mGzUClRs](https://us.posthog.com/project/343912/insights/mGzUClRs) | day (incl. today) > 50 invalid_token failures, **excluding `kid = 'probe'` and `client_class IN ('scanner', 'internal')`** | real-user baseline is **0–2/day**; a spike means verification broke or a rejection storm |
 
 **The invalid_token alert must exclude our own synthetic probes.** Every
 `invalid_token` event carrying `kid = 'probe'` comes from
@@ -129,6 +131,35 @@ The compensating control is the tool-call **volume floor** alert, which is
 driven by authenticated traffic and cannot be suppressed this way. If probe
 contamination ever needs a non-spoofable fix, give the probe its own path or a
 dedicated environment rather than trusting a token claim.
+
+**The stored insight did not carry the probe filter (found 2026-09-10).**
+Read back through the API that day, insight 11264607's definition held only
+`environment = production` and `outcome = invalid_token` — the `kid != 'probe'`
+exclusion this section describes was never on it, so the alert has been
+counting our own probe all along and stayed quiet only because GitHub
+throttles the schedule (4–10 probe rows/day). The fix is two property filters
+on the insight, and **it is a user action** — the automation key has
+`query:read` only (`insight:write` denied):
+
+1. `kid` **is not** `probe`
+2. `client_class` **is not** `scanner`, `internal`
+
+PostHog's *is not* matches events that lack the property, so rows from before
+the 2026-09-10 deploy stay counted (they carry no class) and no history is
+lost. The threshold stays at 50: with both exclusions the real-user rate is
+0–2/day (7.21), and the 09-10 crawler wave — 28 junk-bearer rows from one
+`python-httpx2/…` client in nine hours, on pace for ~75/day — is exactly the
+traffic the second filter removes.
+
+**Why a second exclusion.** The MCP Registry listing (2026-09-10) brought a
+population of registry crawlers, health probes and security scanners that
+send no token or a junk bearer. `no_token` went 35/day → 216 in the first
+eleven hours; every non-probe `invalid_token` that day came from a single
+scanner. Their 401s are correct behaviour, not a regression, and they must
+not read as one: `client_class` (section 1) is the label, 7.21 is the
+reading. Like `kid`, the class is derived from caller-controlled strings and
+is spoofable in both directions; the same compensating control applies (the
+tool-call volume floor is driven by authenticated traffic).
 
 Threshold review: revisit both after 2 weeks of `mcp_auth_attempt` history.
 
@@ -326,9 +357,13 @@ it is useless: every claude.ai request arrives from Anthropic's shared egress
 proxy, so one fingerprint is one Anthropic IP serving many users** (measured
 2026-09-08: 22 fingerprints for `Anthropic/ClaudeAI` over three weeks, 16 of
 them recurring across days, against 55 completed connections). Fingerprints
-still de-duplicate direct clients (claude-code, curl, scanners) and are the
-right filter for excluding crawlers, but never divide sign-ups by them for a
-claude.ai conversion rate.
+still de-duplicate direct clients (claude-code, curl), but never divide
+sign-ups by them for a claude.ai conversion rate — and since 2026-09-10 they
+must also exclude `client_class IN ('scanner', 'internal')`: the MCP Registry
+listing took `direct_client_fingerprints` from 11–17/day to 96 in its first
+nine hours on crawler traffic alone (7.21). Rows before that deploy carry no
+class; on those days the column is contaminated by whatever crawlers were
+active (a handful/day before the listing).
 
 The usable proxy for "clicked Connect in the directory" is the count of
 unauthenticated claude.ai `initialize` requests: one per install attempt, plus
@@ -341,8 +376,11 @@ Anthropic's side (the listing dashboard's "accounts that sent any message").
 SELECT toDate(timestamp) AS day,
        countIf(properties.client_name = 'Anthropic/ClaudeAI') AS claudeai_unauth_initializes,
        countIf(properties.client_name = 'claude-code')        AS claude_code_unauth_initializes,
-       uniqIf(properties.install_fingerprint, properties.user_agent NOT IN ('Claude-User'))
+       uniqIf(properties.install_fingerprint,
+              properties.user_agent NOT IN ('Claude-User')
+              AND coalesce(properties.client_class, '') NOT IN ('scanner', 'internal'))
                                                               AS direct_client_fingerprints,
+       countIf(properties.client_class = 'scanner')           AS scanner_401s,
        count()                                                AS raw_401_volume
 FROM events
 WHERE event = 'connector_install_started'
@@ -513,6 +551,11 @@ WHERE event = 'mcp_transport_rejected' AND properties.environment = 'production'
   AND timestamp > now() - INTERVAL 7 DAY
 GROUP BY status, reason, rpc_method, message, pv ORDER BY n DESC
 ```
+
+Registry crawlers never appear here: this wrapper runs inside the auth
+layer, so an unauthenticated request is answered 401 before it (verified
+2026-09-10, the first registry-crawler day: every `mcp_transport_rejected`
+row carried a real person, none `anonymous-mcp`).
 
 Healthy: `discover_probe` rows at roughly 10% of `mcp_client_initialize`
 volume, a steady low `sdk`/`parse_error` trickle, and **zero**
@@ -995,6 +1038,13 @@ Established 2026-09-08 (listing live since 2026-08-16):
   launch accounts and their disconnects age out together.
 - Not causes: `discover_probe` 400s (7.9), `invalid_token` rows (the `probe`
   kid), duplicate same-minute connection rows at install time.
+- Registry crawlers (7.21) cannot enter this model or 7.16: they never
+  authenticate, so they never produce `mcp_client_initialize`,
+  `$mcp_tool_call` or a connection row (verified 2026-09-10: no scanner
+  `client_name` on any authenticated event; the only names there are
+  `claude-code`, `Anthropic/ClaudeAI`, `Anthropic/Toolbox`, `sheet-add-in`,
+  `claude-ai`). Anthropic's denominator counts *Claude accounts* that sent a
+  message, which a tokenless crawler is not.
 
 ```sql
 -- Never-called accounts that have gone quiet, by week of first connection.
@@ -1137,3 +1187,286 @@ open rate far below the sibling action (docs vs sheets) with a normal
 approve-given-open rate is not a page problem — look at what minted the links
 (`$mcp_tool_call` rows carrying `approval_request_id`: which tool, in what
 burst, after what) before changing the approve page.
+
+**7.20 — Domain concentration (organizations clustering).** Answers "are
+several people from the same company or university showing up, and how is
+that organization using FGAC?" — the daily review's DOMAIN CONCENTRATION
+section. Two lenses, because the organization can appear in either:
+
+- **Sign-up lens (7.20a)** — `person.properties.email` on
+  `sign_up_completed`, the Google address the account was created with.
+- **Mailbox lens (7.20b)** — `properties.account_email` on `$mcp_tool_call`,
+  the mailbox actually being read or written. This is the lens that catches an
+  organization whose operator signed up with a gmail.com address, or an
+  operator at one company reading a sister company's mailbox: the
+  `accessor_domains` column shows the pairing.
+
+Both roll domains up to a **family key** — the first DNS label with hyphens
+stripped — so `example.co`, `example.co.uk` and `example-co.com` read as one
+organization (measured 2026-09-10: one customer spanned three variants and
+would otherwise have looked like three two-person domains). The key is a
+heuristic: an academic subdomain such as `alumni.<university>.edu` keeps the
+subdomain label, so always read the `domains` array next to it. Consumer
+mailbox providers are excluded by the list inside the query — extend it when
+a new one shows up, never shrink it. Universities and schools (`.edu`,
+`.ac.*`, `.sch.*`, `.edu.<cc>`) are **not** consumer domains and are the
+clusters most worth highlighting.
+
+The shapes an organization takes (name which one each family is in):
+
+| shape | signature | reading |
+| --- | --- | --- |
+| delegation rollout | `signed_up ≈ delegators + 1`, `connected = 1`, `callers = 1`, `delegated_calls` high | one operator's agent, teammates who signed up only to grant delegation — the org-adoption shape the delegation model produces. The teammates never connected an agent, so they must **not** be counted in the never-called disconnect pool (7.17) or the churn buckets |
+| team of connectors | `connected ≥ 2`, `callers ≥ 2` | several people each running their own agent |
+| stalled rollout | `delegators ≥ 1`, `callers = 0` | delegations granted, no operator ever called — the nudge belongs on the delegation-accepted surface |
+| cross-domain operator | 7.20b `accessor_domains` ≠ `mailbox_domains` | a consultant / assistant reading a company mailbox; the company is the customer even though no company address signed up |
+| single power user | one person, sustained volume | expansion candidate, not concentration |
+
+```sql
+-- 7.20a — sign-up lens, rolled up by domain family (90 d)
+SELECT replaceAll(splitByChar('.', domain)[1], '-', '') AS family,
+       groupUniqArray(domain)                               AS domains,
+       uniq(person_id)                                      AS persons,
+       uniqIf(person_id, timestamp >= now() - INTERVAL 7 DAY)  AS new_7d,
+       uniqIf(person_id, timestamp >= now() - INTERVAL 14 DAY
+                     AND timestamp <  now() - INTERVAL 7 DAY)  AS new_prev_7d,
+       min(toDate(timestamp)) AS first_signup,
+       max(toDate(timestamp)) AS last_signup
+FROM (
+  SELECT person_id, timestamp,
+         splitByChar('@', lower(coalesce(person.properties.email, '')))[2] AS domain
+  FROM events
+  WHERE event = 'sign_up_completed'
+    AND timestamp >= now() - INTERVAL 90 DAY
+    AND person.properties.email NOT IN (/* internal + QA accounts — the same list every §7 query uses, never inline them here */)
+)
+WHERE domain != ''
+  AND domain NOT IN (  -- consumer providers: extend, never shrink
+    'gmail.com','googlemail.com','yahoo.com','yahoo.co.uk','yahoo.com.au','yahoo.ca',
+    'hotmail.com','hotmail.co.uk','hotmail.fr','outlook.com','live.com','live.co.uk','msn.com',
+    'icloud.com','me.com','mac.com','aol.com','protonmail.com','proton.me','pm.me','ymail.com',
+    'qq.com','163.com','126.com','gmx.com','gmx.de','gmx.net','web.de','mail.ru','yandex.ru',
+    'yandex.com','zoho.com','hey.com','fastmail.com','mail.com','duck.com','tutanota.com')
+GROUP BY family
+HAVING persons >= 2 OR new_7d >= 1
+ORDER BY new_7d DESC, persons DESC
+```
+
+```sql
+-- 7.20b — mailbox lens: whose mailboxes are being accessed, by whom (30 d)
+SELECT replaceAll(splitByChar('.', mailbox_domain)[1], '-', '') AS family,
+       groupUniqArray(mailbox_domain)      AS mailbox_domains,
+       uniq(properties.account_email)      AS mailboxes,
+       uniq(person_id)                     AS accessors,
+       groupUniqArray(person_domain)       AS accessor_domains,
+       count()                                                     AS calls,
+       countIf(properties.outcome = 'success')                     AS ok,
+       countIf(toString(properties.account_delegated) = 'true')    AS delegated_calls,
+       uniqIf(properties.account_email, timestamp >= now() - INTERVAL 7 DAY)  AS mailboxes_7d,
+       uniqIf(properties.account_email, timestamp >= now() - INTERVAL 14 DAY
+                                    AND timestamp <  now() - INTERVAL 7 DAY)  AS mailboxes_prev_7d,
+       min(toDate(timestamp)) AS first_call,
+       max(toDate(timestamp)) AS last_call
+FROM (
+  SELECT person_id, timestamp, properties,
+         splitByChar('@', lower(coalesce(properties.account_email, '')))[2] AS mailbox_domain,
+         splitByChar('@', lower(coalesce(person.properties.email, '')))[2]  AS person_domain
+  FROM events
+  WHERE event IN ('$mcp_tool_call', 'mcp_tool_call')
+    AND properties.environment = 'production'
+    AND timestamp >= now() - INTERVAL 30 DAY
+    AND distinct_id NOT IN ('anonymous-proxy', 'anonymous-mcp')
+    AND person.properties.email NOT IN (/* internal + QA accounts */)
+    AND lower(properties.account_email) NOT IN (/* internal + QA accounts */)
+)
+WHERE mailbox_domain != ''
+  AND mailbox_domain NOT IN (/* the same consumer-provider list as 7.20a */)
+GROUP BY family
+HAVING mailboxes >= 2 OR delegated_calls > 0
+ORDER BY mailboxes DESC, calls DESC
+```
+
+```sql
+-- 7.20c — one organization's profile: funnel + how they use it (30 d).
+-- Matches on EITHER lens so a gmail-address operator reading company
+-- mailboxes is attributed to the company.
+SELECT uniqIf(person_id, event = 'sign_up_completed')      AS signed_up,
+       uniqIf(person_id, event = 'mcp_connection_created') AS connected,
+       uniqIf(person_id, event = 'delegation_created')     AS delegators,
+       uniqIf(person_id, event = 'account_linked')         AS linkers,
+       uniqIf(person_id, event = '$pageview'
+                     AND properties.$current_url LIKE '%/dashboard%') AS dashboard_viewers,
+       uniqIf(person_id, is_call)                          AS callers,
+       groupUniqArrayIf(person_domain, is_call)            AS caller_domains,
+       uniqIf(properties.account_email, is_call)           AS mailboxes,
+       countIf(is_call)                                                        AS calls,
+       countIf(is_call AND properties.outcome = 'success')                     AS ok,
+       countIf(is_call AND properties.outcome = 'denied_by_policy')            AS denied,
+       countIf(is_call AND properties.outcome IN ('failed','error','exception')) AS errors,
+       countIf(is_call AND toString(properties.account_delegated) = 'true')    AS delegated_calls,
+       countIf(is_call AND tool LIKE 'gmail_%')                                AS gmail_calls,
+       countIf(is_call AND (tool LIKE 'sheets_%' OR tool LIKE 'docs_%'))       AS sheets_docs_calls,
+       countIf(is_call AND tool LIKE 'google_api_%')                           AS raw_api_calls,
+       countIf(is_call AND tool IN ('gmail_send','sheets_update_range','sheets_append_rows',
+                                    'sheets_edit','docs_edit','google_api_modify')) AS write_calls,
+       uniqIf(toDate(timestamp), is_call) AS active_days,
+       minIf(toDate(timestamp), is_call)  AS first_call,
+       maxIf(toDate(timestamp), is_call)  AS last_call
+FROM (
+  SELECT person_id, event, timestamp, properties,
+         splitByChar('@', lower(coalesce(person.properties.email, '')))[2] AS person_domain,
+         replaceAll(splitByChar('.', splitByChar('@', lower(coalesce(person.properties.email, '')))[2])[1], '-', '')     AS person_family,
+         replaceAll(splitByChar('.', splitByChar('@', lower(coalesce(properties.account_email, '')))[2])[1], '-', '')    AS mailbox_family,
+         event IN ('$mcp_tool_call', 'mcp_tool_call')            AS is_call,
+         coalesce(properties.$mcp_tool_name, properties.tool)     AS tool
+  FROM events
+  WHERE timestamp >= now() - INTERVAL 30 DAY
+    AND (properties.environment = 'production' OR event = '$pageview')
+    AND distinct_id NOT IN ('anonymous-proxy', 'anonymous-mcp')
+    AND person.properties.email NOT IN (/* internal + QA accounts */)
+)
+WHERE person_family = '<family>' OR mailbox_family = '<family>'
+```
+
+```sql
+-- 7.20d — weekly trend: how much of sign-up growth is organizational (8 wk)
+SELECT toStartOfWeek(timestamp, 1) AS week,
+       uniq(person_id) AS signups,
+       uniqIf(person_id, domain NOT IN (/* consumer list */) AND domain != '') AS org_signups,
+       uniqIf(domain,    domain NOT IN (/* consumer list */) AND domain != '') AS org_domains
+FROM (
+  SELECT person_id, timestamp,
+         splitByChar('@', lower(coalesce(person.properties.email, '')))[2] AS domain
+  FROM events
+  WHERE event = 'sign_up_completed'
+    AND timestamp >= now() - INTERVAL 8 WEEK
+    AND person.properties.email NOT IN (/* internal + QA accounts */)
+)
+GROUP BY week ORDER BY week
+```
+
+Read 7.20a and 7.20b together: a family that is large in (a) but absent from
+(b) is a stalled rollout; one that is large in (b) but absent from (a) is a
+cross-domain operator. Run 7.20c only for the families that clear the bar
+(≥ 2 persons or mailboxes, or a first appearance this week) and describe each
+in one sentence: read vs write mix, delegated share, active days, whether
+`mailboxes_7d` is growing against `mailboxes_prev_7d`. Baseline 2026-09-10:
+org-domain sign-ups were roughly a quarter to a third of weekly sign-ups
+until the week of 2026-09-07, when a single ten-account delegation rollout
+lifted the share above half; the largest family before that spanned five
+accounts across three domain variants. A sudden `new_7d` spike at one family
+is the signal Ken wants surfaced, not the raw share.
+
+**7.21 — Registry probe volume (`client_class`).** Added 2026-09-10, the
+day after the MCP Registry listing (`ai.fgac/fgac`, `docs/growth-channels.md`).
+From 02:00Z that day a population of registry crawlers, health probes and
+"MCP security" scanners began hitting `POST /api/mcp` without a token or with
+a junk bearer — a launch burst, then a recurring floor of health checks.
+Measured, production:
+
+| | 09-07 | 09-08 | 09-09 | 09-10 (to 11:20Z) |
+| --- | --- | --- | --- | --- |
+| `no_token` | 34 | 36 | 35 | 216 |
+| `invalid_token` (of which `kid='probe'`) | 9 (7) | 7 (7) | 8 (8) | 32 (4) |
+| unauthenticated `initialize` with a client_name | 18 | 21 | 24 | 158 |
+| bare POST / GET / HEAD, no token | 16 | 15 | 11 | 58 |
+| distinct fingerprints, non-claude.ai POST | 12 | 10 | 16 | 96 |
+
+Hourly `no_token` on 09-10: 02Z 11 · 03Z 55 · 04Z 33 · 05Z 18 · 06Z 23 ·
+07Z 18 · 08Z 20 · 09Z 24 · 10Z 10 — the floor after the burst is
+health-check cadence (glama alone re-probed 23 times from one address in
+seven hours), not one-off crawls. **Re-verify the floor over 48 h before
+moving any threshold**; the figures above are eleven hours of data.
+
+What the 09-10 population looked like (~60 distinct sources in nine hours):
+
+- Self-describing UAs: `SmitheryBot/1.0 (+https://smithery.ai)`,
+  `ProofBench/0.1 (…MCP registry health probe)`, `mcpscan/0.1 (…non-intrusive
+  security scan)`, `MCPWatch/0.1.0 (…longitudinal MCP security research)`,
+  `exaforce-mcprep/0.1 (MCP server reputation scanner)`, `mcp-observatory`,
+  `mcp-infra-census`, `agentprobe`, `MCPMeter`, `MJ12bot`, …
+- Stock UAs identifiable only by `client_name`: `node` → `glama`, `undici` →
+  `glama-mcp-inspector` / `span-pipeline` / `fig-catalog-sync`,
+  `Go-http-client/2.0` → `verifymcp-probe`, `Deno/… SupabaseEdgeRuntime` →
+  `MCP-Marketplace-Scanner` / `-Enricher`, `python-httpx/0.28.1` →
+  `ox-pkg-scanner-probe`, `GuzzleHttp/7` → `frndOS`. This is why the class is
+  computed from both fields; either alone misses about a third.
+- `python-httpx2/2.12.0` (not the real httpx UA) with `client_name = 'mcp'`
+  (the Python MCP SDK's default, so the name alone is not a tell): sends a
+  non-JWT bearer, then an `initialize`, in pairs — **all 28 non-probe
+  `invalid_token` rows that day**, from 4 addresses. Classified on the UA
+  prefix.
+- Pre-existing, not from the registry: `ado-p5-health/1` (GET, ~16/day since
+  before 08-27), `mcp-reputation-scanner`, `tedix-mcp-scanner`, search-engine
+  bots on GET. And a `python-httpx/0.28.1` client that self-reports
+  `client_name = 'Anthropic'`, ~6 tokenless initializes/day from 4–8
+  addresses since at least 2026-08-28, never authenticated — plausibly the
+  Connector Directory's own health check, or API `mcp_servers` calls made
+  without a token; **left `direct`** until that is established (it is a
+  constant, not part of the 09-10 delta).
+
+```sql
+-- 7.21a — daily auth failures by class (14 d). `direct` is the unclassified
+-- remainder: a jump there is either a crawler the classifier misses (add it
+-- to src/lib/mcpClientSignals.ts) or a real client that broke — split by
+-- 7.21b before deciding.
+SELECT toDate(timestamp) AS day,
+       coalesce(properties.client_class, 'pre-deploy') AS class,
+       countIf(properties.outcome = 'no_token')      AS no_token,
+       countIf(properties.outcome = 'invalid_token') AS invalid_token,
+       uniq(properties.user_agent)                   AS user_agents,
+       uniq(properties.client_name)                  AS client_names
+FROM events
+WHERE event = 'mcp_auth_attempt' AND properties.environment = 'production'
+  AND properties.outcome != 'ok'
+  AND timestamp > now() - INTERVAL 14 DAY
+GROUP BY day, class ORDER BY day, class
+```
+
+```sql
+-- 7.21b — who is behind the failures (48 h): one row per UA × client_name
+-- with the rule that classified it. Read `direct` rows top-down; a source
+-- that recurs daily with the same fingerprint count is a health check.
+SELECT properties.client_class AS class, properties.client_class_signal AS signal,
+       properties.user_agent AS ua, properties.client_name AS client_name,
+       count() AS failures, uniq(toStartOfHour(timestamp)) AS active_hours
+FROM events
+WHERE event = 'mcp_auth_attempt' AND properties.environment = 'production'
+  AND properties.outcome != 'ok'
+  AND timestamp > now() - INTERVAL 48 HOUR
+GROUP BY class, signal, ua, client_name
+ORDER BY class, failures DESC
+LIMIT 80
+```
+
+```sql
+-- 7.21c — the hourly floor (48 h), scanner vs everything else.
+SELECT toStartOfHour(timestamp) AS hour,
+       countIf(properties.client_class = 'scanner')                       AS scanner,
+       countIf(coalesce(properties.client_class, '') NOT IN ('scanner', 'internal')) AS other
+FROM events
+WHERE event = 'mcp_auth_attempt' AND properties.environment = 'production'
+  AND properties.outcome != 'ok'
+  AND timestamp > now() - INTERVAL 48 HOUR
+GROUP BY hour ORDER BY hour
+```
+
+```sql
+-- 7.21d — the alarm condition: a scanner that authenticated (should be 0).
+SELECT properties.client_name, properties.user_agent, count()
+FROM events
+WHERE event = 'mcp_auth_attempt' AND properties.environment = 'production'
+  AND properties.outcome = 'ok' AND properties.client_class = 'scanner'
+  AND timestamp > now() - INTERVAL 7 DAY
+GROUP BY 1, 2
+```
+
+Reading it, in the daily review: one line of *traffic* — "registry probes:
+N/day from M sources, floor ~K/h" — never an auth finding. Do not block or
+rate-limit any of it: several sources are the registry's own health checks
+and a 401 is what keeps the listing healthy. It becomes a flag only when
+7.21d is non-empty, or when `direct`-class failures jump and 7.21b shows a
+real client behind them. Our own probe is `internal` by its `fgac-auth-probe`
+UA (since 2026-09-10; before that its `no_token` rows sat under `node`,
+indistinguishable from glama on the same runtime) and its `invalid_token`
+rows still carry `kid = 'probe'` — keep both exclusions.

@@ -32,7 +32,7 @@ import { captureServerEvent } from '@/lib/posthogServer';
 import { runWithToolCallProps, addToolCallProps, getToolCallProps } from '@/lib/toolCallContext';
 import { cleanResourceName } from '@/lib/pickerRecoveryCopy';
 import { GOOGLE_FETCH_TIMEOUT_MS, CLERK_TOKEN_TIMEOUT_MS, withTimeout, isUpstreamTimeout } from '@/lib/upstreamTimeouts';
-import { classifyTransportRejection, installFingerprint, parseInitializeClientInfo, parseRpcEnvelope, resourceIdHash, type McpClientInfo } from '@/lib/mcpClientSignals';
+import { classifyMcpClient, classifyTransportRejection, installFingerprint, parseInitializeClientInfo, parseRpcEnvelope, resourceIdHash, type McpClientInfo } from '@/lib/mcpClientSignals';
 import { recordEagerResolve, shouldSkipEagerResolve } from '@/lib/connectionTouchMemo';
 import { after } from 'next/server';
 import { inSuccessSample, AUTH_SUCCESS_SAMPLE } from '@/lib/authSampling';
@@ -3301,6 +3301,10 @@ const verifyMcpAuth = async (req: Request, bearerToken?: string) => {
   // undefined for every other request.
   const clientInfo = await parseInitializeClientInfo(req);
   const userAgent = req.headers.get('user-agent') ?? undefined;
+  // Registry crawler / health probe / our own probe / Claude product / other —
+  // a measurement label (nothing is authorized or rate-limited on it) that
+  // lets the auth alert and the install funnel leave scanner traffic out.
+  const clientClass = classifyMcpClient({ userAgent, clientName: clientInfo?.name });
   // Set by middleware when the client connected via /api/mcp/<slug>.
   const profileSlug = req.headers.get('x-fgac-profile-slug') ?? undefined;
 
@@ -3332,6 +3336,12 @@ const verifyMcpAuth = async (req: Request, bearerToken?: string) => {
         method: req.method,
         connection_resolve: connectionResolve,
         connection_resolve_ms: connectionResolveMs,
+        // Who failed (added 2026-09-10, the day after the MCP Registry listing
+        // brought ~60 crawlers): a 401 spike is diagnosable from this event
+        // alone instead of by joining connector_install_started by minute.
+        user_agent: userAgent,
+        client_name: clientInfo?.name,
+        ...clientClass,
       },
     );
   };
@@ -3358,6 +3368,7 @@ const verifyMcpAuth = async (req: Request, bearerToken?: string) => {
       install_fingerprint: installFingerprint(req),
       client_name: clientInfo?.name,
       client_version: clientInfo?.version,
+      ...clientClass,
     });
   }
 
