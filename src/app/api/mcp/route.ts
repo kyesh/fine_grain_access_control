@@ -40,6 +40,10 @@ import { ensureDefaultProfile } from '@/db/defaultProfile';
 import { mintApprovalLink, type ApprovalAction } from '@/lib/approvalLinks';
 import { connectionsDeepLink } from '@/lib/dashboardAgentLinks';
 import { recordApprovalMint, getApprovalRequestResourceName } from '@/lib/approvalRequests';
+import {
+  AGENT_APPROVAL_PROTOCOL, SEND_DISABLED_MESSAGE, recipientNotWhitelistedMessage,
+  accountNotPermittedByCaller, accountNotPermittedByDefault, withNoLinkStop, withLinkUnavailableStop, LINK_UNAVAILABLE_STOP,
+} from '@/lib/denialCopy';
 import { TOOL_DEFS, toolAnnotations, type FgacToolDef } from './toolDefs';
 import {
   classifyGoogleApiCall, canonicalizeGoogleApiPath, extractSendRecipients, extractDraftSendInfo,
@@ -613,7 +617,7 @@ function checkSendWhitelist(rules: ApplicableRules, recipients: string[] | null)
 
   if (sendRules.length === 0) {
     return {
-      message: '🚫 Sending is disabled on this profile (no send whitelist configured). This is the safe default.',
+      message: SEND_DISABLED_MESSAGE,
       deniedRecipient: recipients[0],
       code: 'send_disabled',
     };
@@ -629,7 +633,7 @@ function checkSendWhitelist(rules: ApplicableRules, recipients: string[] | null)
     }
     if (!isWhitelisted) {
       return {
-        message: `🚫 Unauthorized recipient. '${recipient}' is not in the send whitelist.`,
+        message: recipientNotWhitelistedMessage(recipient),
         deniedRecipient: recipient,
         code: 'recipient_not_whitelisted',
       };
@@ -655,7 +659,9 @@ async function policyDenialWithLink(
   message: string,
   action: ApprovalAction | null,
 ) {
-  if (!action) return textResult(message);
+  // No action = nothing an agent can request lifts this (explicit block):
+  // say so, or the agent gets "Access Denied" and tries again.
+  if (!action) return textResult(withNoLinkStop(message));
   try {
     const { url, requestId, targetHash } = await mintApprovalLink(DASHBOARD_URL, conn.user.id, proxyKeyId, action);
     const mintCount = await recordApprovalMint({
@@ -679,28 +685,11 @@ async function policyDenialWithLink(
     );
   } catch (err) {
     console.error('[MCP] Failed to mint approval link:', err);
-    return textResult(message);
+    return textResult(withLinkUnavailableStop(message));
   }
 }
 
-/**
- * Appended to every denial that carries an approval link.
- *
- * Originally added 2026-08-19 on the theory that agents were dropping the URL
- * when paraphrasing. Measured afterwards, that theory did not hold: most users
- * DO open their links, and the apparent shortfall was retry-inflated counting
- * (see approvalLinks.ts). What the data does show is that retrying is pure
- * waste — the same request re-emits the same URL — so the protocol now says
- * to stop and ask the user rather than to expect a fresh link.
- */
-const AGENT_APPROVAL_PROTOCOL =
-  'IMPORTANT — how to handle this: (1) Show the link above to the user VERBATIM as a clickable URL; only they can open it, and it is the only way to get access. ' +
-  '(2) Do NOT retry the denied call until the user says they approved — retrying just fails again, and re-requesting returns the SAME link. ' +
-  '(3) The link does not expire — if the user has not opened it yet, ask them directly rather than retrying. ' +
-  // (4) added 2026-09-08: a file Google does not share with FGAC yet cannot be
-  // resolved by title, so the approval page shows a raw Google id — while
-  // Google's Picker lists files by NAME. Users opened the Picker and closed it.
-  '(4) For a spreadsheet or document, tell the user the file\'s NAME along with the link: the approval page can only show Google\'s file id for a file FGAC cannot reach yet, and the user has to find the file by name in Google\'s picker. If you know the title, call request_access with resourceName so the page shows it.';
+// AGENT_APPROVAL_PROTOCOL lives in src/lib/denialCopy.ts (tested by scripts/test-denial-copy.ts).
 
 /**
  * Send denials offer BOTH one-click options: approve just this recipient, or
@@ -744,6 +733,7 @@ async function sendDenialWithLinks(
     lines.push(AGENT_APPROVAL_PROTOCOL);
   } catch (err) {
     console.error('[MCP] Failed to mint approval link:', err);
+    lines.push(LINK_UNAVAILABLE_STOP);
   }
   return textResult(lines.join('\n'));
 }
@@ -1643,13 +1633,16 @@ async function resolveAccountAndToken(
       // with a stated fix, not a malfunction — one Claude-desktop scheduled job
       // hit the ❌ form of this every hour for four days (2026-09-05 → 09-08),
       // each hit counting in the published error rate, and the response never
-      // said "drop the parameter". The implicit case below (no account given,
-      // owner's own address not on the key) stays ❌: nothing the caller sent
-      // caused it.
+      // said "drop the parameter". Stating the fix was not enough for THAT
+      // caller: the job re-sends the same value every hour with a fresh
+      // context (23 more hits 2026-09-09 → 09-11), so the text now also says
+      // the task itself must change. The implicit case below (no account
+      // given, owner's own address not on the key) stays ❌: nothing the
+      // caller sent caused it — but it names what would work.
       addToolCallProps({ failure_reason: 'account_not_permitted', denial_code: 'account_not_permitted' });
-      return { error: `🚫 This connection cannot use the account '${targetEmail}'. Accounts it can use: ${usable}. Omit the "account" parameter to use the default account, or pass one of the listed addresses.` };
+      return { error: accountNotPermittedByCaller(targetEmail, usable) };
     }
-    return resolveFailure('account_not_permitted', `❌ This proxy key does not have access to '${targetEmail}'. Accessible: ${usable}`);
+    return resolveFailure('account_not_permitted', accountNotPermittedByDefault(targetEmail, usable));
   }
 
   // Delegation observability: record which account this call resolved to, so
