@@ -156,6 +156,45 @@ Picker seven times. Nothing in the docs approve path was broken: the same week
 
 Query: `monitoring.md` 7.19.
 
+**Retry pressure is mostly batches and scheduled jobs, not loops (2026-09-11).**
+`mint_count` per `request_id` and denials-per-person-per-5-minutes
+(`monitoring.md` 7.22) were read for 2026-09-04 → 09-11 before changing any
+denial text. Of the requests minted more than once, the highest counts came
+from three shapes, none of which is an agent ignoring the text:
+
+- **A batch, not a retry.** The largest send burst (12 `send_disabled`
+  denials in 19 s, one claude.ai user) was twelve DIFFERENT recipients issued
+  in one assistant turn — twelve distinct `send_whitelist` request ids plus
+  one `send_all` id at `mint_count` 12. The agent then stopped, relayed the
+  link, and the user approved `send_all` 65 s after the last denial; the
+  twelve sends succeeded on the next turn. `AGENT_APPROVAL_PROTOCOL` (appended
+  to every linked denial since 2026-08-19) was obeyed — text cannot recall
+  calls already emitted. Read a same-request `mint_count` next to
+  `uniq(target_hash)` before calling it retry pressure: many targets in a
+  short window is a batch.
+- **A scheduled task with a wrong `account`.** One Claude-desktop hourly job
+  hit `account_not_permitted` 18 times as ❌ (pre-2026-09-08) and 23 more
+  times as the 🚫 form that names the fix; no delegation was ever created for
+  that person, so the parameter is simply wrong. When the agent reads the
+  refusal it applies the fix within seconds (the `sheets_not_exposed` rows
+  that follow some of the hourly hits are the default-account retry) — but
+  the task re-sends the same value on its next run with a fresh context. The
+  text now says the task itself must change; only the user can stop the
+  cadence.
+- **A user stuck on the approve page.** `sheets_write` at `mint_count` 9 in
+  13 minutes with two opens and no approval, before the Picker-cancel recovery
+  shipped (2026-09-09). The retries were the agent being told "try again" by a
+  user whose approval had not gone through; that is a page defect, not copy.
+
+The denials that lacked ANY next step were the ones to fix: explicit blocks
+(`sheets_blocked` / `docs_blocked`, no link by design) and a failed link mint
+returned a bare "Access Denied". Every refusal now ends with an explicit
+stop-and-ask sentence; the builders live in `src/lib/denialCopy.ts` and are
+pinned by `scripts/test-denial-copy.ts`. Outcome classification is unchanged
+(the emoji prefix stays first). Measure the effect on `mint_count` per
+`request_id` and with 7.22; the send-batch shape will not move, the hourly
+job will only move when its owner edits it.
+
 The two `sheets_grant_*` events instrument the **picker-first sheets
 approval funnel**: opening a sheets approval link verifies the Google-side
 `drive.file` grant (`via=link_open`); `result=missing` puts the Picker +
@@ -376,9 +415,13 @@ a 🚫 refusal (outcome `denied_by_policy`, `denial_code: 'account_not_permitted
 `failure_reason` still stamped) that lists the usable accounts and says to omit
 the parameter — the key's account list is user-configured policy, and one
 Claude-desktop scheduled job hit the ❌ form hourly for four days (17 rows,
-2026-09-05 → 09-08) with the fix never stated. When no account was given and the
-owner's own address is not on the key, it stays ❌ `failed`: nothing the caller
-sent caused it.
+2026-09-05 → 09-08) with the fix never stated. Since 2026-09-11 it also says not
+to retry with the same value, that no approval link exists for it, and — because
+that same job went on to hit the 🚫 form 23 times in the next three days — that
+a scheduled task must be corrected by its owner. When no account was given and
+the owner's own address is not on the key, it stays ❌ `failed`: nothing the
+caller sent caused it (0 rows since the split shipped), but the text now names
+what would work.
 
 **`google_token_unavailable` splits by cause (2026-09-04).** The tool-call
 event's `google_token_error` says why Clerk returned no token (`no_token`,

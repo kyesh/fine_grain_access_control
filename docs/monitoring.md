@@ -1522,3 +1522,53 @@ half is unnamed automation and moves with the crawler population. Our own probe 
 UA (since 2026-09-10; before that its `no_token` rows sat under `node`,
 indistinguishable from glama on the same runtime) and its `invalid_token`
 rows still carry `kid = 'probe'` — keep both exclusions.
+
+**7.22 — Retry pressure per person and per request.** Added 2026-09-11 with
+the denial-copy change (`src/lib/denialCopy.ts`). Two reads, taken together:
+a request minted many times AND a single `target_hash` is one call being
+repeated; many distinct targets in the same minutes is a batch the agent
+emitted in one turn, which no denial text can recall.
+
+```sql
+-- denial bursts: same person + denial code inside a 5-minute bucket
+SELECT person.properties.email AS who,
+       toStartOfFiveMinutes(timestamp) AS t5,
+       properties.denial_code AS code,
+       properties.client_name AS client,
+       count() AS n
+FROM events
+WHERE event = '$mcp_tool_call'
+  AND properties.environment = 'production'
+  AND properties.outcome = 'denied_by_policy'
+  AND timestamp >= now() - INTERVAL 7 DAY
+  AND person.properties.email NOT IN (/* internal + QA accounts: the same list every query in §7 uses */)
+GROUP BY who, t5, code, client
+HAVING n >= 3
+ORDER BY n DESC
+```
+
+```sql
+-- mint pressure per request: how many times one deterministic link was re-emitted,
+-- and over how many targets (1 = the same call repeated; many = a batch)
+SELECT person.properties.email AS who,
+       properties.action AS action,
+       properties.request_id AS rid,
+       max(toInt(properties.mint_count)) AS mints,
+       min(timestamp) AS first_mint,
+       max(timestamp) AS last_mint
+FROM events
+WHERE event = 'approval_link_minted'
+  AND timestamp >= now() - INTERVAL 7 DAY
+GROUP BY who, action, rid
+HAVING mints >= 3
+ORDER BY mints DESC
+```
+
+Baseline for 2026-09-04 → 09-11: 183 requests minted, 139 once, 22 twice,
+22 three times or more; the top of the tail was a 15-mint `sheets_expose`
+spread over four days of separate sessions, a 12-mint `send_all` that was a
+twelve-recipient batch, and a 9-mint `sheets_write` from a user stuck on the
+pre-2026-09-09 Picker page. `analytics.md` (the approval funnel section) has
+the reading; the change is judged working if same-target mints stop
+climbing while distinct-target batches are unaffected.
+
